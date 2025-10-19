@@ -35,8 +35,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/oracipher-lib"
-"Bug Tracker" = "https://github.com/yourusername/oracipher-lib/issues"
+Homepage = "https://github.com/EldricArlo/OraciCore.git"
+"Bug Tracker" = "https://github.com/EldricArlo/OraciCore.git/issues"
 
 [project.optional-dependencies]
 ui-extras = [
