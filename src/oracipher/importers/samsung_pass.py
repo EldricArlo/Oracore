@@ -8,7 +8,6 @@ import hashlib
 import re
 from typing import List, Dict, Any
 
-# 移除 pycryptodome 依赖，改用 cryptography
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 
