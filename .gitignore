@@ -29,3 +29,8 @@ htmlcov/
 dist/
 build/
 *.egg
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

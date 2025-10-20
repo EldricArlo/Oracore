@@ -1,50 +1,52 @@
 # pyproject.toml
 
+# 1. 指定构建工具
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+# 2. 项目的核心元数据
 [project]
-name = "oracipher"
-version = "1.0.0"
+name = "oracore"
+# 使用动态版本，它会自动从 src/oracipher/__init__.py 读取 __version__
+dynamic = ["version"]
 authors = [
-  { name="Your Name", email="you@example.com" },
+  { name="EldricArlo", email="your_email@example.com" }, # 请替换成您的邮箱
 ]
-description = "A robust, standalone library for handling password vault encryption, database management, and data format conversions."
+description = "A robust, standalone library for handling password vault encryption and database management."
 readme = "README.md"
 requires-python = ">=3.8"
-license = { file="LICENSE.txt" }
-keywords = ["encryption", "security", "password-manager", "argon2", "fernet"]
+license = { file="LICENSE" } # 确保您有一个 LICENSE 文件
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Operating System :: OS Independent",
     "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
-# [修改] 移除了 "pycryptodome"
+# 3. 声明项目的运行时依赖
 dependencies = [
-    "cryptography>=41.0.0",
-    "argon2-cffi>=21.3.0"
+    "cryptography>=40.0",
+    "argon2-cffi>=21.0",
 ]
 
+# 4. 可选的 URL，方便用户找到项目
 [project.urls]
-Homepage = "https://github.com/EldricArlo/OraciCore.git"
-"Bug Tracker" = "https://github.com/EldricArlo/OraciCore.git/issues"
+"Homepage" = "https://github.com/EldricArlo/OraciCore"
+"Bug Tracker" = "https://github.com/EldricArlo/OraciCore/issues"
 
-[project.optional-dependencies]
-ui-extras = [
-    "PyQt6>=6.5.0",
-    "requests>=2.30.0"
-]
-dev = [
-    "pytest",
-    "ruff",
-    "mypy"
-]
+# 5. 告诉 setuptools 在哪里找到你的代码
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["oracore", "oracore.importers"] # 列出所有的包
+
+# 6. 告诉 setuptools 如何动态找到版本号
+[tool.setuptools.dynamic]
+version = {attr = "oracore.__version__"}
