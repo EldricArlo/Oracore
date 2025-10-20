@@ -1,6 +1,6 @@
 # Oracipher: 一个强大、安全且现代的 Python 密码库核心
 
-[![PyPI Version](https://img.shields.io/pypi/v/oracipher.svg)](https://pypi.org/project/oracipher/)
+[![PyPI Version](https.img.shields.io/pypi/v/oracipher.svg)](https://pypi.org/project/oracipher/)
 [![Build Status](https://img.shields.io/travis/com/yourusername/oracipher.svg)](https://travis-ci.com/yourusername/oracipher)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -95,91 +95,79 @@ finally:
 
 #### 生命周期方法
 *   `vault.setup(master_password: str)`: 首次创建保险库。
-    > **抛出异常**: `OracipherError` (如果已存在)。
 *   `vault.unlock(master_password: str)`: 解锁保险库。
-    > **抛出异常**: `VaultNotInitializedError`, `IncorrectPasswordError`, `CorruptDataError`.
-*   `vault.lock()`: 锁定保险库，从内存中安全清除密钥。这是一个不会失败的安全操作。
+*   `vault.lock()`: 锁定保险库，从内存中安全清除密钥。
 
 #### 数据操作 (CRUD)
 > **注意:** 以下所有方法都要求保险库处于**已解锁**状态，否则将抛出 `VaultLockedError`。
 
-*   `vault.save_entry(entry_data: dict) -> int`: 保存或更新一个条目。若 `entry_data` 包含 `"id"` 键，则为更新操作。
-*   `vault.get_all_entries() -> list[dict]`: 获取所有条目并存入一个列表。适用于中小型密码库。
+*   `vault.save_entry(entry_data: dict) -> int`: 保存或更新一个条目。
+*   `vault.get_all_entries() -> list[dict]`: 获取所有条目并存入一个列表。
 *   `vault.get_all_entries_iter() -> Iterator[dict]`: **（推荐）** 以内存高效的迭代器方式获取所有条目。
 *   `vault.delete_entry(entry_id: int)`: 根据 ID 删除一个条目。
 
+#### 数据导入与导出
+*   `vault.export_to_skey(export_path: str)`: **[新增]** 安全地将整个保险库导出到加密的 `.skey` 文件。
+*   `Vault.import_from_skey(skey_path: str, backup_password: str, target_vault: Vault)`: **[新增]** 将 `.skey` 备份文件中的条目导入到已解锁的目标保险库中。
+
 #### 高级与危险操作
-*   `vault.change_master_password(old_password: str, new_password: str)`: 更改主密码。这是一个计算密集型操作，会重新加密整个数据库。
-    > **抛出异常**: `VaultLockedError`, `IncorrectPasswordError`.
-*   `vault.destroy_vault()`: **（警告：不可逆）** 安全地销毁整个保险库。它会先用随机数据覆写所有文件，然后再删除它们。
+*   `vault.change_master_password(old_password: str, new_password: str)`: 更改主密码。
+*   `vault.destroy_vault()`: **（警告：不可逆）** 安全地销毁整个保险库。
 
 ### 数据导入与导出
 
-位于 `oracipher.data_formats` 模块。
+#### [修改] 安全备份与恢复 (`.skey` 格式)
 
-#### 安全备份与恢复 (`.skey` 格式)
-
-这是在不同设备间迁移或备份保险库的**推荐方式**。
+这是在不同设备间迁移或备份保险库的**推荐方式**。所有复杂操作现已封装在 `Vault` API 内部。
 
 ```python
-from oracipher import data_formats
-from oracipher.crypto import CryptoHandler
-from cryptography.fernet import Fernet
-import json, base64
+from oracipher import Vault, InvalidFileFormatError
 
-# --- 1. 安全导出 ---
-# vault 必须已解锁
-if vault.is_unlocked:
-    entries = vault.get_all_entries()
-    salt = vault._crypto.get_salt()
-    if entries and salt:
-        encrypted_content = data_formats.export_to_encrypted_json(
-            entries=entries, salt=salt, encrypt_func=vault._crypto.encrypt
-        )
-        with open("my_backup.skey", "wb") as f: f.write(encrypted_content)
-        print("Secure backup created!")
+# --- 1. 安全导出 (vault 必须已解锁) ---
+try:
+    if vault.is_unlocked:
+        backup_path = "my_secure_backup.skey"
+        vault.export_to_skey(backup_path)
+        print(f"✅ Secure backup created at: {backup_path}")
+except Exception as e:
+    print(f"❌ Export failed: {e}")
 
-# --- 2. 安全导入 ---
-# backup_password 是用户为备份文件提供的主密码
-with open("my_backup.skey", "rb") as f: content_bytes = f.read()
+# --- 2. 安全导入 (target_vault 必须已解锁) ---
+# 假设我们有一个新的或已存在的已解锁保险库 target_vault
+# backup_password 是创建备份文件时所使用的主密码
 
 try:
-    # a. 从文件提取盐并派生临时密钥
-    payload = json.loads(content_bytes)
-    salt_from_file = base64.b64decode(payload['salt'])
-    temp_key = CryptoHandler._derive_key(backup_password, salt_from_file)
-    
-    # b. 准备一个临时的解密函数
-    decryptor = Fernet(temp_key).decrypt
-
-    # c. 导入数据
-    imported_entries = data_formats.import_from_encrypted_json(
-        file_content_bytes=content_bytes, decrypt_func=decryptor
+    # 静态方法 Vault.import_from_skey 处理所有解密和导入逻辑
+    Vault.import_from_skey(
+        skey_path="my_secure_backup.skey",
+        backup_password="the-password-used-for-the-backup",
+        target_vault=vault # 导入到当前 vault
     )
-    
-    # d. (可选) 将数据批量存入当前保险库 (vault 需解锁)
-    # if vault.is_unlocked:
-    #     vault.save_multiple_entries(imported_entries)
-    print(f"Successfully imported {len(imported_entries)} entries.")
-
+    print("✅ Successfully imported entries from backup.")
+except InvalidFileFormatError as e:
+    print(f"❌ Import failed: Incorrect password or corrupt file. Details: {e}")
 except Exception as e:
-    print(f"Import failed. Incorrect password or corrupt file. Error: {e}")
+    print(f"❌ An unexpected error occurred during import: {e}")
+
 ```
+
+#### 其他格式
+
+位于 `oracipher.data_formats` 模块的函数可用于处理非加密格式。
+
+*   `data_formats.export_to_csv(entries: list) -> str`: 导出为 CSV 字符串。
+*   `data_formats.import_from_file(file_path: str, file_content_bytes: bytes) -> list`: 从通用 CSV, TXT 等文件导入。
 
 ## ⚠️ 安全最佳实践 (使用者责任)
 
-构建一个安全的应用程序不仅仅是使用一个安全的库。请务必在您的应用中遵循以下实践：
-
 1.  **实现自动锁定**: 在用户一段时间无操作后（例如 5 分钟），自动调用 `vault.lock()`。
-2.  **最小化解锁窗口**: 仅在需要访问数据时解锁，操作完成后立即锁定。不要让应用长时间保持解锁状态。
+2.  **最小化解锁窗口**: 仅在需要访问数据时解锁，操作完成后立即锁定。
 3.  **安全处理密码输入**: 在 UI 中使用密码输入框，绝不在日志或任何地方明文记录密码。
 4.  **剪贴板管理**: 当用户复制密码到剪贴板后，应在短时间内（如 30 秒）自动清除。
 5.  **内存安全**: `lock()` 方法会清除库内存中的密钥。请确保您的应用在操作完成后，也没有在内存中保留任何敏感数据的明文副本。
+6.  **[新增] 安全配置日志**: Oracipher 使用 Python 的 `logging` 模块。为防止意外泄露操作信息，请确保在您的生产应用中将 Oracipher 相关日志记录器的级别设置为 `INFO` 或更高。
 
 ## 🏛️ 架构概览
-
-Oracipher 的设计哲学是“高内聚，低耦合”。其核心由四个协同工作的组件构成：
-
 ```
   [您的应用程序]
        │

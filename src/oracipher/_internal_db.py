@@ -15,15 +15,10 @@ logger = logging.getLogger(__name__)
 class DataManager:
     """
     [Internal Class] Manages all direct interactions with the SQLite database.
-
-    This class handles CRUD operations for entries and categories, ensuring
-    all data is passed through the CryptoHandler for encryption/decryption.
-    It should not be used directly by the end-user of the library.
     """
 
     def __init__(self, db_path: str, crypto_handler: CryptoHandler):
         self.db_path = db_path
-        # 确保目录存在
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
@@ -34,8 +29,6 @@ class DataManager:
     def connect(self):
         """Establishes the database connection."""
         if self.conn is None:
-            # [高优先级修复] 移除了此处的 `check_and_migrate_schema` 调用。
-            # 迁移逻辑现在完全由 Vault 类在初始化时统一处理。
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._create_tables()
 
@@ -43,45 +36,24 @@ class DataManager:
         if not self.conn:
             return
         cursor = self.conn.cursor()
-        # 开启外键约束以保证数据完整性
         cursor.execute("PRAGMA foreign_keys = ON")
-        # 创建条目表
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, category TEXT NOT NULL, name TEXT NOT NULL)"
         )
-        # 创建详情表，与条目表一对一关联，并设置级联删除
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS details (entry_id INTEGER PRIMARY KEY, data TEXT NOT NULL, FOREIGN KEY (entry_id) REFERENCES entries (id) ON DELETE CASCADE)"
         )
-        # 创建分类表
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS categories (name TEXT PRIMARY KEY NOT NULL, icon_data TEXT)"
         )
         self.conn.commit()
 
     def get_all_entries(self) -> List[Dict[str, Any]]:
-        """
-        Retrieves and decrypts all entries from the database.
-
-        Note: This loads all entries into memory. For large vaults,
-        consider using `get_all_entries_iter()` for better memory efficiency.
-
-        Raises:
-            CorruptDataError: If any entry's data fails to decrypt.
-        """
-        # 利用新的生成器方法来构建列表，减少代码重复
+        """Retrieves and decrypts all entries from the database."""
         return list(self.get_all_entries_iter())
 
     def get_all_entries_iter(self) -> Iterator[Dict[str, Any]]:
-        """
-        [新增性能优化] Retrieves and decrypts all entries from the database as a generator.
-
-        This method yields one entry at a time, making it highly memory-efficient
-        for very large vaults.
-
-        Raises:
-            CorruptDataError: If any entry's data fails to decrypt.
-        """
+        """Retrieves and decrypts all entries from the database as a generator."""
         if not self.conn:
             raise OracipherError("Database is not connected.")
         
@@ -90,7 +62,7 @@ class DataManager:
         
         try:
             cursor.execute(query)
-            for row in cursor: # 直接迭代 cursor 以获得更好的内存性能
+            for row in cursor:
                 entry_id, category, name, encrypted_data_str = row
                 try:
                     decrypted_data_json: str = self.crypto.decrypt(encrypted_data_str)
@@ -111,23 +83,25 @@ class DataManager:
             cursor.close()
 
     def save_entry(self, entry_data: Dict[str, Any]) -> int:
-        """
-        Saves a single entry (creates or updates).
-        """
+        """Saves a single entry (creates or updates)."""
         if not self.conn:
             raise OracipherError("Database is not connected.")
+
+        if not isinstance(entry_data, dict):
+            raise TypeError("entry_data must be a dictionary.")
+        if not entry_data.get("name") or not isinstance(entry_data.get("name"), str):
+            raise ValueError("Entry 'name' must be a non-empty string.")
+        if "details" in entry_data and not isinstance(entry_data.get("details"), dict):
+            raise TypeError("Entry 'details' must be a dictionary.")
 
         entry_id = entry_data.get("id")
         category = entry_data.get("category", "")
         name = entry_data.get("name")
         details = entry_data.get("details", {})
 
-        if not name:
-            raise ValueError("Entry 'name' cannot be empty.")
-
         encrypted_data = self.crypto.encrypt(json.dumps(details))
         
-        with self.conn as conn: # 使用 'with' 语句自动处理事务
+        with self.conn as conn:
             cursor = conn.cursor()
             if entry_id is not None:
                 cursor.execute(
@@ -142,7 +116,6 @@ class DataManager:
                 )
                 new_entry_id = cursor.lastrowid
                 if new_entry_id is None:
-                    # 在 'with' 块中，如果发生错误，事务会自动回滚
                     raise OracipherError("Failed to retrieve last inserted row ID.")
                 entry_id = new_entry_id
                 cursor.execute(
@@ -152,7 +125,8 @@ class DataManager:
 
     def save_multiple_entries(self, entries: List[Dict[str, Any]]) -> None:
         """
-        Saves a batch of entries in a single transaction. Assumes entries are new.
+        [修正] 恢复为循环插入的实现，以保证获取 lastrowid 的健壮性。
+        整个操作依然在单个事务中完成，保证原子性。
         """
         if not self.conn or not entries:
             return
@@ -173,6 +147,7 @@ class DataManager:
                 )
                 new_id = cursor.lastrowid
                 if new_id is None:
+                    # 'with' 块会确保在异常发生时回滚事务
                     raise OracipherError("Failed to get last row ID during bulk insert.")
                 cursor.execute(
                     "INSERT INTO details (entry_id, data) VALUES (?, ?)", (new_id, encrypted_data)
@@ -191,9 +166,7 @@ class DataManager:
             raise OracipherError(f"Failed to delete entry ID {entry_id}: {e}") from e
 
     def re_encrypt_all_data(self, old_crypto_handler: CryptoHandler) -> None:
-        """
-        [中优先级性能优化] Re-encrypts all data using batch processing to conserve memory.
-        """
+        """Re-encrypts all data using batch processing to conserve memory."""
         if not self.conn:
             raise OracipherError("Database not connected.")
             
@@ -201,15 +174,14 @@ class DataManager:
         
         try:
             read_cursor.execute("SELECT entry_id, data FROM details")
-            batch_size = 200  # 可配置的批处理大小
+            batch_size = 200
             total_re_encrypted = 0
             
-            # 使用一个事务来包裹整个重加密过程，保证原子性
             with self.conn as conn:
                 while True:
                     batch = read_cursor.fetchmany(batch_size)
                     if not batch:
-                        break # 所有数据处理完毕
+                        break
                     
                     re_encrypted_batch = []
                     for entry_id, encrypted_data in batch:
@@ -227,7 +199,6 @@ class DataManager:
             logger.info(f"Successfully re-encrypted a total of {total_re_encrypted} entries.")
             
         except Exception as e:
-            # 'with' 语句会在异常时自动回滚
             logger.critical(f"A critical error occurred during data re-encryption: {e}", exc_info=True)
             raise OracipherError("Failed to re-encrypt vault data. The vault may be in an inconsistent state.") from e
         finally:

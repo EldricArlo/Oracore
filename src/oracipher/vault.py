@@ -3,19 +3,29 @@
 import os
 import shutil
 import logging
+import json
+import base64
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Iterator
 
 from .crypto import CryptoHandler
 from ._internal_db import DataManager
-from .exceptions import VaultLockedError, OracipherError, VaultNotInitializedError
+from .exceptions import (
+    VaultLockedError, 
+    OracipherError, 
+    VaultNotInitializedError, 
+    InvalidFileFormatError
+)
 from ._internal_migration import check_and_migrate_schema
+# cryptography.fernet 需要在导入方法中按需导入
+# from cryptography.fernet import Fernet
+
 
 logger = logging.getLogger(__name__)
 
 def _secure_delete(path: Path, passes: int = 1):
     """
-    [新增安全功能] Securely deletes a file by first overwriting it with random data.
+    Securely deletes a file by first overwriting it with random data.
     """
     try:
         if not path.is_file():
@@ -47,21 +57,12 @@ class Vault:
     def __init__(self, data_dir: str):
         """
         Initializes a Vault instance.
-
-        Args:
-            data_dir: The directory where the vault's database and key files
-                      are stored. It will be created if it doesn't exist.
         """
-        # [修改] 使用 pathlib 进行路径管理
         self._data_dir = Path(data_dir)
         self.db_path = self._data_dir / "safekey.db"
 
-        # [架构职责] 迁移检查是 Vault 层的职责，在任何组件初始化之前执行。
-        # 这样可以确保在 CryptoHandler 或 DataManager 接触任何文件之前，
-        # 旧的数据库（如果存在）已经被安全地备份。
         check_and_migrate_schema(str(self.db_path))
 
-        # 初始化底层处理器
         self._crypto = CryptoHandler(str(self._data_dir))
         self._db = DataManager(str(self.db_path), self._crypto)
 
@@ -78,12 +79,10 @@ class Vault:
     def setup(self, master_password: str) -> None:
         """
         Sets up the vault for the first time with a master password.
-        This will create the necessary key files and the database.
         """
         if self.is_setup:
             raise OracipherError("Vault is already initialized.")
         self._crypto.set_master_password(master_password)
-        # 首次设置后立即连接，以创建数据库表
         self._db.connect()
 
     def unlock(self, master_password: str) -> None:
@@ -108,9 +107,6 @@ class Vault:
     def get_all_entries(self) -> List[Dict[str, Any]]:
         """
         Retrieves all entries from the vault, loading them into a list.
-
-        Note: For very large vaults, consider using `get_all_entries_iter()`
-        to avoid high memory consumption.
         """
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to retrieve entries.")
@@ -118,9 +114,7 @@ class Vault:
 
     def get_all_entries_iter(self) -> Iterator[Dict[str, Any]]:
         """
-        [新增性能接口] Retrieves all entries as a memory-efficient iterator.
-        
-        This is recommended for applications handling large vaults.
+        Retrieves all entries as a memory-efficient iterator.
         """
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to retrieve entries.")
@@ -144,42 +138,99 @@ class Vault:
 
     def change_master_password(self, old_password: str, new_password: str) -> None:
         """
-        Changes the master password for the vault. This critical operation
-        re-encrypts all data with a new key.
+        Changes the master password for the vault.
         """
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to change the master password.")
 
-        # Create a temporary CryptoHandler instance to decrypt data with the old key.
-        # This is safe as self._crypto is already unlocked with the same old key.
         old_crypto_handler = CryptoHandler(str(self._data_dir))
         old_crypto_handler.unlock_with_master_password(old_password)
         
-        # 1. Change the key at the crypto layer (re-encrypts verification.key)
         self._crypto.change_master_password(old_password, new_password)
-        
-        # 2. Re-encrypt all database data using the new key
         self._db.re_encrypt_all_data(old_crypto_handler)
 
     def destroy_vault(self) -> None:
         """
-        [高优先级安全修改] Permanently and securely deletes all vault files.
-
-        This action first overwrites all files with random data to prevent
-        data recovery and then deletes the entire directory.
-        This is irreversible. Use with extreme caution.
+        Permanently and securely deletes all vault files.
         """
         if self.is_unlocked:
             self.lock()
         
         if self._data_dir.exists():
             logger.warning(f"Starting to securely destroy vault at: {self._data_dir}")
-            # Securely delete all files within the directory first
             for root, _, files in os.walk(self._data_dir):
                 for name in files:
                     file_path = Path(root) / name
                     _secure_delete(file_path)
             
-            # Now, safely remove the (now empty) directory structure
             shutil.rmtree(self._data_dir)
             logger.info(f"Vault at {self._data_dir} has been permanently destroyed.")
+
+    # --- [新增] 导入/导出 API 封装 ---
+
+    def export_to_skey(self, export_path: str) -> None:
+        """
+        [新增] Securely exports all vault entries to an encrypted .skey file.
+
+        This method encapsulates the entire secure export process.
+        """
+        if not self.is_unlocked:
+            raise VaultLockedError("Vault must be unlocked to export data.")
+        
+        # 使用局部导入避免循环依赖
+        from . import data_formats
+        
+        entries = self.get_all_entries()
+        salt = self._crypto.get_salt()
+        if not salt:
+            raise OracipherError("Could not retrieve salt for export.")
+            
+        encrypted_content = data_formats.export_to_encrypted_json(
+            entries=entries, salt=salt, encrypt_func=self._crypto.encrypt
+        )
+        Path(export_path).write_bytes(encrypted_content)
+        logger.info(f"Vault securely exported to {export_path}")
+
+    @staticmethod
+    def import_from_skey(
+        skey_path: str, 
+        backup_password: str, 
+        target_vault: 'Vault'
+    ) -> None:
+        """
+        [新增] Decrypts an .skey file and imports its entries into the target vault.
+
+        This static method encapsulates the complex decryption and import logic,
+        providing a simple and secure API for users.
+        """
+        if not target_vault.is_unlocked:
+            raise VaultLockedError("Target vault must be unlocked to import entries.")
+
+        from . import data_formats
+        from cryptography.fernet import Fernet
+
+        try:
+            file_content_bytes = Path(skey_path).read_bytes()
+            
+            payload = json.loads(file_content_bytes)
+            salt_from_file = base64.b64decode(payload['salt'])
+            
+            temp_key = CryptoHandler._derive_key(backup_password, salt_from_file)
+            decryptor = Fernet(temp_key).decrypt
+
+            imported_entries = data_formats.import_from_encrypted_json(
+                file_content_bytes=file_content_bytes, decrypt_func=decryptor
+            )
+            
+            if imported_entries:
+                target_vault._db.save_multiple_entries(imported_entries)
+            
+            logger.info(f"Successfully imported {len(imported_entries)} entries into the vault from {skey_path}.")
+        except (FileNotFoundError, IsADirectoryError) as e:
+            raise OracipherError(f"Cannot read skey file at {skey_path}: {e}") from e
+        except (json.JSONDecodeError, KeyError, base64.binascii.Error) as e:
+            raise InvalidFileFormatError("Invalid .skey file format.") from e
+        except Exception as e:
+            # 捕获解密失败（密码错误）或其他意外错误
+            logger.error(f"Failed to import from .skey file: {e}", exc_info=True)
+            raise InvalidFileFormatError("Import failed: Incorrect password or corrupt file.") from e
