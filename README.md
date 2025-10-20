@@ -1,6 +1,6 @@
 # Oracipher: 一个强大、安全且现代的 Python 密码库核心
 
-[![PyPI Version](https://img.shields.io/pypi/v/oracipher.svg)](https://pypi.org/project/oracipher/)
+[![PyPI Version](https://img.shields.io/pypi/v/oracipher.svg)](https://pypi.org/project/oracore/)
 [![Python Tests](https://github.com/EldricArlo/OraciCore/actions/workflows/python-package.yml/badge.svg)](https://github.com/EldricArlo/OraciCore/actions/workflows/python-package.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
