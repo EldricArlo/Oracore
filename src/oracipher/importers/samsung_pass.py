@@ -8,7 +8,7 @@ import hashlib
 import re
 from typing import List, Dict, Any
 
-# [修改] 移除 pycryptodome 依赖，改用 cryptography
+# 移除 pycryptodome 依赖，改用 cryptography
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 
@@ -131,12 +131,12 @@ def parse(file_content_bytes: bytes, password: str) -> List[Dict[str, Any]]:
             dklen=SAMSUNG_PASS_PBKDF2_KEY_LENGTH,
         )
 
-        # [修改] 使用 cryptography 进行解密
+        # 使用 cryptography 进行解密
         cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
         decryptor = cipher.decryptor()
         decrypted_padded_data = decryptor.update(encrypted_data) + decryptor.finalize()
 
-        # [修改] 使用 cryptography 进行 PKCS7 unpadding
+        # 使用 cryptography 进行 PKCS7 unpadding
         unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
         decrypted_data = unpadder.update(decrypted_padded_data) + unpadder.finalize()
         final_content = decrypted_data.decode("utf-8")
