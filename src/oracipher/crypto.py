@@ -3,8 +3,8 @@
 import os
 import base64
 import logging
-import hmac  # [新增] 导入 hmac 模块用于安全比较
-from pathlib import Path  # [新增] 导入 pathlib 用于现代化的路径处理
+import hmac
+from pathlib import Path
 from typing import Optional
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -49,7 +49,6 @@ class CryptoHandler:
                       verification files are stored.
         """
         self._key: Optional[bytes] = None
-        # [修改] 使用 pathlib 进行路径管理
         self._data_dir = Path(data_dir)
         self.salt_path: Path = self._data_dir / "salt.key"
         self.verification_path: Path = self._data_dir / "verification.key"
@@ -125,7 +124,7 @@ class CryptoHandler:
             encrypted_verification = self.verification_path.read_bytes()
             decrypted_verification = fernet.decrypt(encrypted_verification, ttl=None)
 
-            # [高优先级安全修复] 使用 hmac.compare_digest 进行常量时间比较，防止时序攻击
+            # 使用 hmac.compare_digest 进行常量时间比较，防止时序攻击
             if hmac.compare_digest(decrypted_verification, self._VERIFICATION_TOKEN):
                 self._key = derived_key
                 logger.info("Vault unlocked successfully.")
