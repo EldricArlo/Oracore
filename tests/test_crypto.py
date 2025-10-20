@@ -8,8 +8,8 @@ import os
 import pytest
 from pathlib import Path
 
-from oracipher.crypto import CryptoHandler
-from oracipher.exceptions import (
+from oracore.crypto import CryptoHandler
+from oracore.exceptions import (
     IncorrectPasswordError,
     VaultNotInitializedError,
     VaultLockedError,

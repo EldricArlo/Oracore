@@ -5,7 +5,7 @@ import sqlite3
 import json
 from typing import Dict, Any
 
-from oracipher._internal_db import DataManager, OracipherError
+from oracore._internal_db import DataManager, OracipherError
 
 # A simple mock that mimics the encrypt/decrypt behavior for testing
 class MockCryptoHandler:

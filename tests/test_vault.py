@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from oracipher import Vault, OracipherError, VaultLockedError, VaultNotInitializedError, IncorrectPasswordError
+from oracore import Vault, OracipherError, VaultLockedError, VaultNotInitializedError, IncorrectPasswordError
 
 MASTER_PASSWORD = "test-password-123"
 NEW_PASSWORD = "new-password-456"
