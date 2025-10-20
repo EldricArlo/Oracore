@@ -1,0 +1,52 @@
+# =================================================================
+# Oracipher - GitHub Actions CI Workflow for Python Tests
+# =================================================================
+name: Python Package Tests
+
+# --- Triggers:何时运行此工作流 ---
+on:
+  # 1. 每当有代码推送到 main 分支时
+  push:
+    branches: [ "main" ]
+  # 2. 每当有针对 main 分支的 Pull Request 时
+  pull_request:
+    branches: [ "main" ]
+
+# --- Jobs:要执行的任务 ---
+jobs:
+  # 定义一个名为 "build" 的任务
+  build:
+    # 在最新的 Ubuntu 虚拟环境上运行
+    runs-on: ubuntu-latest
+    
+    # 策略：针对多个 Python 版本并行测试
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+
+    # --- Steps:任务的具体步骤 ---
+    steps:
+      # 第 1 步：检出仓库代码
+      # 使得工作流可以访问你的项目文件
+      - name: Check out repository code
+        uses: actions/checkout@v3
+
+      # 第 2 步：设置指定版本的 Python 环境
+      # 使用 matrix 中的 Python 版本
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 第 3 步：安装项目依赖
+      # 包括 pytest 等开发依赖
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # 第 4 步：运行测试
+      # 执行 pytest 命令来发现并运行所有测试
+      - name: Run tests
+        run: |
+          pytest
