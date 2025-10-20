@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def _secure_delete(path: Path, passes: int = 1):
     """
-    [新增安全功能] Securely deletes a file by first overwriting it with random data.
+    Securely deletes a file by first overwriting it with random data.
     """
     try:
         if not path.is_file():
@@ -52,13 +52,10 @@ class Vault:
             data_dir: The directory where the vault's database and key files
                       are stored. It will be created if it doesn't exist.
         """
-        # [修改] 使用 pathlib 进行路径管理
+        # 使用 pathlib 进行路径管理
         self._data_dir = Path(data_dir)
         self.db_path = self._data_dir / "safekey.db"
 
-        # [架构职责] 迁移检查是 Vault 层的职责，在任何组件初始化之前执行。
-        # 这样可以确保在 CryptoHandler 或 DataManager 接触任何文件之前，
-        # 旧的数据库（如果存在）已经被安全地备份。
         check_and_migrate_schema(str(self.db_path))
 
         # 初始化底层处理器
@@ -118,7 +115,7 @@ class Vault:
 
     def get_all_entries_iter(self) -> Iterator[Dict[str, Any]]:
         """
-        [新增性能接口] Retrieves all entries as a memory-efficient iterator.
+        Retrieves all entries as a memory-efficient iterator.
         
         This is recommended for applications handling large vaults.
         """
@@ -163,7 +160,7 @@ class Vault:
 
     def destroy_vault(self) -> None:
         """
-        [高优先级安全修改] Permanently and securely deletes all vault files.
+        Permanently and securely deletes all vault files.
 
         This action first overwrites all files with random data to prevent
         data recovery and then deletes the entire directory.
