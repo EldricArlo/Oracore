@@ -9,7 +9,6 @@ import base64
 import os
 from typing import List, Dict, Any, Optional, Callable
 
-# 从子包中导入解析器
 from .importers import google_chrome, samsung_pass
 from .exceptions import InvalidFileFormatError, OracipherError
 
@@ -27,7 +26,7 @@ KEY_MAP = {
     "totp": ["totp", "otpauth", "2fa", "2fa_app", "authenticator", "两步验证"],
 }
 
-# --- 导出函数 ---
+# --- 导出函数 --- #
 
 def export_to_encrypted_json(
     entries: List[Dict[str, Any]],
@@ -117,7 +116,7 @@ def export_to_csv(entries: List[Dict[str, Any]], include_totp: bool = False) -> 
         logger.error(f"Error during CSV export: {e}", exc_info=True)
         raise OracipherError(f"Error during CSV export: {e}") from e
 
-# --- 导入函数 ---
+# --- 导入函数 --- #
 
 def import_from_encrypted_json(
     file_content_bytes: bytes,
