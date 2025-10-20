@@ -115,6 +115,11 @@ class Vault:
     def get_all_entries_iter(self) -> Iterator[Dict[str, Any]]:
         """
         Retrieves all entries as a memory-efficient iterator.
+<<<<<<< HEAD
+=======
+        
+        This is recommended for applications handling large vaults.
+>>>>>>> 8002d8edd893889545cf7d48ead23055af9b7c27
         """
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to retrieve entries.")
@@ -152,6 +157,13 @@ class Vault:
     def destroy_vault(self) -> None:
         """
         Permanently and securely deletes all vault files.
+<<<<<<< HEAD
+=======
+
+        This action first overwrites all files with random data to prevent
+        data recovery and then deletes the entire directory.
+        This is irreversible. Use with extreme caution.
+>>>>>>> 8002d8edd893889545cf7d48ead23055af9b7c27
         """
         if self.is_unlocked:
             self.lock()
@@ -234,3 +246,4 @@ class Vault:
             # 捕获解密失败（密码错误）或其他意外错误
             logger.error(f"Failed to import from .skey file: {e}", exc_info=True)
             raise InvalidFileFormatError("Import failed: Incorrect password or corrupt file.") from e
+
