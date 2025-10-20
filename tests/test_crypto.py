@@ -6,7 +6,7 @@ Unit tests for the CryptoHandler class in the oracipher library.
 
 import os
 import pytest
-from pathlib import Path  # [新增] 导入 Path 以便在测试中进行路径操作
+from pathlib import Path
 
 from oracipher.crypto import CryptoHandler
 from oracipher.exceptions import (
@@ -47,7 +47,7 @@ def initialized_crypto_handler(crypto_handler: CryptoHandler) -> CryptoHandler:
 
 def test_initialization_creates_data_dir(tmp_path: Path):
     """Test that the data directory is created if it doesn't exist."""
-    # [修改] 使用 pathlib 进行路径操作
+    # 使用 pathlib 进行路径操作
     data_dir = tmp_path / "new_dir"
     assert not data_dir.exists()
     CryptoHandler(data_dir=str(data_dir))
@@ -56,7 +56,7 @@ def test_initialization_creates_data_dir(tmp_path: Path):
 def test_set_master_password_creates_files_and_unlocks(initialized_crypto_handler: CryptoHandler):
     """Test that setting the master password creates salt/verification files and unlocks the vault."""
     handler = initialized_crypto_handler
-    # [修改] 使用 pathlib 对象的 .exists() 方法
+    # 使用 pathlib 对象的 .exists() 方法
     assert handler.salt_path.exists()
     assert handler.verification_path.exists()
     assert handler.is_unlocked is True
