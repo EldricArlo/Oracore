@@ -1,6 +1,6 @@
 <div align = "center">
-  <h1 style = "border-bottom: none;">Oracore</h1>
-  <p>
+  <h1 style = "border-bottom: none; font-family: Arial, sans-serif; font-size: 48px;">Oracore</h1>
+  <p style="font-family: Georgia, serif; font-size: 18px;">
     <strong>The crypto core of the Oracipher project.</strong>
   </p>
 </div>
