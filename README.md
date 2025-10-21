@@ -1,7 +1,7 @@
 # Oracore: 一个强大、安全且现代的 Python 密码库核心
 
 [![PyPI Version](https://img.shields.io/pypi/v/oracore.svg)](https://pypi.org/project/oracore/)
-[![Python Tests](https://github.com/EldricArlo/OraciCore/actions/workflows/python-package.yml/badge.svg)](https://github.com/EldricArlo/OraciCore/actions/workflows/python-package.yml)
+[![Python Tests](https://github.com/EldricArlo/Oracore/actions/workflows/python-package.yml/badge.svg)](https://github.com/EldricArlo/Oracore/actions/workflows/python-package.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Oracore** 是一个为构建高性能、高安全性的本地密码管理器而设计的独立 Python 核心库。它将复杂的密码学操作、安全的数据库管理和灵活的数据格式处理封装在一个简洁、健壮且开发者友好的 API 之后。
