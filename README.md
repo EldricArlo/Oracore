@@ -4,6 +4,7 @@
     <strong>The crypto core of the Oracipher project.</strong>
   </p>
 </div>
+
 [![PyPI Version](https://img.shields.io/pypi/v/oracore.svg)](https://pypi.org/project/oracore/)
 [![Python Tests](https://github.com/EldricArlo/Oracore/actions/workflows/python-package.yml/badge.svg)](https://github.com/EldricArlo/Oracore/actions/workflows/python-package.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
