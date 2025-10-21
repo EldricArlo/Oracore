@@ -6,27 +6,26 @@ import logging
 import base64
 import hashlib
 import re
-from typing import List, Dict, Any
+import os
+from typing import List, Dict, Any, Optional
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 
 from ..exceptions import InvalidFileFormatError
+from .base import BaseImporter
 
 logger = logging.getLogger(__name__)
 
-# 为三星Pass解密格式定义常量，提高可读性和可维护性
+# Constants for Samsung Pass decryption
 SAMSUNG_PASS_SALT_SIZE = 20
-SAMSUNG_PASS_IV_SIZE = 16  # AES block size
+SAMSUNG_PASS_IV_SIZE = 16
 SAMSUNG_PASS_PBKDF2_ITERATIONS = 70000
 SAMSUNG_PASS_PBKDF2_KEY_LENGTH = 32
 SAMSUNG_PASS_PBKDF2_DIGEST = "sha256"
 
 def _clean_android_url(url: str) -> str:
-    """
-    Intelligently cleans a URL, preferring standard web URLs and converting
-    only non-standard Android App Links.
-    """
+    # (No changes to this helper function)
     if not url:
         return ""
     if re.search(r"\.[a-zA-Z]{2,}", url):
@@ -54,7 +53,7 @@ def _clean_android_url(url: str) -> str:
     return url
 
 def _parse_decrypted_content(decrypted_content: str) -> List[Dict[str, Any]]:
-    """Parses the decrypted, multi-block CSV-like content."""
+    # (No changes to this helper function)
     logger.info("Parsing the decrypted multi-block content...")
     
     blocks = decrypted_content.split("next_table")
@@ -107,46 +106,59 @@ def _parse_decrypted_content(decrypted_content: str) -> List[Dict[str, Any]]:
         
     return imported_entries
 
-def parse(file_content_bytes: bytes, password: str) -> List[Dict[str, Any]]:
-    """
-    Decrypts and parses a Samsung Pass export file (.spass).
-    """
-    logger.info("Attempting to decrypt and parse Samsung Pass file...")
-    try:
-        base64_data = file_content_bytes.decode("utf-8").strip()
-        binary_data = base64.b64decode(base64_data)
 
-        salt = binary_data[:SAMSUNG_PASS_SALT_SIZE]
-        iv_start = SAMSUNG_PASS_SALT_SIZE
-        data_start = iv_start + SAMSUNG_PASS_IV_SIZE
-        iv = binary_data[iv_start:data_start]
-        encrypted_data = binary_data[data_start:]
+class SamsungPassImporter(BaseImporter):
+    """Importer for encrypted Samsung Pass export files (.spass)."""
 
-        key = hashlib.pbkdf2_hmac(
-            SAMSUNG_PASS_PBKDF2_DIGEST,
-            password.encode("utf-8"),
-            salt,
-            SAMSUNG_PASS_PBKDF2_ITERATIONS,
-            dklen=SAMSUNG_PASS_PBKDF2_KEY_LENGTH,
-        )
+    @property
+    def name(self) -> str:
+        return "Samsung Pass (.spass)"
 
-        # 使用 cryptography 进行解密
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
-        decryptor = cipher.decryptor()
-        decrypted_padded_data = decryptor.update(encrypted_data) + decryptor.finalize()
+    def can_handle(
+        self, file_path: str, file_content_bytes: Optional[bytes] = None
+    ) -> bool:
+        return file_path.lower().endswith(".spass")
 
-        # 使用 cryptography 进行 PKCS7 unpadding
-        unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
-        decrypted_data = unpadder.update(decrypted_padded_data) + unpadder.finalize()
-        final_content = decrypted_data.decode("utf-8")
+    def parse(
+        self, file_content_bytes: bytes, password: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        logger.info(f"Attempting to decrypt and parse using {self.name} importer...")
+        if not password:
+            raise ValueError("Password is required for .spass files.")
+            
+        try:
+            base64_data = file_content_bytes.decode("utf-8").strip()
+            binary_data = base64.b64decode(base64_data)
 
-        entries = _parse_decrypted_content(final_content)
-        logger.info(f"Successfully decrypted and parsed {len(entries)} entries from Samsung Pass file.")
-        return entries
+            salt = binary_data[:SAMSUNG_PASS_SALT_SIZE]
+            iv_start = SAMSUNG_PASS_SALT_SIZE
+            data_start = iv_start + SAMSUNG_PASS_IV_SIZE
+            iv = binary_data[iv_start:data_start]
+            encrypted_data = binary_data[data_start:]
 
-    except (ValueError, KeyError, base64.binascii.Error) as e:
-        logger.error(f"Decryption failed, likely an incorrect password or corrupt file. Details: {e}", exc_info=True)
-        raise InvalidFileFormatError("Decryption failed. Please ensure the password is correct or the file is not corrupt.") from e
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during Samsung Pass import: {e}", exc_info=True)
-        raise InvalidFileFormatError(f"An unexpected error occurred during Samsung Pass import: {e}") from e
+            key = hashlib.pbkdf2_hmac(
+                SAMSUNG_PASS_PBKDF2_DIGEST,
+                password.encode("utf-8"),
+                salt,
+                SAMSUNG_PASS_PBKDF2_ITERATIONS,
+                dklen=SAMSUNG_PASS_PBKDF2_KEY_LENGTH,
+            )
+
+            cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+            decryptor = cipher.decryptor()
+            decrypted_padded_data = decryptor.update(encrypted_data) + decryptor.finalize()
+
+            unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+            decrypted_data = unpadder.update(decrypted_padded_data) + unpadder.finalize()
+            final_content = decrypted_data.decode("utf-8")
+
+            entries = _parse_decrypted_content(final_content)
+            logger.info(f"Successfully decrypted and parsed {len(entries)} entries from Samsung Pass file.")
+            return entries
+
+        except (ValueError, KeyError, base64.binascii.Error) as e:
+            logger.error(f"Decryption failed, likely an incorrect password or corrupt file. Details: {e}", exc_info=True)
+            raise InvalidFileFormatError("Decryption failed. Please ensure the password is correct or the file is not corrupt.") from e
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during Samsung Pass import: {e}", exc_info=True)
+            raise InvalidFileFormatError(f"An unexpected error occurred during Samsung Pass import: {e}") from e

@@ -1,6 +1,14 @@
 # src/oracipher/importers/__init__.py
 
-from . import google_chrome
-from . import samsung_pass
+from .base import BaseImporter
+from .google_chrome import GoogleChromeImporter
+from .samsung_pass import SamsungPassImporter
 
-__all__ = ["google_chrome", "samsung_pass"]
+# The registry of all available importer instances.
+# The dispatcher will iterate over this list to find a suitable importer.
+importer_registry = [
+    GoogleChromeImporter(),
+    SamsungPassImporter(),
+]
+
+__all__ = ["BaseImporter", "importer_registry"]

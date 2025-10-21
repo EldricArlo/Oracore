@@ -2,27 +2,26 @@
 
 """
 A detailed and comprehensive example script demonstrating the core
-features of the oracipher library.
+features of the oracore library after the review committee's updates.
 """
 
 import os
 import shutil
-from getpass import getpass # Use getpass for safely typing passwords
 
-# --- Oracipher Core Imports ---
-from oracipher import (
+# --- [核心修改] 将 'oracipher' 修改为 'oracore' ---
+from oracore import (
     Vault,
     data_formats,
     IncorrectPasswordError,
     InvalidFileFormatError,
-    OracipherError,
+    OracipherError,  # OracipherError 这个异常基类的名字我们保持不变，因为它在库中已定义
 )
 
-# --- Configuration ---
-DATA_DIRECTORY = "./my_oracipher_vault"
+# --- [修改] 更新示例目录和文件名以保持一致性 ---
+DATA_DIRECTORY = "./my_oracore_vault"
 MASTER_PASSWORD = "a-very-secure-password-!@#$%"
 NEW_MASTER_PASSWORD = "a-much-better-password-&*(^)"
-EXPORT_FILE_PATH = "./oracipher_backup.skey"
+EXPORT_FILE_PATH = "./oracore_backup.skey"
 
 
 def demonstrate_setup_and_unlock() -> Vault:
@@ -36,6 +35,8 @@ def demonstrate_setup_and_unlock() -> Vault:
 
     if not vault.is_setup:
         print("Vault is not set up. Performing first-time setup...")
+        # [注] setup() 现在会默认检查密码长度是否至少为12。
+        # 可以通过 vault.setup(password, min_length=0) 禁用此检查。
         vault.setup(MASTER_PASSWORD)
         print("✅ Vault setup complete. Key files have been created.")
     else:
@@ -112,6 +113,7 @@ def demonstrate_password_change(vault: Vault):
         print("✅ Correctly caught 'IncorrectPasswordError'.")
 
     print("\nChanging master password correctly...")
+    # [注] change_master_password() 同样会检查新密码的最小长度。
     vault.change_master_password(MASTER_PASSWORD, NEW_MASTER_PASSWORD)
     print("✅ Master password changed successfully. All data has been re-encrypted.")
 
@@ -133,8 +135,7 @@ def demonstrate_password_change(vault: Vault):
 
 def demonstrate_export_import(vault: Vault):
     """
-    [修改] Demonstrates exporting to CSV and the secure .skey format, then importing back
-    using the new high-level Vault APIs.
+    Demonstrates exporting to CSV and the secure .skey format, then importing back.
     """
     print("\n--- 4. EXPORT / IMPORT DEMO ---")
     if not vault.is_unlocked:
@@ -149,7 +150,7 @@ def demonstrate_export_import(vault: Vault):
     print(csv_data.strip())
     print("--- CSV END ---\n")
 
-    # 2. Export to encrypted .skey format (the recommended, simple way)
+    # 2. Export to encrypted .skey format
     print(f"Exporting to secure .skey format at '{EXPORT_FILE_PATH}'...")
     try:
         vault.export_to_skey(EXPORT_FILE_PATH)
@@ -158,18 +159,18 @@ def demonstrate_export_import(vault: Vault):
         print(f"❌ Export failed: {e}")
         return
 
-    # 3. Import from the encrypted .skey file (the recommended, simple way)
+    # 3. Import from the encrypted .skey file
     print(f"\nImporting from '{EXPORT_FILE_PATH}'...")
     try:
-        # NOTE: We use the NEW master password because we changed it in the previous step.
-        # This password is for the BACKUP FILE, not the current vault's password.
-        Vault.import_from_skey(
+        # [核心修改] 调用实例方法 `vault.import_from_skey` 而不是静态方法。
+        # The backup_password is the password of the vault that CREATED the backup.
+        # Since we changed the password before exporting, we must use the NEW password here.
+        vault.import_from_skey(
             skey_path=EXPORT_FILE_PATH,
-            backup_password=NEW_MASTER_PASSWORD,
-            target_vault=vault
+            backup_password=NEW_MASTER_PASSWORD
         )
         print(f"✅ Successfully decrypted and imported entries.")
-        # The vault now contains original + imported entries
+        
         all_entries = vault.get_all_entries()
         print(f"Total entries after import: {len(all_entries)}")
         assert len(all_entries) == 2 # 1 original + 1 imported

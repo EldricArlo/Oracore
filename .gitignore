@@ -30,7 +30,10 @@ dist/
 build/
 *.egg
 
-# Build artifacts
-dist/
-build/
-*.egg-info/
+# IDE configuration files
+.vscode/
+.idea/
+
+# Oracore specific runtime files
+my_oracore_vault/
+*.skey

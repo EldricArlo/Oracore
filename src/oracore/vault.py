@@ -14,19 +14,17 @@ from .exceptions import (
     VaultLockedError, 
     OracipherError, 
     VaultNotInitializedError, 
-    InvalidFileFormatError
+    InvalidFileFormatError,
+    IncorrectPasswordError
 )
 from ._internal_migration import check_and_migrate_schema
-# cryptography.fernet 需要在导入方法中按需导入
-# from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet
 
 
 logger = logging.getLogger(__name__)
 
 def _secure_delete(path: Path, passes: int = 1):
-    """
-    Securely deletes a file by first overwriting it with random data.
-    """
+    # (无变化)
     try:
         if not path.is_file():
             return
@@ -52,12 +50,13 @@ class Vault:
 
     This class provides a high-level API that encapsulates all cryptographic
     and database operations, presenting a simple and secure interface.
+
+    .. note:: An instance of the Vault class is NOT thread-safe. For use in
+              multi-threaded applications, create a separate Vault instance
+              per thread.
     """
 
     def __init__(self, data_dir: str):
-        """
-        Initializes a Vault instance.
-        """
         self._data_dir = Path(data_dir)
         self.db_path = self._data_dir / "safekey.db"
 
@@ -68,27 +67,34 @@ class Vault:
 
     @property
     def is_setup(self) -> bool:
-        """Checks if the vault has been initialized with a master password."""
         return self._crypto.is_key_setup()
 
     @property
     def is_unlocked(self) -> bool:
-        """Checks if the vault is currently unlocked."""
         return self._crypto.is_unlocked
 
-    def setup(self, master_password: str) -> None:
+    # --- [修改] 添加密码最小长度检查 ---
+    def setup(self, master_password: str, min_length: int = 12) -> None:
         """
         Sets up the vault for the first time with a master password.
+        
+        Args:
+            master_password: The chosen master password.
+            min_length: The minimum required password length. Set to 0 to disable.
+        
+        Raises:
+            ValueError: If the master password is shorter than min_length.
         """
         if self.is_setup:
             raise OracipherError("Vault is already initialized.")
+        if min_length > 0 and len(master_password) < min_length:
+            raise ValueError(f"Master password must be at least {min_length} characters long.")
+            
         self._crypto.set_master_password(master_password)
         self._db.connect()
 
     def unlock(self, master_password: str) -> None:
-        """
-        Unlocks the vault with the master password.
-        """
+        # (无变化)
         if not self.is_setup:
             raise VaultNotInitializedError(
                 "Vault has not been set up. Please call setup() first."
@@ -98,55 +104,63 @@ class Vault:
             self._db.connect()
 
     def lock(self) -> None:
-        """
-        Locks the vault, clearing the key from memory and closing the DB connection.
-        """
+        # (无变化)
         self._crypto.lock()
         self._db.close()
 
     def get_all_entries(self) -> List[Dict[str, Any]]:
-        """
-        Retrieves all entries from the vault, loading them into a list.
-        """
+        # (无变化)
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to retrieve entries.")
         return self._db.get_all_entries()
 
     def get_all_entries_iter(self) -> Iterator[Dict[str, Any]]:
-        """
-        Retrieves all entries as a memory-efficient iterator.
-<<<<<<< HEAD
-=======
-        
-        This is recommended for applications handling large vaults.
->>>>>>> 8002d8edd893889545cf7d48ead23055af9b7c27
-        """
+        # (无变化)
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to retrieve entries.")
         yield from self._db.get_all_entries_iter()
 
     def save_entry(self, entry_data: Dict[str, Any]) -> int:
-        """
-        Saves a single entry (creates a new one or updates an existing one).
-        """
+        # (无变化)
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to save an entry.")
         return self._db.save_entry(entry_data)
     
     def delete_entry(self, entry_id: int) -> None:
-        """
-        Deletes an entry by its ID.
-        """
+        # (无变化)
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to delete an entry.")
         self._db.delete_entry(entry_id)
 
-    def change_master_password(self, old_password: str, new_password: str) -> None:
+    # --- [修改] 添加对新密码的最小长度检查 ---
+    def change_master_password(
+        self, old_password: str, new_password: str, min_length: int = 12
+    ) -> None:
         """
         Changes the master password for the vault.
+        
+        Args:
+            old_password: The current master password.
+            new_password: The new master password.
+            min_length: The minimum required length for the new password.
+        
+        Raises:
+            ValueError: If the new password is shorter than min_length.
+            IncorrectPasswordError: If the old password is not correct.
         """
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to change the master password.")
+        
+        if min_length > 0 and len(new_password) < min_length:
+            raise ValueError(f"New master password must be at least {min_length} characters long.")
+
+        # Ensure the provided old_password is correct for the current key
+        # This is an extra check before creating the temporary crypto handler
+        try:
+            self._crypto.unlock_with_master_password(old_password)
+        except IncorrectPasswordError:
+            # Re-raise to give clear feedback to the user
+            raise IncorrectPasswordError("The provided 'old' master password was incorrect.")
 
         old_crypto_handler = CryptoHandler(str(self._data_dir))
         old_crypto_handler.unlock_with_master_password(old_password)
@@ -154,16 +168,19 @@ class Vault:
         self._crypto.change_master_password(old_password, new_password)
         self._db.re_encrypt_all_data(old_crypto_handler)
 
+    # --- [修改] 更新文档字符串 ---
     def destroy_vault(self) -> None:
         """
         Permanently and securely deletes all vault files.
-<<<<<<< HEAD
-=======
 
-        This action first overwrites all files with random data to prevent
-        data recovery and then deletes the entire directory.
+        This action first attempts to overwrite all files with random data to
+        prevent simple data recovery, and then deletes the entire directory.
         This is irreversible. Use with extreme caution.
->>>>>>> 8002d8edd893889545cf7d48ead23055af9b7c27
+
+        .. warning:: Due to the nature of modern filesystems and storage
+                     devices (especially SSDs), this method cannot guarantee
+                     that the data is forensically unrecoverable. For maximum
+                     security, rely on full-disk encryption.
         """
         if self.is_unlocked:
             self.lock()
@@ -178,18 +195,13 @@ class Vault:
             shutil.rmtree(self._data_dir)
             logger.info(f"Vault at {self._data_dir} has been permanently destroyed.")
 
-    # --- [新增] 导入/导出 API 封装 ---
+    # --- [修改] 导入/导出 API 封装 ---
 
     def export_to_skey(self, export_path: str) -> None:
-        """
-        [新增] Securely exports all vault entries to an encrypted .skey file.
-
-        This method encapsulates the entire secure export process.
-        """
+        # (无变化)
         if not self.is_unlocked:
             raise VaultLockedError("Vault must be unlocked to export data.")
         
-        # 使用局部导入避免循环依赖
         from . import data_formats
         
         entries = self.get_all_entries()
@@ -203,23 +215,17 @@ class Vault:
         Path(export_path).write_bytes(encrypted_content)
         logger.info(f"Vault securely exported to {export_path}")
 
-    @staticmethod
-    def import_from_skey(
-        skey_path: str, 
-        backup_password: str, 
-        target_vault: 'Vault'
-    ) -> None:
+    # --- [修改] 从静态方法重构为实例方法 ---
+    def import_from_skey(self, skey_path: str, backup_password: str) -> None:
         """
-        [新增] Decrypts an .skey file and imports its entries into the target vault.
+        Decrypts an .skey file and imports its entries into this vault.
 
-        This static method encapsulates the complex decryption and import logic,
-        providing a simple and secure API for users.
+        This method encapsulates the complex decryption and import logic.
         """
-        if not target_vault.is_unlocked:
+        if not self.is_unlocked:
             raise VaultLockedError("Target vault must be unlocked to import entries.")
 
         from . import data_formats
-        from cryptography.fernet import Fernet
 
         try:
             file_content_bytes = Path(skey_path).read_bytes()
@@ -227,7 +233,13 @@ class Vault:
             payload = json.loads(file_content_bytes)
             salt_from_file = base64.b64decode(payload['salt'])
             
-            temp_key = CryptoHandler._derive_key(backup_password, salt_from_file)
+            # Use the static _get_current_argon2_params for now. A more advanced
+            # .skey format could also embed the params used for its encryption.
+            temp_key = CryptoHandler._derive_key(
+                backup_password, 
+                salt_from_file, 
+                CryptoHandler._get_current_argon2_params()
+            )
             decryptor = Fernet(temp_key).decrypt
 
             imported_entries = data_formats.import_from_encrypted_json(
@@ -235,7 +247,8 @@ class Vault:
             )
             
             if imported_entries:
-                target_vault._db.save_multiple_entries(imported_entries)
+                # 使用 self._db 而不是 target_vault._db
+                self._db.save_multiple_entries(imported_entries)
             
             logger.info(f"Successfully imported {len(imported_entries)} entries into the vault from {skey_path}.")
         except (FileNotFoundError, IsADirectoryError) as e:
@@ -243,7 +256,5 @@ class Vault:
         except (json.JSONDecodeError, KeyError, base64.binascii.Error) as e:
             raise InvalidFileFormatError("Invalid .skey file format.") from e
         except Exception as e:
-            # 捕获解密失败（密码错误）或其他意外错误
             logger.error(f"Failed to import from .skey file: {e}", exc_info=True)
             raise InvalidFileFormatError("Import failed: Incorrect password or corrupt file.") from e
-
