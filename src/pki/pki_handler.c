@@ -188,11 +188,18 @@ int verify_user_certificate(const char* user_cert_pem,
     char cn[256]; // 缓冲区用于存放 Common Name
     
     int cn_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName, cn, sizeof(cn));
-    if (cn_len < 0) {
-        fprintf(stderr, "      > 失败: 无法从证书中提取 Common Name。\n");
+
+    // ======================= [已修复] =======================
+    // 增加严格的边界检查，防止因恶意构造的过长 Common Name 导致的缓冲区溢出。
+    // cn_len < 0 表示提取错误。
+    // cn_len >= sizeof(cn) 表示缓冲区大小不足，无法容纳完整的 Common Name，
+    // 这是一个必须拒绝的安全条件。
+    if (cn_len < 0 || (size_t)cn_len >= sizeof(cn)) {
+        fprintf(stderr, "      > 失败: 无法从证书中提取 Common Name 或 Common Name 字段过长。\n");
         ret_code = -3;
         goto cleanup;
     }
+    // ========================================================
 
     if (strcmp(expected_username, cn) != 0) {
         fprintf(stderr, "      > 失败: 证书主体不匹配！预期 '%s', 实际 '%s'。\n", expected_username, cn);
