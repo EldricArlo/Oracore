@@ -4,8 +4,7 @@
 #include <openssl/x509_vfy.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
-#include <openssl/provider.h> // 【新增】包含 provider 头文件
-#include <assert.h>
+#include <openssl/provider.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,14 +35,26 @@ void free_csr_pem(char* csr_pem) {
 }
 
 int generate_csr(const master_key_pair* mkp, const char* username, char** out_csr_pem) {
-    assert(mkp != NULL && mkp->sk != NULL && username != NULL && out_csr_pem != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (mkp == NULL || mkp->sk == NULL || username == NULL || out_csr_pem == NULL) {
+        return -1;
+    }
     *out_csr_pem = NULL;
 
     int ret = -1; // 默认返回失败
     
+    EVP_PKEY* pkey = NULL;
+
     // --- 步骤 1: 将 libsodium 的 raw key 转换为 OpenSSL 的 EVP_PKEY 结构 ---
-    // 主密钥对现在是 Ed25519，专门用于签名。
-    EVP_PKEY* pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, mkp->sk, MASTER_SECRET_KEY_BYTES);
+
+    // ======================= [已修复] =======================
+    // OpenSSL 的 EVP_PKEY_new_raw_private_key 函数期望接收 32 字节的 Ed25519 种子,
+    // 而 libsodium 的私钥(sk)是 64 字节（32字节种子 + 32字节公钥）。
+    // 因此，我们必须只传递 sk 的前 32 个字节。
+    // libsodium 提供了 `crypto_sign_SEEDBYTES` 常量，其值正好是 32。
+    pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, mkp->sk, crypto_sign_SEEDBYTES);
+    // =========================================================
+
     if (!pkey) {
         fprintf(stderr, "PKI Error: EVP_PKEY_new_raw_private_key failed.\n");
         ERR_print_errors_fp(stderr);
@@ -135,7 +146,10 @@ static int check_ocsp_status_mock(X509* user_cert, X509* issuer_cert) {
 int verify_user_certificate(const char* user_cert_pem,
                             const char* trusted_ca_cert_pem,
                             const char* expected_username) {
-    assert(user_cert_pem != NULL && trusted_ca_cert_pem != NULL && expected_username != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (user_cert_pem == NULL || trusted_ca_cert_pem == NULL || expected_username == NULL) {
+        return -1;
+    }
 
     int ret_code = -1; // 默认一般性错误
 
@@ -189,17 +203,11 @@ int verify_user_certificate(const char* user_cert_pem,
     
     int cn_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName, cn, sizeof(cn));
 
-    // ======================= [已修复] =======================
-    // 增加严格的边界检查，防止因恶意构造的过长 Common Name 导致的缓冲区溢出。
-    // cn_len < 0 表示提取错误。
-    // cn_len >= sizeof(cn) 表示缓冲区大小不足，无法容纳完整的 Common Name，
-    // 这是一个必须拒绝的安全条件。
     if (cn_len < 0 || (size_t)cn_len >= sizeof(cn)) {
         fprintf(stderr, "      > 失败: 无法从证书中提取 Common Name 或 Common Name 字段过长。\n");
         ret_code = -3;
         goto cleanup;
     }
-    // ========================================================
 
     if (strcmp(expected_username, cn) != 0) {
         fprintf(stderr, "      > 失败: 证书主体不匹配！预期 '%s', 实际 '%s'。\n", expected_username, cn);
@@ -231,7 +239,10 @@ cleanup:
 
 int extract_public_key_from_cert(const char* user_cert_pem,
                                  unsigned char* public_key_out) {
-    assert(user_cert_pem != NULL && public_key_out != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (user_cert_pem == NULL || public_key_out == NULL) {
+        return -1;
+    }
 
     int ret = -1;
     BIO* cert_bio = BIO_new_mem_buf(user_cert_pem, -1);

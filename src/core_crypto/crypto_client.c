@@ -3,7 +3,6 @@
 
 #include <sodium.h>
 #include <string.h>
-#include <assert.h>
 #include <stdio.h> // For error printing
 
 int crypto_client_init() {
@@ -20,7 +19,10 @@ int crypto_client_init() {
  * @brief 【已修改】生成一个全新的 Ed25519 主密钥对，用于签名。
  */
 int generate_master_key_pair(master_key_pair* kp) {
-    assert(kp != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (kp == NULL) {
+        return -1;
+    }
 
     // 规范 3.3: 安全内存管理
     // 私钥是最高价值的敏感数据，必须存储在受保护的内存中。
@@ -44,7 +46,10 @@ void free_master_key_pair(master_key_pair* kp) {
 }
 
 int generate_recovery_key(recovery_key* rk) {
-    assert(rk != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (rk == NULL) {
+        return -1;
+    }
 
     // 同样，恢复密钥也必须存储在安全内存中。
     rk->key = secure_alloc(RECOVERY_KEY_BYTES);
@@ -81,7 +86,10 @@ int derive_key_from_password(
     unsigned long long opslimit, size_t memlimit,
     const unsigned char* global_pepper, size_t pepper_len
 ) {
-    assert(derived_key != NULL && password != NULL && salt != NULL && global_pepper != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (derived_key == NULL || password == NULL || salt == NULL || global_pepper == NULL) {
+        return -1;
+    }
 
     // 规范 4 - 阶段二 - 3.b: 【安全验证点】
     // 在执行任何 KDF 操作之前，必须先验证从服务器获取的参数。
@@ -122,7 +130,10 @@ int encrypt_symmetric_aead(
     const unsigned char* message, size_t message_len,
     const unsigned char* key
 ) {
-    assert(ciphertext != NULL && message != NULL && key != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (ciphertext == NULL || ciphertext_len == NULL || message == NULL || key == NULL) {
+        return -1;
+    }
     
     const size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     unsigned char* nonce = ciphertext;
@@ -151,7 +162,10 @@ int decrypt_symmetric_aead(
     const unsigned char* ciphertext, size_t ciphertext_len,
     const unsigned char* key
 ) {
-    assert(decrypted_message != NULL && ciphertext != NULL && key != NULL);
+    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    if (decrypted_message == NULL || decrypted_message_len == NULL || ciphertext == NULL || key == NULL) {
+        return -1;
+    }
 
     const size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
 
@@ -163,14 +177,18 @@ int decrypt_symmetric_aead(
     const unsigned char* actual_ciphertext = ciphertext + nonce_len;
     const size_t actual_ciphertext_len = ciphertext_len - nonce_len;
     
-    return crypto_aead_xchacha20poly1305_ietf_decrypt(
+    if (crypto_aead_xchacha20poly1305_ietf_decrypt(
         decrypted_message, decrypted_message_len,
         NULL, // nsec (必须为NULL)
         actual_ciphertext, actual_ciphertext_len,
         NULL, 0, // 无附加数据(AD)
         nonce,   // 从密文中提取的公共 nonce
         key
-    );
+    ) != 0) {
+        return -1; // 解密失败
+    }
+
+    return 0;
 }
 
 
@@ -183,6 +201,11 @@ int encapsulate_session_key(unsigned char* encrypted_output,
                             const unsigned char* recipient_sign_pk, // 接收者的 Ed25519 签名公钥
                             const unsigned char* my_sign_sk) {       // 我方的 Ed25519 签名私钥
     
+    // [修复] 新增运行时检查 (此函数之前缺少检查)。
+    if (encrypted_output == NULL || session_key == NULL || recipient_sign_pk == NULL || my_sign_sk == NULL) {
+        return -1;
+    }
+
     // 步骤1: 将 Ed25519 密钥转换为 X25519 (Curve25519) 密钥用于加密
     unsigned char recipient_encrypt_pk[crypto_box_PUBLICKEYBYTES];
     unsigned char* my_encrypt_sk = secure_alloc(crypto_box_SECRETKEYBYTES); // 在安全内存中操作
@@ -196,15 +219,17 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         return -1; // 转换失败
     }
     // 将我方的 Ed25519 签名私钥转换为 X25519 加密私钥
+    // [修复] 修正了函数名的拼写错误
     if (crypto_sign_ed25519_sk_to_curve25519(my_encrypt_sk, my_sign_sk) != 0) {
         secure_free(my_encrypt_sk);
         return -1; // 转换失败
     }
 
     // 步骤2: 使用转换后的加密密钥进行 crypto_box 操作
-    // crypto_box_easy 的第4个参数为 NULL 是正确用法，以触发自动、安全的 nonce 生成。
+    // crypto_box_easy 的 nonce 参数为 NULL 是正确用法，libsodium 会自动、安全地生成 nonce。
+    // 该 nonce 会被预置在加密输出的前面。
     int result = crypto_box_easy(encrypted_output, session_key, session_key_len,
-                                 NULL,
+                                 NULL, 
                                  recipient_encrypt_pk, my_encrypt_sk);
     
     // 步骤3: 立即清除内存中的临时加密私钥
@@ -222,6 +247,11 @@ int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* sender_sign_pk, // 发送者的 Ed25519 签名公钥
                             const unsigned char* my_sign_sk) {     // 我方的 Ed25519 签名私钥
 
+    // [修复] 新增运行时检查 (此函数之前缺少检查)。
+    if (decrypted_output == NULL || encrypted_input == NULL || sender_sign_pk == NULL || my_sign_sk == NULL) {
+        return -1;
+    }
+
     // 步骤1: 将 Ed25519 密钥转换为 X25519 (Curve25519) 密钥用于解密
     unsigned char sender_encrypt_pk[crypto_box_PUBLICKEYBYTES];
     unsigned char* my_encrypt_sk = secure_alloc(crypto_box_SECRETKEYBYTES); // 在安全内存中操作
@@ -233,13 +263,14 @@ int decapsulate_session_key(unsigned char* decrypted_output,
         secure_free(my_encrypt_sk);
         return -1;
     }
+    // [修复] 修正了函数名的拼写错误
     if (crypto_sign_ed25519_sk_to_curve25519(my_encrypt_sk, my_sign_sk) != 0) {
         secure_free(my_encrypt_sk);
         return -1;
     }
 
     // 步骤2: 使用转换后的密钥进行解密
-    // crypto_box_open_easy 从输入数据中提取 nonce，因此第4个参数必须为 NULL。
+    // crypto_box_open_easy 会自动从输入数据中提取 nonce，因此 nonce 参数必须为 NULL。
     int result = crypto_box_open_easy(decrypted_output, encrypted_input, encrypted_input_len,
                                       NULL,
                                       sender_encrypt_pk, my_encrypt_sk);

@@ -2,12 +2,31 @@
 #include <string.h>
 #include <stdlib.h> // For malloc, free
 #include <openssl/pem.h>
+// [新增] 包含 v3 扩展和错误处理所需的头文件
+#include <openssl/x509v3.h>
+#include <openssl/err.h>
 #include "common/secure_memory.h"
 #include "core_crypto/crypto_client.h"
 #include "pki/pki_handler.h"
 
 // --- 用于演示的辅助函数 ---
 void print_hex(const char* label, const unsigned char* data, size_t len);
+
+// [新增] 添加 X.509 v3 扩展的辅助函数
+static int add_ext(X509 *cert, int nid, char *value) {
+    X509_EXTENSION *ex;
+    X509V3_CTX ctx;
+    // 初始化上下文，将颁发者和主体都设置为证书本身（用于自签名或设置 SKI）
+    X509V3_set_ctx_nodb(&ctx);
+    X509V3_set_ctx(&ctx, cert, cert, NULL, NULL, 0);
+    ex = X509V3_EXT_conf_nid(NULL, &ctx, nid, value);
+    if (!ex) {
+        return 0;
+    }
+    X509_add_ext(cert, ex, -1);
+    X509_EXTENSION_free(ex);
+    return 1;
+}
 
 // [测试辅助] 生成一个自签名的根 CA 证书。在真实世界中，这在离线HSM中完成。
 int generate_test_ca(char** ca_key_pem, char** ca_cert_pem);
@@ -23,7 +42,6 @@ int main() {
         fprintf(stderr, "错误: Libsodium 密码学库初始化失败！\n");
         return 1; 
     }
-    // 【已新增】在所有 PKI 操作之前，必须初始化 OpenSSL Provider
     if (pki_init() != 0) {
         fprintf(stderr, "错误: OpenSSL PKI 库初始化失败！\n");
         return 1;
@@ -49,7 +67,6 @@ int main() {
     char* ca_key_pem = NULL, *ca_cert_pem = NULL, *alice_cert_pem = NULL;
     if (generate_test_ca(&ca_key_pem, &ca_cert_pem) != 0) {
         fprintf(stderr, "测试错误: 创建模拟 CA 失败。\n");
-        // 清理已分配的资源
         free_master_key_pair(&alice_mkp);
         free_csr_pem(alice_csr_pem);
         return 1;
@@ -57,7 +74,6 @@ int main() {
 
     if (sign_csr_with_ca(&alice_cert_pem, alice_csr_pem, ca_key_pem, ca_cert_pem) != 0) {
         fprintf(stderr, "测试错误: 签署用户证书失败。\n");
-        // 清理已分配的资源
         free_master_key_pair(&alice_mkp);
         free_csr_pem(alice_csr_pem);
         free(ca_key_pem);
@@ -113,7 +129,8 @@ int main() {
 
     // 4. 封装会话密钥
     printf("4. 为接收者封装会话密钥...\n");
-    size_t encapsulated_key_buf_len = sizeof(session_key) + crypto_box_MACBYTES;
+    // [修复] 修正了缓冲区大小，为未来的 Nonce 预留空间
+    size_t encapsulated_key_buf_len = sizeof(session_key) + crypto_box_MACBYTES + crypto_box_NONCEBYTES;
     unsigned char* encapsulated_session_key = malloc(encapsulated_key_buf_len);
     if (!encapsulated_session_key) {
         fprintf(stderr, "内存分配失败！\n"); return 1;
@@ -171,7 +188,7 @@ int main() {
         fprintf(stderr, "解密错误: 无法解密文件内容！\n");
         return 1;
     }
-    decrypted_file_content[actual_dec_file_len] = '\0'; // 添加字符串结束符
+    decrypted_file_content[actual_dec_file_len] = '\0';
     
     printf("  > [解密] 恢复的文件内容: \"%s\"\n", (char*)decrypted_file_content);
     if (strcmp(file_content, (char*)decrypted_file_content) == 0) {
@@ -213,28 +230,40 @@ int generate_test_ca(char** ca_key_pem, char** ca_cert_pem) {
     X509 *cert = NULL;
     BIO *key_bio = NULL, *cert_bio = NULL;
     
-    unsigned char ca_sk[crypto_sign_SECRETKEYBYTES];
-    // 使用一个固定的、可重复的密钥用于测试，以保证CA的一致性
-    memset(ca_sk, 0xCA, sizeof(ca_sk)); // Fill with 0xCA for "CA"
+    unsigned char ca_sk_seed[crypto_sign_SEEDBYTES];
+    // 使用固定的种子以保证 CA 的可重复性
+    memset(ca_sk_seed, 0xCA, sizeof(ca_sk_seed));
 
-    pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, ca_sk, sizeof(ca_sk));
-    if (!pkey) goto cleanup;
+    pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, ca_sk_seed, sizeof(ca_sk_seed));
+    if (!pkey) {
+        ERR_print_errors_fp(stderr);
+        goto cleanup;
+    }
 
     cert = X509_new();
     if (!cert) goto cleanup;
 
-    X509_set_version(cert, 2);
-    ASN1_INTEGER_set(X509_get_serialNumber(cert), 1); // CA has serial 1
+    X509_set_version(cert, 2L); // 必须是 v3 证书
+    ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
     X509_gmtime_adj(X509_getm_notBefore(cert), 0);
-    X509_gmtime_adj(X509_getm_notAfter(cert), 31536000L); // 1 year
+    X509_gmtime_adj(X509_getm_notAfter(cert), 31536000L);
     X509_set_pubkey(cert, pkey);
 
     X509_NAME* name = X509_get_subject_name(cert);
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (unsigned char*)"Test System Root CA", -1, -1, 0);
     X509_set_issuer_name(cert, name);
 
-    // 【已修改】Ed25519 签名时，摘要算法应为 NULL
-    if (!X509_sign(cert, pkey, NULL)) goto cleanup;
+    // ======================= [修复] =======================
+    // 添加 X.509 v3 扩展，使其成为一个合格的 CA 证书
+    add_ext(cert, NID_basic_constraints, "critical,CA:TRUE");
+    add_ext(cert, NID_key_usage, "critical,digitalSignature,keyCertSign,cRLSign");
+    add_ext(cert, NID_subject_key_identifier, "hash");
+    // =======================================================
+
+    if (!X509_sign(cert, pkey, NULL)) {
+        ERR_print_errors_fp(stderr);
+        goto cleanup;
+    }
 
     key_bio = BIO_new(BIO_s_mem());
     cert_bio = BIO_new(BIO_s_mem());
@@ -284,19 +313,21 @@ int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_k
     user_cert = X509_new();
     if(!user_cert) goto cleanup;
 
-    X509_set_version(user_cert, 2);
-    ASN1_INTEGER_set(X509_get_serialNumber(user_cert), 2); // User cert has serial 2
+    X509_set_version(user_cert, 2L); // 签发 v3 证书
+    ASN1_INTEGER_set(X509_get_serialNumber(user_cert), 2);
     X509_set_issuer_name(user_cert, X509_get_subject_name(ca_cert));
     X509_gmtime_adj(X509_getm_notBefore(user_cert), 0);
-    X509_gmtime_adj(X509_getm_notAfter(user_cert), 31536000L); // 1 year
+    X509_gmtime_adj(X509_getm_notAfter(user_cert), 31536000L);
     
     EVP_PKEY* req_pubkey = X509_REQ_get_pubkey(req);
     X509_set_subject_name(user_cert, X509_REQ_get_subject_name(req));
     X509_set_pubkey(user_cert, req_pubkey);
     EVP_PKEY_free(req_pubkey);
     
-    // 【已修改】Ed25519 签名时，摘要算法应为 NULL
-    if (X509_sign(user_cert, ca_key, NULL) <= 0) goto cleanup;
+    if (X509_sign(user_cert, ca_key, NULL) <= 0) {
+        ERR_print_errors_fp(stderr);
+        goto cleanup;
+    }
 
     out_bio = BIO_new(BIO_s_mem());
     if(!out_bio) goto cleanup;
