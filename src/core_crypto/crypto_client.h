@@ -118,36 +118,40 @@ int decrypt_symmetric_aead(
 
 
 /**
- * @brief 规范 4 - 阶段三 - 4: 封装会话密钥 (非对称加密)。
+ * @brief 规范 4 - 阶段三 - 4: 【已修复】封装会话密钥 (非对称加密)。
  *        使用我方的私钥和接收者的公钥，加密一个会话密钥。
+ *        输出格式为 [nonce || encrypted_key]，其中 nonce 长度为 crypto_box_NONCEBYTES。
  *
- * @param encrypted_output (输出) 存放加密结果的缓冲区。
+ * @param encrypted_output (输出) 存放加密结果的缓冲区。其大小必须至少为
+ *                       crypto_box_NONCEBYTES + session_key_len + crypto_box_MACBYTES。
+ * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度。
  * @param session_key 要加密的会话密钥明文。
  * @param session_key_len 会话密钥的长度。
- * @param recipient_pk 接收者的主公钥。
- * @param my_sk 我方（发送者）的主私钥。
+ * @param recipient_sign_pk 接收者的 Ed25519 主公钥。
+ * @param my_sign_sk 我方（发送者）的 Ed25519 主私钥。
  * @return 成功返回 0，失败返回 -1。
  */
 int encapsulate_session_key(unsigned char* encrypted_output,
+                            size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
-                            const unsigned char* recipient_pk,
-                            const unsigned char* my_sk);
+                            const unsigned char* recipient_sign_pk,
+                            const unsigned char* my_sign_sk);
 
 /**
- * @brief 解封装会话密钥 (非对称解密)。
+ * @brief 【已修复】解封装会话密钥 (非对称解密)。
  *        使用我方的私钥和发送者的公钥，解密一个会话密钥。
- *        【已修改】移除了未使用的 decrypted_output_len 参数。
+ *        输入数据格式应为 [nonce || encrypted_key]。
  *
  * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区。
  * @param encrypted_input 要解密的封装数据。
  * @param encrypted_input_len 封装数据的长度。
- * @param sender_pk 发送者的主公key。
- * @param my_sk 我方（接收者）的主私钥。
+ * @param sender_sign_pk 发送者的 Ed25519 主公钥。
+ * @param my_sign_sk 我方（接收者）的 Ed25519 主私钥。
  * @return 成功返回 0，失败（如验证失败）返回 -1。
  */
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
-                            const unsigned char* sender_pk,
+                            const unsigned char* sender_sign_pk,
                             const unsigned char* my_sk);
 
 

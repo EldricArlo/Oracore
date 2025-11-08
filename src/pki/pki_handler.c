@@ -10,7 +10,7 @@
 #include <string.h>
 
 
-// --- 新增的初始化函数 ---
+// --- 初始化函数 ---
 int pki_init() {
     // 为 OpenSSL 3.x 加载默认的算法提供者。
     // 这对于确保像 Ed25519 这样的算法可用至关重要。
@@ -276,7 +276,7 @@ int extract_public_key_from_cert(const char* user_cert_pem,
         goto cleanup;
     }
     
-    ret = 0; // 成功
+    ret = 0;
 
 cleanup:
     if (pkey) EVP_PKEY_free(pkey);

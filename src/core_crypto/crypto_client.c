@@ -191,18 +191,27 @@ int decrypt_symmetric_aead(
     return 0;
 }
 
-
 /**
- * @brief 【已重写】封装会话密钥。
- *        在加密前，将 Ed25519 签名密钥对动态转换为 X25519 加密密钥对。
+ * @brief 【已重写并修复安全漏洞】封装会话密钥。
+ *        此函数现在会正确处理 nonce，将其预置在密文之前。
+ *        输出格式为: [nonce || 密文]
+ *
+ * @param encrypted_output (输出) 缓冲区，必须足够大以容纳 nonce 和加密后的密钥。
+ *                         建议大小: crypto_box_NONCEBYTES + session_key_len + crypto_box_MACBYTES
+ * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度。
+ * @param session_key 要加密的会话密钥。
+ * @param session_key_len 会话密钥的长度。
+ * @param recipient_sign_pk 接收者的 Ed25519 签名公钥。
+ * @param my_sign_sk 我方的 Ed25519 签名私钥。
+ * @return 成功返回 0，失败返回 -1。
  */
 int encapsulate_session_key(unsigned char* encrypted_output,
+                            size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
-                            const unsigned char* recipient_sign_pk, // 接收者的 Ed25519 签名公钥
-                            const unsigned char* my_sign_sk) {       // 我方的 Ed25519 签名私钥
+                            const unsigned char* recipient_sign_pk,
+                            const unsigned char* my_sign_sk) {
     
-    // [修复] 新增运行时检查 (此函数之前缺少检查)。
-    if (encrypted_output == NULL || session_key == NULL || recipient_sign_pk == NULL || my_sign_sk == NULL) {
+    if (encrypted_output == NULL || encrypted_output_len == NULL || session_key == NULL || recipient_sign_pk == NULL || my_sign_sk == NULL) {
         return -1;
     }
 
@@ -213,46 +222,81 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         return -1;
     }
 
-    // 将接收者的 Ed25519 签名公钥转换为 X25519 加密公钥
     if (crypto_sign_ed25519_pk_to_curve25519(recipient_encrypt_pk, recipient_sign_pk) != 0) {
         secure_free(my_encrypt_sk);
         return -1; // 转换失败
     }
-    // 将我方的 Ed25519 签名私钥转换为 X25519 加密私钥
-    // [修复] 修正了函数名的拼写错误
     if (crypto_sign_ed25519_sk_to_curve25519(my_encrypt_sk, my_sign_sk) != 0) {
         secure_free(my_encrypt_sk);
         return -1; // 转换失败
     }
 
-    // 步骤2: 使用转换后的加密密钥进行 crypto_box 操作
-    // crypto_box_easy 的 nonce 参数为 NULL 是正确用法，libsodium 会自动、安全地生成 nonce。
-    // 该 nonce 会被预置在加密输出的前面。
-    int result = crypto_box_easy(encrypted_output, session_key, session_key_len,
-                                 NULL, 
+    // ======================= [安全修复开始] =======================
+    
+    // 步骤2: 生成一个随机的、一次性的 nonce
+    unsigned char nonce[crypto_box_NONCEBYTES];
+    randombytes_buf(nonce, sizeof(nonce));
+
+    // 步骤3: 使用转换后的密钥和生成的 nonce 进行 crypto_box 操作
+    // 我们将密文写入到 nonce 之后的位置
+    unsigned char* ciphertext_ptr = encrypted_output + crypto_box_NONCEBYTES;
+    
+    int result = crypto_box_easy(ciphertext_ptr, session_key, session_key_len,
+                                 nonce, // <-- [核心修复] 显式传递唯一的 nonce
                                  recipient_encrypt_pk, my_encrypt_sk);
     
-    // 步骤3: 立即清除内存中的临时加密私钥
+    // 步骤4: 如果加密成功，将 nonce 复制到输出缓冲区的开头
+    if (result == 0) {
+        memcpy(encrypted_output, nonce, sizeof(nonce));
+        *encrypted_output_len = crypto_box_NONCEBYTES + session_key_len + crypto_box_MACBYTES;
+    } else {
+        *encrypted_output_len = 0;
+    }
+
+    // ======================= [安全修复结束] =======================
+
+    // 步骤5: 立即清除内存中的临时加密私钥
     secure_free(my_encrypt_sk);
     
     return result;
 }
 
 /**
- * @brief 【已重写】解封装会话密钥。
- *        在解密前，将 Ed25519 签名密钥对动态转换为 X25519 加密密钥对。
+ * @brief 【已重写并修复安全漏洞】解封装会话密钥。
+ *        此函数现在会从输入数据中正确提取 nonce 进行解密。
+ *        输入格式应为: [nonce || 密文]
+ *
+ * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区。
+ * @param encrypted_input 要解密的封装数据。
+ * @param encrypted_input_len 封装数据的长度。
+ * @param sender_sign_pk 发送者的 Ed25519 签名公钥。
+ * @param my_sign_sk 我方的 Ed25519 签名私钥。
+ * @return 成功返回 0，失败（如验证失败）返回 -1。
  */
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
-                            const unsigned char* sender_sign_pk, // 发送者的 Ed25519 签名公钥
-                            const unsigned char* my_sign_sk) {     // 我方的 Ed25519 签名私钥
+                            const unsigned char* sender_sign_pk,
+                            const unsigned char* my_sign_sk) {
 
-    // [修复] 新增运行时检查 (此函数之前缺少检查)。
     if (decrypted_output == NULL || encrypted_input == NULL || sender_sign_pk == NULL || my_sign_sk == NULL) {
         return -1;
     }
 
-    // 步骤1: 将 Ed25519 密钥转换为 X25519 (Curve25519) 密钥用于解密
+    // ======================= [安全修复开始] =======================
+
+    // 步骤1: 验证输入长度是否足够包含一个 nonce
+    if (encrypted_input_len < crypto_box_NONCEBYTES) {
+        return -1; // 输入数据过短，无法包含 nonce
+    }
+    
+    // 步骤2: 从输入数据中提取 nonce 和实际的密文
+    const unsigned char* nonce = encrypted_input;
+    const unsigned char* actual_ciphertext = encrypted_input + crypto_box_NONCEBYTES;
+    const size_t actual_ciphertext_len = encrypted_input_len - crypto_box_NONCEBYTES;
+
+    // ======================= [安全修复结束] =======================
+
+    // 步骤3: 将 Ed25519 密钥转换为 X25519 (Curve25519) 密钥用于解密
     unsigned char sender_encrypt_pk[crypto_box_PUBLICKEYBYTES];
     unsigned char* my_encrypt_sk = secure_alloc(crypto_box_SECRETKEYBYTES); // 在安全内存中操作
     if (my_encrypt_sk == NULL) {
@@ -263,19 +307,17 @@ int decapsulate_session_key(unsigned char* decrypted_output,
         secure_free(my_encrypt_sk);
         return -1;
     }
-    // [修复] 修正了函数名的拼写错误
     if (crypto_sign_ed25519_sk_to_curve25519(my_encrypt_sk, my_sign_sk) != 0) {
         secure_free(my_encrypt_sk);
         return -1;
     }
 
-    // 步骤2: 使用转换后的密钥进行解密
-    // crypto_box_open_easy 会自动从输入数据中提取 nonce，因此 nonce 参数必须为 NULL。
-    int result = crypto_box_open_easy(decrypted_output, encrypted_input, encrypted_input_len,
-                                      NULL,
+    // 步骤4: 使用提取的 nonce 和转换后的密钥进行解密
+    int result = crypto_box_open_easy(decrypted_output, actual_ciphertext, actual_ciphertext_len,
+                                      nonce, // <-- [核心修复] 显式传递从输入中提取的 nonce
                                       sender_encrypt_pk, my_encrypt_sk);
 
-    // 步骤3: 立即清除内存中的临时加密私钥
+    // 步骤5: 立即清除内存中的临时加密私钥
     secure_free(my_encrypt_sk);
 
     return result;

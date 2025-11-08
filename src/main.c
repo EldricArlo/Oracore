@@ -129,18 +129,24 @@ int main() {
 
     // 4. 封装会话密钥
     printf("4. 为接收者封装会话密钥...\n");
-    // [修复] 修正了缓冲区大小，为未来的 Nonce 预留空间
-    size_t encapsulated_key_buf_len = sizeof(session_key) + crypto_box_MACBYTES + crypto_box_NONCEBYTES;
+    // ======================= [修复开始] =======================
+    // 缓冲区大小计算是正确的，它必须容纳: Nonce + 密文 + 认证标签
+    size_t encapsulated_key_buf_len = crypto_box_NONCEBYTES + sizeof(session_key) + crypto_box_MACBYTES;
     unsigned char* encapsulated_session_key = malloc(encapsulated_key_buf_len);
     if (!encapsulated_session_key) {
         fprintf(stderr, "内存分配失败！\n"); return 1;
     }
     
-    if (encapsulate_session_key(encapsulated_session_key, session_key, sizeof(session_key),
+    // 声明一个变量来接收加密后的实际长度
+    size_t actual_encapsulated_len;
+
+    // 调用已修复的函数，传入新参数
+    if (encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len, session_key, sizeof(session_key),
                                 recipient_pk, alice_mkp.sk) != 0) {
         fprintf(stderr, "严重错误: 封装会话密钥失败！\n");
         return 1;
     }
+    // ======================= [修复结束] =======================
     printf("  > 会话密钥已使用 `crypto_box` (非对称加密) 封装。\n\n");
     
     printf("--- 文件上传包准备就绪 ---\n");
@@ -160,13 +166,16 @@ int main() {
         fprintf(stderr, "安全内存分配失败！\n"); return 1;
     }
 
+    // ======================= [修复开始] =======================
+    // 调用解密函数时，传递加密时返回的 *实际数据长度*，而不是缓冲区的总容量
     if (decapsulate_session_key(decrypted_session_key,
-                                encapsulated_session_key, encapsulated_key_buf_len,
+                                encapsulated_session_key, actual_encapsulated_len, // <-- 使用实际长度
                                 alice_mkp.pk, // 发送者公钥
                                 alice_mkp.sk) != 0) { // 接收者私钥
         fprintf(stderr, "解密错误: 无法解封装会话密钥！\n");
         return 1;
     }
+    // ======================= [修复结束] =======================
     print_hex("  > [解密] 恢复的会话密钥", decrypted_session_key, sizeof(session_key));
 
     if (sodium_memcmp(session_key, decrypted_session_key, sizeof(session_key)) != 0) {
@@ -215,6 +224,7 @@ int main() {
 
 
 // --- 辅助函数的实现 (与测试文件保持一致) ---
+// (此部分代码无需改动)
 
 void print_hex(const char* label, const unsigned char* data, size_t len) {
     printf("%s: ", label);
