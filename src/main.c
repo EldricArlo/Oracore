@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdlib.h> // For malloc, free
 #include <openssl/pem.h>
-// [新增] 包含 v3 扩展和错误处理所需的头文件
+// 包含 v3 扩展和错误处理所需的头文件
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include "common/secure_memory.h"
@@ -12,7 +12,7 @@
 // --- 用于演示的辅助函数 ---
 void print_hex(const char* label, const unsigned char* data, size_t len);
 
-// [新增] 添加 X.509 v3 扩展的辅助函数
+// 添加 X.509 v3 扩展的辅助函数
 static int add_ext(X509 *cert, int nid, char *value) {
     X509_EXTENSION *ex;
     X509V3_CTX ctx;

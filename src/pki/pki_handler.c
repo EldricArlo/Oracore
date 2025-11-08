@@ -1,13 +1,3 @@
-// ========================= [CRITICAL FIX START] =========================
-//
-// 修复Windows环境下的头文件命名冲突问题。
-//
-// 问题根源: Windows的 <wincrypt.h> (通常被 <windows.h> 间接包含)
-// 定义了与OpenSSL完全相同的宏，例如 X509_NAME, OCSP_REQUEST 等。
-//
-// 解决方案: 必须确保OpenSSL和cURL的头文件在任何可能引起冲突的
-// Windows系统头文件之前被包含。我们将它们放在文件的最顶部。
-//
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -17,9 +7,8 @@
 #include <openssl/crypto.h>
 #include <openssl/ocsp.h> 
 #include <curl/curl.h>
-// ========================== [CRITICAL FIX END] ==========================
 
-#include "pki_handler.h" // 项目内头文件紧随其后
+#include "pki_handler.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,9 +118,6 @@ cleanup:
     EVP_PKEY_free(pkey);
     return ret;
 }
-
-
-// ======================= [NEW OCSP IMPLEMENTATION START] =======================
 
 // 用于 libcurl 接收数据的内存块结构体
 struct memory_chunk {
@@ -309,14 +295,10 @@ cleanup:
     OCSP_RESPONSE_free(resp);
     OCSP_BASICRESP_free(bresp);
     BIO_free(req_bio);
-    // ======================= [FINAL FIX] =========================
     if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris); // The one and only correct free function.
     // =============================================================
     return ret;
 }
-
-// ======================= [NEW OCSP IMPLEMENTATION END] =========================
-
 
 int verify_user_certificate(const char* user_cert_pem,
                             const char* trusted_ca_cert_pem,

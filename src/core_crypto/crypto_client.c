@@ -16,7 +16,7 @@ int crypto_client_init() {
 }
 
 /**
- * @brief 【已修改】生成一个全新的 Ed25519 主密钥对，用于签名。
+ * @brief 生成一个全新的 Ed25519 主密钥对，用于签名。
  */
 int generate_master_key_pair(master_key_pair* kp) {
     // [修复] 将 assert 替换为返回错误码的运行时检查。
@@ -46,7 +46,7 @@ void free_master_key_pair(master_key_pair* kp) {
 }
 
 int generate_recovery_key(recovery_key* rk) {
-    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    // 将 assert 替换为返回错误码的运行时检查。
     if (rk == NULL) {
         return -1;
     }
@@ -86,7 +86,7 @@ int derive_key_from_password(
     unsigned long long opslimit, size_t memlimit,
     const unsigned char* global_pepper, size_t pepper_len
 ) {
-    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    // 将 assert 替换为返回错误码的运行时检查。
     if (derived_key == NULL || password == NULL || salt == NULL || global_pepper == NULL) {
         return -1;
     }
@@ -130,7 +130,7 @@ int encrypt_symmetric_aead(
     const unsigned char* message, size_t message_len,
     const unsigned char* key
 ) {
-    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    // 将 assert 替换为返回错误码的运行时检查。
     if (ciphertext == NULL || ciphertext_len == NULL || message == NULL || key == NULL) {
         return -1;
     }
@@ -162,7 +162,7 @@ int decrypt_symmetric_aead(
     const unsigned char* ciphertext, size_t ciphertext_len,
     const unsigned char* key
 ) {
-    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    // 将 assert 替换为返回错误码的运行时检查。
     if (decrypted_message == NULL || decrypted_message_len == NULL || ciphertext == NULL || key == NULL) {
         return -1;
     }
@@ -192,7 +192,7 @@ int decrypt_symmetric_aead(
 }
 
 /**
- * @brief 【已重写并修复安全漏洞】封装会话密钥。
+ * @brief 封装会话密钥。
  *        此函数现在会正确处理 nonce，将其预置在密文之前。
  *        输出格式为: [nonce || 密文]
  *
@@ -230,8 +230,6 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         secure_free(my_encrypt_sk);
         return -1; // 转换失败
     }
-
-    // ======================= [安全修复开始] =======================
     
     // 步骤2: 生成一个随机的、一次性的 nonce
     unsigned char nonce[crypto_box_NONCEBYTES];
@@ -253,8 +251,6 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         *encrypted_output_len = 0;
     }
 
-    // ======================= [安全修复结束] =======================
-
     // 步骤5: 立即清除内存中的临时加密私钥
     secure_free(my_encrypt_sk);
     
@@ -262,7 +258,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
 }
 
 /**
- * @brief 【已重写并修复安全漏洞】解封装会话密钥。
+ * @brief 解封装会话密钥。
  *        此函数现在会从输入数据中正确提取 nonce 进行解密。
  *        输入格式应为: [nonce || 密文]
  *
@@ -282,8 +278,6 @@ int decapsulate_session_key(unsigned char* decrypted_output,
         return -1;
     }
 
-    // ======================= [安全修复开始] =======================
-
     // 步骤1: 验证输入长度是否足够包含一个 nonce
     if (encrypted_input_len < crypto_box_NONCEBYTES) {
         return -1; // 输入数据过短，无法包含 nonce
@@ -293,8 +287,6 @@ int decapsulate_session_key(unsigned char* decrypted_output,
     const unsigned char* nonce = encrypted_input;
     const unsigned char* actual_ciphertext = encrypted_input + crypto_box_NONCEBYTES;
     const size_t actual_ciphertext_len = encrypted_input_len - crypto_box_NONCEBYTES;
-
-    // ======================= [安全修复结束] =======================
 
     // 步骤3: 将 Ed25519 密钥转换为 X25519 (Curve25519) 密钥用于解密
     unsigned char sender_encrypt_pk[crypto_box_PUBLICKEYBYTES];

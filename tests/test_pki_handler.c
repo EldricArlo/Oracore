@@ -19,7 +19,7 @@ int tests_failed = 0;
 #define RUN_TEST(test) do { printf("  Running test: %s...", #test); int prev_fails = tests_failed; test(); tests_run++; if(tests_failed == prev_fails) printf("\033[32m [PASS]\033[0m\n"); } while(0)
 
 // --- 测试辅助函数声明 ---
-// [修改] 增加一个种子参数
+// 增加一个种子参数
 int generate_test_ca(char** ca_key_pem, char** ca_cert_pem, unsigned char seed_byte);
 int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_key_pem, const char* ca_cert_pem);
 
@@ -85,10 +85,8 @@ void test_certificate_validation_failures() {
 
     // 场景 2: 使用不受信任的 CA (应该返回 -2)
     char* untrusted_ca_key = NULL, *untrusted_ca_cert = NULL;
-    // ======================= [修复] =======================
     // 使用不同的种子 0xBB 来生成一个完全不同的、不受信任的 CA
     _verify(generate_test_ca(&untrusted_ca_key, &untrusted_ca_cert, 0xBB) == 0);
-    // =======================================================
     _verify(verify_user_certificate(user_cert, untrusted_ca_cert, "user@example.com") == -2);
 
     free(ca_key);
@@ -156,7 +154,7 @@ int main() {
 
 // --- 辅助函数的实现 ---
 
-// [修改] 接受一个 seed_byte 参数
+// 接受一个 seed_byte 参数
 int generate_test_ca(char** ca_key_pem, char** ca_cert_pem, unsigned char seed_byte) {
     int ret = -1;
     EVP_PKEY* pkey = NULL;
