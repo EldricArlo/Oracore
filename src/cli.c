@@ -41,6 +41,9 @@ void print_usage(const char* prog_name) {
     fprintf(stderr, "    ↳ 解密 .hsc 文件，恢复原始文件 (输出 <file>.decrypted)\n");
 }
 
+// [委员会修改] 为读取密钥、证书等小文件设置一个合理的大小上限（例如1MB），防止DoS攻击。
+#define MAX_METADATA_FILE_SIZE (1024 * 1024)
+
 // 从文件读取字节 (用于密钥、证书等小文件)
 unsigned char* read_file_bytes(const char* filename, size_t* out_len) {
     FILE* f = fopen(filename, "rb");
@@ -53,6 +56,13 @@ unsigned char* read_file_bytes(const char* filename, size_t* out_len) {
         return NULL;
     }
     fseek(f, 0, SEEK_SET);
+
+    // [委员会修改] 在分配内存前，强制检查文件大小。
+    if (len > MAX_METADATA_FILE_SIZE) {
+        fprintf(stderr, "错误: 文件 '%s' 过大 (超过 %dMB)，已拒绝加载。\n", filename, MAX_METADATA_FILE_SIZE / (1024 * 1024));
+        fclose(f);
+        return NULL;
+    }
 
     if (len == 0) { fclose(f); fprintf(stderr,"错误: 文件为空: %s\n", filename); return NULL; }
     unsigned char* buffer = malloc(len + 1);
@@ -151,6 +161,7 @@ int handle_gen_keypair(int argc, char* argv[]) {
     
     if (!write_file_bytes(pub_path, mkp.pk, MASTER_PUBLIC_KEY_BYTES) ||
         !write_file_bytes(priv_path, mkp.sk, MASTER_SECRET_KEY_BYTES)) {
+        // [委员会修改] 此处错误已由 write_file_bytes 自身报告，无需重复
         goto cleanup;
     }
 
@@ -183,12 +194,13 @@ int handle_gen_csr(int argc, char* argv[]) {
     char* csr_pem = NULL;
 
     mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
-    if (!mkp.sk) { fprintf(stderr, "安全内存分配失败\n"); goto cleanup; }
+    if (!mkp.sk) { fprintf(stderr, "错误: 安全内存分配失败。\n"); goto cleanup; }
 
     size_t sk_len;
     sk_from_file = read_file_bytes(priv_path, &sk_len);
     if (!sk_from_file || sk_len != MASTER_SECRET_KEY_BYTES) {
-        fprintf(stderr, "错误: 读取或验证私钥失败。\n");
+        // [委员会修改] 增强错误报告
+        fprintf(stderr, "错误: 读取私钥文件 '%s' 失败或密钥长度不正确。\n", priv_path);
         goto cleanup;
     }
     memcpy(mkp.sk, sk_from_file, MASTER_SECRET_KEY_BYTES);
@@ -199,7 +211,8 @@ int handle_gen_csr(int argc, char* argv[]) {
     }
 
     if (!write_file_bytes(csr_path, csr_pem, strlen(csr_pem))) {
-        fprintf(stderr, "错误: 写入 CSR 文件失败。\n");
+        // [委员会修改] 增强错误报告
+        fprintf(stderr, "错误: 写入 CSR 文件到 '%s' 失败。\n", csr_path);
         goto cleanup;
     }
 
@@ -242,6 +255,8 @@ int handle_verify_cert(int argc, char* argv[]) {
     user_cert_pem = (char*)read_file_bytes(cert_path, &cert_len);
     ca_cert_pem = (char*)read_file_bytes(ca_path, &ca_len);
     if (!user_cert_pem || !ca_cert_pem) {
+        // [委员会修改] 增强错误报告 (read_file_bytes已提供部分信息)
+        fprintf(stderr, "错误: 无法加载证书文件进行验证。\n");
         goto cleanup;
     }
     
@@ -301,22 +316,38 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
 
     size_t cert_len;
     recipient_cert_pem = (char*)read_file_bytes(recipient_cert_file, &cert_len);
-    if (!recipient_cert_pem) goto cleanup;
+    // [委员会修改] 增强错误报告
+    if (!recipient_cert_pem) {
+        fprintf(stderr, "错误: 无法读取接收方证书 '%s'。\n", recipient_cert_file);
+        goto cleanup;
+    }
     
     unsigned char recipient_pk[MASTER_PUBLIC_KEY_BYTES];
-    if (extract_public_key_from_cert(recipient_cert_pem, recipient_pk) != 0) goto cleanup;
+    // [委员会修改] 增强错误报告
+    if (extract_public_key_from_cert(recipient_cert_pem, recipient_pk) != 0) {
+        fprintf(stderr, "错误: 从接收方证书 '%s' 提取公钥失败。\n", recipient_cert_file);
+        goto cleanup;
+    }
 
     sender_mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
-    if (!sender_mkp.sk) { fprintf(stderr, "安全内存分配失败\n"); goto cleanup; }
+    if (!sender_mkp.sk) { fprintf(stderr, "错误: 安全内存分配失败。\n"); goto cleanup; }
     sk_from_file = read_file_bytes(sender_priv_file, &sk_len);
-    if (!sk_from_file || sk_len != MASTER_SECRET_KEY_BYTES) goto cleanup;
+    // [委员会修改] 增强错误报告
+    if (!sk_from_file || sk_len != MASTER_SECRET_KEY_BYTES) {
+        fprintf(stderr, "错误: 读取发送方私钥 '%s' 失败或密钥长度不正确。\n", sender_priv_file);
+        goto cleanup;
+    }
     memcpy(sender_mkp.sk, sk_from_file, MASTER_SECRET_KEY_BYTES);
 
     size_t enc_key_buf_len = crypto_box_NONCEBYTES + sizeof(session_key) + crypto_box_MACBYTES;
     encapsulated_key = malloc(enc_key_buf_len);
-    if (!encapsulated_key) { fprintf(stderr, "内存分配失败\n"); goto cleanup; }
+    if (!encapsulated_key) { fprintf(stderr, "错误: 内存分配失败 (用于封装密钥)。\n"); goto cleanup; }
     size_t actual_encapsulated_len;
-    if (encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_mkp.sk) != 0) goto cleanup;
+    // [委员会修改] 增强错误报告
+    if (encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_mkp.sk) != 0) {
+        fprintf(stderr, "错误: 封装会话密钥失败。请检查密钥和证书是否匹配。\n");
+        goto cleanup;
+    }
 
     f_in = fopen(in_file, "rb");
     if (!f_in) { perror("无法打开输入文件"); goto cleanup; }
@@ -324,14 +355,14 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     if (!f_out) { perror("无法创建输出文件"); goto cleanup; }
 
     uint64_t key_len_le = htole64(actual_encapsulated_len);
-    if (fwrite(&key_len_le, sizeof(uint64_t), 1, f_out) != 1) { fprintf(stderr, "错误: 写入包头失败\n"); goto cleanup; }
-    if (fwrite(encapsulated_key, 1, actual_encapsulated_len, f_out) != actual_encapsulated_len) { fprintf(stderr, "错误: 写入封装密钥失败\n"); goto cleanup; }
+    if (fwrite(&key_len_le, sizeof(uint64_t), 1, f_out) != 1) { fprintf(stderr, "错误: 写入包头失败。\n"); goto cleanup; }
+    if (fwrite(encapsulated_key, 1, actual_encapsulated_len, f_out) != actual_encapsulated_len) { fprintf(stderr, "错误: 写入封装密钥失败。\n"); goto cleanup; }
     
     unsigned char stream_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
     crypto_secretstream_xchacha20poly1305_state st;
     crypto_secretstream_xchacha20poly1305_init_push(&st, stream_header, session_key);
     
-    if (fwrite(stream_header, 1, sizeof(stream_header), f_out) != sizeof(stream_header)) { fprintf(stderr, "错误: 写入流加密头部失败\n"); goto cleanup; }
+    if (fwrite(stream_header, 1, sizeof(stream_header), f_out) != sizeof(stream_header)) { fprintf(stderr, "错误: 写入流加密头部失败。\n"); goto cleanup; }
 
     #define CHUNK_SIZE 4096
     unsigned char buf_in[CHUNK_SIZE];
@@ -342,14 +373,14 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
 
     do {
         bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
-        if (ferror(f_in)) { fprintf(stderr, "读取输入文件时出错\n"); goto cleanup; }
+        if (ferror(f_in)) { fprintf(stderr, "读取输入文件时出错。\n"); goto cleanup; }
         tag = feof(f_in) ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
         
         if (crypto_secretstream_xchacha20poly1305_push(&st, buf_out, &out_len, buf_in, bytes_read, NULL, 0, tag) != 0) {
-            fprintf(stderr, "错误: 加密块失败\n"); goto cleanup;
+            fprintf(stderr, "错误: 加密文件块失败。\n"); goto cleanup;
         }
         if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
-            fprintf(stderr, "错误: 写入加密块失败\n"); goto cleanup;
+            fprintf(stderr, "错误: 写入加密文件块失败。\n"); goto cleanup;
         }
     } while (!feof(f_in));
 
@@ -406,33 +437,45 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     if (!f_in) { perror("无法打开加密文件"); goto cleanup; }
 
     uint64_t key_len_le;
-    if (fread(&key_len_le, sizeof(uint64_t), 1, f_in) != 1) { fprintf(stderr, "错误: 读取包头失败\n"); goto cleanup; }
+    if (fread(&key_len_le, sizeof(uint64_t), 1, f_in) != 1) { fprintf(stderr, "错误: 读取包头失败。文件可能已损坏或格式不正确。\n"); goto cleanup; }
     size_t enc_key_len = le64toh(key_len_le);
     
     if (enc_key_len == 0 || enc_key_len > 1024 * 1024) { // 合理性检查
-        fprintf(stderr, "错误: 无效的封装密钥长度\n"); goto cleanup;
+        fprintf(stderr, "错误: 无效的封装密钥长度。文件可能已损坏。\n"); goto cleanup;
     }
 
     enc_key = malloc(enc_key_len);
-    if (!enc_key) { fprintf(stderr, "内存分配失败\n"); goto cleanup; }
-    if (fread(enc_key, 1, enc_key_len, f_in) != enc_key_len) { fprintf(stderr, "错误: 读取封装密钥失败\n"); goto cleanup; }
+    if (!enc_key) { fprintf(stderr, "错误: 内存分配失败 (用于封装密钥)。\n"); goto cleanup; }
+    if (fread(enc_key, 1, enc_key_len, f_in) != enc_key_len) { fprintf(stderr, "错误: 读取封装密钥失败。文件不完整。\n"); goto cleanup; }
     
     size_t cert_len;
     sender_cert_pem = (char*)read_file_bytes(sender_cert_file, &cert_len);
-    if (!sender_cert_pem) goto cleanup;
+    // [委员会修改] 增强错误报告
+    if (!sender_cert_pem) {
+        fprintf(stderr, "错误: 无法读取发送方证书 '%s'。\n", sender_cert_file);
+        goto cleanup;
+    }
     unsigned char sender_pk[MASTER_PUBLIC_KEY_BYTES];
-    if (extract_public_key_from_cert(sender_cert_pem, sender_pk) != 0) goto cleanup;
+    // [委员会修改] 增强错误报告
+    if (extract_public_key_from_cert(sender_cert_pem, sender_pk) != 0) {
+        fprintf(stderr, "错误: 从发送方证书 '%s' 提取公钥失败。\n", sender_cert_file);
+        goto cleanup;
+    }
     
     recipient_mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
-    if (!recipient_mkp.sk) { fprintf(stderr, "安全内存分配失败\n"); goto cleanup; }
+    if (!recipient_mkp.sk) { fprintf(stderr, "错误: 安全内存分配失败。\n"); goto cleanup; }
     sk_from_file = read_file_bytes(recipient_priv_file, &sk_len);
-    if (!sk_from_file || sk_len != MASTER_SECRET_KEY_BYTES) goto cleanup;
+    // [委员会修改] 增强错误报告
+    if (!sk_from_file || sk_len != MASTER_SECRET_KEY_BYTES) {
+        fprintf(stderr, "错误: 读取接收方私钥 '%s' 失败或密钥长度不正确。\n", recipient_priv_file);
+        goto cleanup;
+    }
     memcpy(recipient_mkp.sk, sk_from_file, MASTER_SECRET_KEY_BYTES);
 
     dec_session_key = secure_alloc(crypto_secretstream_xchacha20poly1305_KEYBYTES);
-    if (!dec_session_key) { fprintf(stderr, "安全内存分配失败\n"); goto cleanup; }
+    if (!dec_session_key) { fprintf(stderr, "错误: 安全内存分配失败 (用于会话密钥)。\n"); goto cleanup; }
     if (decapsulate_session_key(dec_session_key, enc_key, enc_key_len, sender_pk, recipient_mkp.sk) != 0) {
-        fprintf(stderr, "错误: 解封装会话密钥失败！可能是密钥或证书错误。\n"); goto cleanup;
+        fprintf(stderr, "错误: 解封装会话密钥失败！这通常意味着您提供了错误的私钥、错误的发送方证书，或者文件已被篡改。\n"); goto cleanup;
     }
 
     f_out = fopen(out_file, "wb");
@@ -440,12 +483,12 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     
     unsigned char stream_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
     if (fread(stream_header, 1, sizeof(stream_header), f_in) != sizeof(stream_header)) {
-        fprintf(stderr, "错误: 读取流加密头部失败\n"); goto cleanup;
+        fprintf(stderr, "错误: 读取流加密头部失败。文件不完整或已损坏。\n"); goto cleanup;
     }
 
     crypto_secretstream_xchacha20poly1305_state st;
     if (crypto_secretstream_xchacha20poly1305_init_pull(&st, stream_header, dec_session_key) != 0) {
-        fprintf(stderr, "错误: 无效的流加密头部\n"); goto cleanup;
+        fprintf(stderr, "错误: 无效的流加密头部。文件可能已被篡改。\n"); goto cleanup;
     }
     
     #define DECRYPT_CHUNK_SIZE (4096 + crypto_secretstream_xchacha20poly1305_ABYTES)
@@ -458,10 +501,10 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
 
     do {
         bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
-        if (ferror(f_in)) { fprintf(stderr, "读取加密文件时出错\n"); goto cleanup; }
+        if (ferror(f_in)) { fprintf(stderr, "读取加密文件时出错。\n"); goto cleanup; }
 
         if (crypto_secretstream_xchacha20poly1305_pull(&st, buf_out, &out_len, &tag, buf_in, bytes_read, NULL, 0) != 0) {
-            fprintf(stderr, "错误: 解密块失败！数据可能被篡改。\n"); goto cleanup;
+            fprintf(stderr, "错误: 解密文件块失败！数据可能被篡改。\n"); goto cleanup;
         }
 
         if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL) {
@@ -469,12 +512,12 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         }
         
         if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
-             fprintf(stderr, "错误: 写入解密块失败\n"); goto cleanup;
+             fprintf(stderr, "错误: 写入解密文件块失败。\n"); goto cleanup;
         }
     } while (!feof(f_in));
 
     if (!stream_finished) {
-        fprintf(stderr, "警告: 加密流未正常结束，文件可能不完整。\n");
+        fprintf(stderr, "警告: 加密流未正常结束，解密后的文件可能不完整。\n");
     }
 
     printf("✅ 混合解密完成！\n  解密文件 -> %s\n", out_file);
