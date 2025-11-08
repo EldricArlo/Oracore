@@ -4,6 +4,57 @@
 #include <sodium.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h> // [新增] 为 getenv, strtoull
+
+// --- [新增] 运行时安全参数的定义与初始化 ---
+// 这些变量持有程序实际使用的Argon2id参数。
+// 它们被初始化为编译时的基线值，确保在任何配置加载前都有一个安全的默认值。
+unsigned long long g_argon2_opslimit = BASELINE_ARGON2ID_OPSLIMIT;
+size_t g_argon2_memlimit = BASELINE_ARGON2ID_MEMLIMIT;
+
+
+/**
+ * @brief [新增] 从环境变量加载并验证密码学参数。
+ *        此函数会读取 HSC_ARGON2_OPSLIMIT 和 HSC_ARGON2_MEMLIMIT 环境变量。
+ *        如果环境变量被设置、解析成功，并且其值不低于内置的安全基线，
+ *        则程序将使用这些更高强度的值。否则，将打印警告并保持安全的默认基线值。
+ */
+void crypto_config_load_from_env() {
+    printf("Loading cryptographic parameters...\n");
+
+    // --- 加载 Ops Limit ---
+    const char* opslimit_env = getenv("HSC_ARGON2_OPSLIMIT");
+    if (opslimit_env) {
+        char* endptr;
+        unsigned long long ops_from_env = strtoull(opslimit_env, &endptr, 10);
+
+        // 检查: 1. 字符串是否完全转换为数字 2. 值是否不低于安全基线
+        if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT) {
+            g_argon2_opslimit = ops_from_env;
+            printf("  > Argon2id OpsLimit overridden by environment: %llu\n", g_argon2_opslimit);
+        } else {
+            fprintf(stderr, "  > WARNING: Invalid or below-baseline HSC_ARGON2_OPSLIMIT ignored. Using default.\n");
+        }
+    }
+
+    // --- 加载 Mem Limit ---
+    const char* memlimit_env = getenv("HSC_ARGON2_MEMLIMIT");
+    if (memlimit_env) {
+        char* endptr;
+        unsigned long long mem_from_env = strtoull(memlimit_env, &endptr, 10);
+        
+        // 检查: 1. 字符串是否完全转换为数字 2. 值是否不低于安全基线
+        if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT) {
+            g_argon2_memlimit = (size_t)mem_from_env;
+            printf("  > Argon2id MemLimit overridden by environment: %zu bytes\n", g_argon2_memlimit);
+        } else {
+            fprintf(stderr, "  > WARNING: Invalid or below-baseline HSC_ARGON2_MEMLIMIT ignored. Using default.\n");
+        }
+    }
+    
+    printf("  > Final effective Argon2id parameters: OpsLimit=%llu, MemLimit=%zu MB\n",
+           g_argon2_opslimit, g_argon2_memlimit / (1024 * 1024));
+}
 
 int crypto_client_init() {
     // 规范要求: 必须使用经过审查的专业密码学库。
@@ -12,6 +63,10 @@ int crypto_client_init() {
     if (sodium_init() < 0) {
         return -1; // 初始化失败
     }
+
+    // [新增] 初始化后立即从环境变量加载配置参数
+    crypto_config_load_from_env();
+    
     return 0;
 }
 
@@ -71,9 +126,11 @@ void free_recovery_key(recovery_key* rk) {
 }
 
 bool validate_argon2id_params(unsigned long long opslimit, size_t memlimit) {
-    // 规范 3.1: 抗降级攻击
+    // [修改] 规范 3.1: 抗降级攻击
     // 客户端必须强制执行一个最小安全基线。
-    if (opslimit < MIN_ARGON2ID_OPSLIMIT || memlimit < MIN_ARGON2ID_MEMLIMIT) {
+    // 此函数现在总是与编译时定义的 BASELINE_ 宏进行比较，
+    // 以确保无论运行时配置如何，它都能拒绝来自外部的、低于绝对安全底线的值。
+    if (opslimit < BASELINE_ARGON2ID_OPSLIMIT || memlimit < BASELINE_ARGON2ID_MEMLIMIT) {
         return false; // 参数低于内置基线，拒绝执行！
     }
     return true;
@@ -191,20 +248,6 @@ int decrypt_symmetric_aead(
     return 0;
 }
 
-/**
- * @brief 封装会话密钥。
- *        此函数现在会正确处理 nonce，将其预置在密文之前。
- *        输出格式为: [nonce || 密文]
- *
- * @param encrypted_output (输出) 缓冲区，必须足够大以容纳 nonce 和加密后的密钥。
- *                         建议大小: crypto_box_NONCEBYTES + session_key_len + crypto_box_MACBYTES
- * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度。
- * @param session_key 要加密的会话密钥。
- * @param session_key_len 会话密钥的长度。
- * @param recipient_sign_pk 接收者的 Ed25519 签名公钥。
- * @param my_sign_sk 我方的 Ed25519 签名私钥。
- * @return 成功返回 0，失败返回 -1。
- */
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
@@ -215,35 +258,30 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         return -1;
     }
 
-    // 步骤1: 将 Ed25519 密钥转换为 X25519 (Curve25519) 密钥用于加密
     unsigned char recipient_encrypt_pk[crypto_box_PUBLICKEYBYTES];
-    unsigned char* my_encrypt_sk = secure_alloc(crypto_box_SECRETKEYBYTES); // 在安全内存中操作
+    unsigned char* my_encrypt_sk = secure_alloc(crypto_box_SECRETKEYBYTES);
     if (my_encrypt_sk == NULL) {
         return -1;
     }
 
     if (crypto_sign_ed25519_pk_to_curve25519(recipient_encrypt_pk, recipient_sign_pk) != 0) {
         secure_free(my_encrypt_sk);
-        return -1; // 转换失败
+        return -1;
     }
     if (crypto_sign_ed25519_sk_to_curve25519(my_encrypt_sk, my_sign_sk) != 0) {
         secure_free(my_encrypt_sk);
-        return -1; // 转换失败
+        return -1;
     }
     
-    // 步骤2: 生成一个随机的、一次性的 nonce
     unsigned char nonce[crypto_box_NONCEBYTES];
     randombytes_buf(nonce, sizeof(nonce));
 
-    // 步骤3: 使用转换后的密钥和生成的 nonce 进行 crypto_box 操作
-    // 我们将密文写入到 nonce 之后的位置
     unsigned char* ciphertext_ptr = encrypted_output + crypto_box_NONCEBYTES;
     
     int result = crypto_box_easy(ciphertext_ptr, session_key, session_key_len,
-                                 nonce, // <-- [核心修复] 显式传递唯一的 nonce
+                                 nonce,
                                  recipient_encrypt_pk, my_encrypt_sk);
     
-    // 步骤4: 如果加密成功，将 nonce 复制到输出缓冲区的开头
     if (result == 0) {
         memcpy(encrypted_output, nonce, sizeof(nonce));
         *encrypted_output_len = crypto_box_NONCEBYTES + session_key_len + crypto_box_MACBYTES;
@@ -251,24 +289,11 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         *encrypted_output_len = 0;
     }
 
-    // 步骤5: 立即清除内存中的临时加密私钥
     secure_free(my_encrypt_sk);
     
     return result;
 }
 
-/**
- * @brief 解封装会话密钥。
- *        此函数现在会从输入数据中正确提取 nonce 进行解密。
- *        输入格式应为: [nonce || 密文]
- *
- * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区。
- * @param encrypted_input 要解密的封装数据。
- * @param encrypted_input_len 封装数据的长度。
- * @param sender_sign_pk 发送者的 Ed25519 签名公钥。
- * @param my_sign_sk 我方的 Ed25519 签名私钥。
- * @return 成功返回 0，失败（如验证失败）返回 -1。
- */
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
                             const unsigned char* sender_sign_pk,
@@ -278,19 +303,16 @@ int decapsulate_session_key(unsigned char* decrypted_output,
         return -1;
     }
 
-    // 步骤1: 验证输入长度是否足够包含一个 nonce
     if (encrypted_input_len < crypto_box_NONCEBYTES) {
-        return -1; // 输入数据过短，无法包含 nonce
+        return -1;
     }
     
-    // 步骤2: 从输入数据中提取 nonce 和实际的密文
     const unsigned char* nonce = encrypted_input;
     const unsigned char* actual_ciphertext = encrypted_input + crypto_box_NONCEBYTES;
     const size_t actual_ciphertext_len = encrypted_input_len - crypto_box_NONCEBYTES;
 
-    // 步骤3: 将 Ed25519 密钥转换为 X25519 (Curve25519) 密钥用于解密
     unsigned char sender_encrypt_pk[crypto_box_PUBLICKEYBYTES];
-    unsigned char* my_encrypt_sk = secure_alloc(crypto_box_SECRETKEYBYTES); // 在安全内存中操作
+    unsigned char* my_encrypt_sk = secure_alloc(crypto_box_SECRETKEYBYTES);
     if (my_encrypt_sk == NULL) {
         return -1;
     }
@@ -304,12 +326,10 @@ int decapsulate_session_key(unsigned char* decrypted_output,
         return -1;
     }
 
-    // 步骤4: 使用提取的 nonce 和转换后的密钥进行解密
     int result = crypto_box_open_easy(decrypted_output, actual_ciphertext, actual_ciphertext_len,
-                                      nonce, // <-- [核心修复] 显式传递从输入中提取的 nonce
+                                      nonce,
                                       sender_encrypt_pk, my_encrypt_sk);
 
-    // 步骤5: 立即清除内存中的临时加密私钥
     secure_free(my_encrypt_sk);
 
     return result;

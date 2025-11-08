@@ -22,6 +22,13 @@ typedef struct {
 // --- 函数原型 ---
 
 /**
+ * @brief [新增] 从环境变量加载并验证密码学参数。
+ *        此函数会读取如 HSC_ARGON2_OPSLIMIT 等环境变量，
+ *        如果它们的值高于内置的安全基线，则使用它们，否则保持基线值。
+ */
+void crypto_config_load_from_env();
+
+/**
  * @brief 初始化密码学库，必须在任何密码学操作前调用
  * @return 成功返回 0，失败返回 -1
  */
@@ -142,7 +149,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
  *        使用我方的私钥和发送者的公钥，解密一个会话密钥
  *        输入数据格式应为 [nonce || encrypted_key]
  *
- * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区
+ * @param decrypted_output (输出) 存放解密后的会-话密钥的缓冲区
  * @param encrypted_input 要解密的封装数据
  * @param encrypted_input_len 封装数据的长度
  * @param sender_sign_pk 发送者的 Ed25519 主公钥
