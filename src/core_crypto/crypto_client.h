@@ -138,7 +138,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
                             const unsigned char* my_sign_sk);
 
 /**
- * @brief 【已修复】解封装会话密钥 (非对称解密)。
+ * @brief 解封装会话密钥 (非对称解密)。
  *        使用我方的私钥和发送者的公钥，解密一个会话密钥。
  *        输入数据格式应为 [nonce || encrypted_key]。
  *

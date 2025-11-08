@@ -169,8 +169,16 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
         
-        // 在生产环境中，应配置CURLOPT_CAINFO来验证OCSP服务器的TLS证书
-        // curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        // ======================= [关键安全修复] =======================
+        // 启用对OCSP服务器TLS证书的验证，防止中间人攻击。
+        // 这是绝对必要的安全措施。
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        
+        // 在生产环境中，还应配置CURLOPT_CAINFO指向一个可信的CA证书包，
+        // 以便cURL可以验证服务器证书的信任链。如果未设置，cURL会
+        // 尝试使用其内置的或系统默认的CA包。
+        // 例如: curl_easy_setopt(curl, CURLOPT_CAINFO, "/etc/ssl/certs/ca-certificates.crt");
+        // =============================================================
 
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
@@ -296,7 +304,6 @@ cleanup:
     OCSP_BASICRESP_free(bresp);
     BIO_free(req_bio);
     if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris); // The one and only correct free function.
-    // =============================================================
     return ret;
 }
 
