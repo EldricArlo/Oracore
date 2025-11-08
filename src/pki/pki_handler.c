@@ -5,6 +5,8 @@
 #include <openssl/pem.h>
 #include <openssl/err.h>
 #include <openssl/provider.h>
+// [FIX 1/2] 包含 OpenSSL 核心库初始化的头文件
+#include <openssl/crypto.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +14,15 @@
 
 // --- 初始化函数 ---
 int pki_init() {
+    // [FIX 2/2] 增加对 OpenSSL 库的显式初始化，以确保线程安全。
+    // 这个函数是幂等的，可以安全地多次调用。它会加载错误字符串、
+    // 配置文件，并为多线程操作做好准备。这是现代OpenSSL的最佳实践。
+    if (OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS | OPENSSL_INIT_LOAD_CONFIG, NULL) == 0) {
+        fprintf(stderr, "PKI Error: Failed to initialize OpenSSL crypto library.\n");
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
     // 为 OpenSSL 3.x 加载默认的算法提供者。
     // 这对于确保像 Ed25519 这样的算法可用至关重要。
     OSSL_PROVIDER* provider = OSSL_PROVIDER_load(NULL, "default");

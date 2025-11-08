@@ -14,9 +14,20 @@ int tests_failed = 0;
 #define FAIL() printf("\033[31m[FAIL]\033[0m %s:%d\n", __FILE__, __LINE__)
 #define _assert(test) do { if (!(test)) { FAIL(); tests_failed++; return; } } while(0)
 #define _verify(test) do { _assert(test); } while(0)
-#define RUN_TEST(test) do { printf("  Running test: %s...", #test); test(); tests_run++; printf("\033[32m [PASS]\033[0m\n"); } while(0)
+
+// [FIX 1/2] 将 RUN_TEST 宏更新为健壮的版本。
+// 这个版本会在运行测试函数前后比较失败计数器，只有在计数器未增加时才打印 [PASS]。
+#define RUN_TEST(test) do { \
+    printf("  Running test: %s...", #test); \
+    int prev_fails = tests_failed; \
+    test(); \
+    tests_run++; \
+    if(tests_failed == prev_fails) printf("\033[32m [PASS]\033[0m\n"); \
+} while(0)
+
 
 // --- 测试用例 ---
+// (所有 test_* 函数本身无需任何改动)
 
 void test_initialization() {
     _verify(crypto_client_init() == 0);
@@ -165,13 +176,20 @@ void run_all_tests() {
 }
 
 int main() {
+    // 必须先初始化库才能运行测试
+    if (crypto_client_init() != 0) {
+        printf("Fatal: Could not initialize crypto library for tests.\n");
+        return 1;
+    }
+
     run_all_tests();
     
+    // [FIX 2/2] 更新最终的报告信息，使其更准确地报告失败的断言总数。
     if (tests_failed > 0) {
-        printf("\n\033[31mRESULT: %d/%d tests FAILED.\033[0m\n", tests_failed, tests_run);
+        printf("\n\033[31mRESULT: %d assertion(s) FAILED across all tests.\033[0m\n", tests_failed);
         return 1;
     } else {
-        printf("\n\033[32mRESULT: All %d tests PASSED.\033[0m\n", tests_run);
+        printf("\n\033[32mRESULT: All %d test functions PASSED.\033[0m\n", tests_run);
         return 0;
     }
 }
