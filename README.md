@@ -1,12 +1,6 @@
-
 # 高安全性混合加密客户端库 (High-Security Hybrid Encryption Client Library)
 
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Language](https://img.shields.io/badge/language-C11-purple)
-![Libsodium](https://img.shields.io/badge/dependency-libsodium-_31D843)
-![OpenSSL](https://img.shields.io/badge/dependency-OpenSSL_3-0075A8)
-![Libcurl](https://img.shields.io/badge/dependency-libcurl-E5522D)
+![Build Status](https://img.shields.io/badge/build-passing-brightgreen)![License](https://img.shields.io/badge/license-MIT-blue)![Language](https://img.shields.io/badge/language-C11-purple)![Libsodium](https://img.shields.io/badge/dependency-libsodium-_31D843)![OpenSSL](https://img.shields.io/badge/dependency-OpenSSL_3-0075A8)![Libcurl](https://img.shields.io/badge/dependency-libcurl-E5522D)
 
 本项目是一个使用C语言实现的、专注于安全性的高级混合加密客户端库。它演示了如何结合使用行业领先的密码学库（libsodium 和 OpenSSL）来构建一个健壮的、端到端的加密解决方案。该方案集成了对称加密、非对称加密和公钥基础设施（PKI），适用于需要高度保密性和身份认证的应用场景。
 
@@ -20,32 +14,22 @@
 *   **安全的内存管理:** 所有私钥和其他敏感数据（如会话密钥）都存储在使用 `libsodium` 分配的受保护内存中，防止被交换到磁盘或在释放后留下痕迹。
 *   **公钥基础设施 (PKI):**
     *   支持生成符合 X.509 标准的**证书签名请求 (CSR)**。
-    *   提供严格的**证书验证**链，包括信任链、有效期、主题匹配和（模拟的）吊销状态检查。
+    *   提供严格的**证书验证**链，包括信任链、有效期和主题匹配。
+    *   **强制的吊销检查:** 内置严格的在线证书状态协议 (OCSP) 检查，并采用安全的 **“故障关闭” (Fail-Closed)** 策略，杜绝使用已被吊销的证书。
 *   **模块化与高内聚设计:** 项目结构清晰，分为核心加密、PKI处理和通用安全模块，易于理解、维护和扩展。
 *   **健壮的错误处理:** 所有对外暴露的API都进行了严格的参数检查，并返回明确的错误码。
 *   **经过测试:** 包含一套完整的单元测试，确保核心加密功能的正确性和可靠性。
 
 ## 目录
-
-- [高安全性混合加密客户端库 (High-Security Hybrid Encryption Client Library)](#-高安全性混合加密客户端库-high-security-hybrid-encryption-client-library)
-  - [✨ 核心特性](#-核心特性)
-  - [目录](#目录)
-  - [🚀 快速开始](#-快速开始)
-    - [依赖环境](#依赖环境)
-    - [编译与运行](#编译与运行)
-  - [📂 项目结构](#-项目结构)
-  - [🔐 加密逻辑详解](#-加密逻辑详解)
-    - [阶段一：身份与密钥体系](#阶段一身份与密钥体系)
-    - [阶段二：文件/数据的对称加密 (AEAD)](#阶段二文件数据的对称加密-aead)
-    - [阶段三：会话密钥的非对称封装与共享](#阶段三会话密钥的非对称封装与共享)
-    - [总结：一个安全的“传输包”](#总结一个安全的传输包)
-  - [🛠️ API 参考文档](#️-api-参考文档)
-    - [`core_crypto` 模块](#core_crypto-模块)
-    - [`pki_handler` 模块](#pki_handler-模块)
-    - [`secure_memory` 模块](#secure_memory-模块)
-  - [📜 证书说明](#-证书说明)
-  - [🤝 贡献](#-贡献)
-  - [📄 许可证](#-许可证)
+*   [高安全性混合加密客户端库](#高安全性混合加密客户端库-high-security-hybrid-encryption-client-library)
+*   [✨ 核心特性](#-核心特性)
+*   [🚀 快速开始](#-快速开始)
+*   [📂 项目结构](#-项目结构)
+*   [🔐 加密逻辑详解](#-加密逻辑详解)
+*   [🛠️ API 参考文档](#️-api-参考文档)
+*   [📜 证书说明](#-证书说明)
+*   [🤝 贡献](#-贡献)
+*   [📄 许可证](#-许可证)
 
 ## 🚀 快速开始
 
@@ -56,7 +40,7 @@
 *   **C 编译器:** `gcc` 或 `clang` (支持 C11 标准)
 *   **构建工具:** `make`
 *   **Libsodium:** 一个现代化且易于使用的密码学库。
-*   **OpenSSL:** 用于处理证书和PKI操作 (需要 3.x 版本或更高)。
+*   **OpenSSL:** 用于处理证书和PKI操作 (强烈建议 **3.x** 或更高版本)。
 *   **Libcurl:** 用于执行OCSP检查所需的HTTP请求。
 
 **在 Debian/Ubuntu 上安装依赖:**
@@ -67,49 +51,51 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
 
 **在 macOS 上使用 Homebrew 安装依赖:**
 ```bash
-brew install libsodium openssl curl
+brew install libsodium openssl@3 curl
 ```
 
 ### 编译与运行
 
-1.  **克隆仓库:**
+项目 `Makefile` 提供了简单易用的指令。
+
+1.  **编译主程序和测试:**
     ```bash
-    git clone <your-repository-url>
-    cd <repository-directory>
+    make all
+    make build_tests
     ```
 
-2.  **编译项目:**
-    Makefile 提供了简单易用的指令。
-    ```bash
-    make
-    ```
-    这将编译所有源文件并生成名为 `high_security_app` 的主程序可执行文件。
-
-3.  **运行单元测试:**
+2.  **运行单元测试 (推荐首先执行):**
     我们强烈建议在运行主程序前先执行测试，以确保所有加密模块在您的系统上都能正常工作。
     ```bash
     make test
     ```
 
-4.  **运行演示程序:**
+3.  **运行演示程序:**
     ```bash
     ./high_security_app
     ```
     该程序将完整地演示从生成用户密钥、签发证书，到加密文件、封装密钥，最后再解密恢复文件的整个端到端流程。
 
-5.  **清理构建文件:**
+4.  **清理构建文件:**
     ```bash
     make clean
     ```
 
-**注意:** 要使OCSP检查成功，您的程序需要能够访问互联网，并且目标证书中必须包含一个真实可用的OCSP服务器地址。在我们的测试环境中，我们生成的自签名证书可能不包含此信息，因此您可能会看到“警告: 证书中未找到 OCSP URI”的消息，这在测试场景下是正常的。在与真实的CA交互时，此功能将按预期工作。
+> **关于单元测试的重要说明**
+>
+> 我们的 `pki_handler` 单元测试现在会**刻意地**让 OCSP 吊销检查失败。这是**预期行为**，用以验证我们实施的“故障关闭”安全策略。
+>
+> *   测试代码会生成一个包含**虚拟OCSP服务器地址** (`http://127.0.0.1/...`) 的用户证书。
+> *   当 `verify_user_certificate` 尝试连接这个地址时，网络请求必然会失败。
+> *   根据我们的“故障关闭”策略，任何无法确认证书为“良好”的情况都会导致验证失败（返回 `-4`）。
+> *   因此，测试用例 `test_certificate_validation_successful` **断言其返回 `-4`**，如果断言成功，则证明我们的安全机制工作正常。
 
 ## 📂 项目结构
 
 ```
 .
 ├── Makefile              # 构建脚本
-├── README.md             # 本文档
+├── README.md             # 本项目的说明文档
 ├── src                   # 源代码目录
 │   ├── common            # 通用模块
 │   │   ├── secure_memory.c # 安全内存分配与擦除的实现
@@ -129,66 +115,50 @@ brew install libsodium openssl curl
 
 ## 🔐 加密逻辑详解
 
-本项目的核心是一个**混合加密系统**。这种设计结合了对称加密的高效率和非对称加密的密钥管理优势。以下是核心流程的分解说明：
+本项目的核心是一个**混合加密系统**。这种设计结合了对称加密的高效率和非对称加密的密钥管理优势。
 
 ### 阶段一：身份与密钥体系
 
 1.  **主密钥对 (Master Key Pair):**
-    *   每个用户（例如 "Alice"）首先需要一个身份标识。在我们的系统中，这个身份的核心是一个 **Ed25519** 主密钥对 (`master_key_pair`)。
-    *   **Ed25519** 是一个高性能的数字签名算法。公钥 (`pk`) 是公开的，代表用户的身份。私钥 (`sk`) 必须绝对保密，用于签署声明以证明“我是Alice”。
-    *   私钥通过 `secure_alloc` 分配在受保护内存中，确保其生命周期内的安全性。
+    *   每个用户的身份核心是一个 **Ed25519** 主密钥对。公钥 (`pk`) 代表身份，私钥 (`sk`) 用于签名。
+    *   私钥始终存储在受保护的内存中，确保其生命周期内的安全性。
 
 2.  **证书签名请求 (CSR):**
-    *   仅有密钥对是不够的，还需要一个受信任的第三方（证书颁发机构, CA）来证明这个公钥确实属于 "Alice"。
-    *   用户使用她的主私钥签署一个包含其公钥和身份信息（如用户名）的**证书签名请求 (CSR)**。
-    *   这个过程由 `generate_csr` 函数完成，它利用 OpenSSL 创建一个标准的 PKCS#10 CSR。
+    *   用户使用其主私钥签署一个包含其公钥和身份信息的 **CSR**，用于向证书颁发机构（CA）申请证书。
 
 3.  **获取证书:**
-    *   CSR 被发送给 CA。CA 在验证了用户的真实身份后，会用 CA 自己的私钥来签署用户的 CSR，从而生成一个 **X.509 证书**。
-    *   这个证书在法律和技术上都将用户的公钥和其身份绑定在了一起。
+    *   CA 验证用户身份后，用 CA 的私钥签署 CSR，生成一个标准的 **X.509 证书**。该证书将用户的公钥和身份可信地绑定在一起。
 
 ### 阶段二：文件/数据的对称加密 (AEAD)
 
-假设 Alice 想要加密一个文件，这个文件可能很大。
-
 1.  **生成会话密钥 (Session Key):**
-    *   直接使用非对称加密来加密大文件是非常低效的。因此，我们为**每一次加密会话**生成一个一次性的、高熵的**对称会话密钥** (`session_key`)。
-    *   这个密钥是一个短暂的、随机的字节序列。
+    *   为每一次加密会话生成一个一次性的、高熵的**对称会话密钥**。
 
 2.  **认证加密 (AEAD):**
-    *   使用这个会话密钥和 **XChaCha20-Poly1305** 算法来加密文件内容。
-    *   我们选择 AEAD 是因为它不仅提供了**机密性**（防止窃听），还提供了**完整性**和**真实性**（防止数据被篡改）。任何对密文的修改都会在解密时被检测出来，导致解密失败。
-    *   此过程由 `encrypt_symmetric_aead` 完成。
+    *   使用会话密钥和 **XChaCha20-Poly1305** 算法加密文件内容。AEAD 不仅提供**机密性**，还提供**完整性**和**真实性**，能防止任何对密文的篡改。
 
 ### 阶段三：会话密钥的非对称封装与共享
 
-现在，Alice 有了加密后的文件，但她需要一种安全的方式将**会话密钥**发送给接收者 Bob。
-
 1.  **验证接收者身份:**
-    *   Alice 首先必须获取 Bob 的**可信公钥**。她从一个可信的目录服务获取 Bob 的 X.509 证书。
-    *   她必须严格验证该证书的有效性，通过 `verify_user_certificate` 函数执行以下检查：
-        *   **信任链:** 证书是否由一个 Alice 信任的 CA 签署？
+    *   发送方获取接收方的 X.509 证书，并通过 `verify_user_certificate` 函数执行严格验证：
+        *   **信任链:** 证书是否由一个受信任的 CA 签署？
         *   **有效期:** 证书是否在当前有效期内？
-        *   **主题匹配:** 证书中的身份信息是否与 "Bob" 匹配？
-        *   **吊销状态:** (在本项目中为模拟) 证书是否已被吊销？
-    *   只有通过所有检查，Alice 才能确信证书中的公钥确实属于 Bob。
+        *   **主题匹配:** 证书中的身份信息是否与预期接收者匹配？
+        *   **吊销状态:** **本项目强制执行严格的 OCSP 检查。**如果因任何原因（如证书中无 OCSP 地址、服务器无响应、证书被报告为吊销或未知）无法确认证书状态为“良好”，验证将**立即失败**。这就是“故障关闭”策略，它能最大限度地防止使用可能已被吊销的风险证书。
+    *   只有所有检查都通过，才能继续下一步。
 
 2.  **密钥封装 (Key Encapsulation):**
-    *   Alice 从 Bob 的证书中提取出他经过验证的 **Ed25519 公钥**。
-    *   接下来是本系统最精妙的一步：
-        *   Alice 将自己的 **Ed25519 私钥** 动态转换为一个 **X25519 私钥**。
-        *   她也将 Bob 的 **Ed25519 公钥** 转换为一个 **X25519 公钥**。
-        *   **为什么这样做？** Ed25519 用于签名，而 X25519 (基于同一条曲线 Curve25519) 用于密钥协商和加密。这种转换允许一个密钥对同时服务于签名和加密两种目的，极大地简化了密钥管理。
-    *   Alice 现在使用她的 X25519 私钥和 Bob 的 X25519 公钥，通过 `libsodium` 的 `crypto_box` 功能来加密**会话密钥**。
-    *   这个过程由 `encapsulate_session_key` 完成。它会生成一个包含**随机Nonce**和加密后会话密钥的密文。
+    *   发送方从接收方已验证的证书中提取出 **Ed25519 公钥**。
+    *   发送方将自己的 **Ed25519 私钥** 和接收方的 **Ed25519 公钥** 动态转换为 **X25519** 密钥对。Ed25519 用于签名，而 X25519 用于加密，这种转换允许一个密钥对服务于两种目的，简化了密钥管理。
+    *   最后，使用 `libsodium` 的 `crypto_box` 功能（基于X25519）来加密**会话密钥**。
 
 ### 总结：一个安全的“传输包”
 
-Alice 最终会向 Bob 发送一个“传输包”，其中包含两样东西：
+发送方最终会向接收方发送一个“传输包”，其中包含：
 1.  **加密后的文件** (使用 AEAD 和会话密钥加密)。
-2.  **封装后的会话密钥** (使用非对称加密和 Alice/Bob 的主密钥对加密)。
+2.  **封装后的会话密钥** (使用非对称加密和双方的主密钥对加密)。
 
-当 Bob 收到后，他会先用自己的主私钥和 Alice 的公钥解封装得到会话密钥，然后再用会话密钥解密文件。整个过程实现了端到端的安全。
+接收方收到后，先用自己的主私钥解封装得到会话密钥，再用会话密钥解密文件，完成端到端的安全通信。
 
 ## 🛠️ API 参考文档
 
@@ -203,22 +173,11 @@ Alice 最终会向 Bob 发送一个“传输包”，其中包含两样东西：
 ---
 `int generate_master_key_pair(master_key_pair* kp)`
 *   **描述:** 生成一个全新的 Ed25519 主密钥对。
-*   **@param** `kp` (输出) 指向 `master_key_pair` 结构体的指针，用于存储结果。
+*   **参数:** `kp` (输出) 指向 `master_key_pair` 结构体的指针。
 *   **返回:** `0` 成功, `-1` 失败。
 
 ---
-`int encapsulate_session_key(...)`
-*   **描述:** 使用发送者的私钥和接收者的公钥，安全地加密一个会话密钥。
-*   **@param** `encrypted_output` (输出) 存放加密结果的缓冲区。
-*   **@param** `encrypted_output_len` (输出) 指向变量的指针，用于存储最终输出的总长度。
-*   **@param** `session_key` 要加密的会话密钥。
-*   **@param** `session_key_len` 会话密钥的长度。
-*   **@param** `recipient_sign_pk` 接收者的 Ed25519 公钥。
-*   **@param** `my_sign_sk` 发送者的 Ed25519 私钥。
-*   **返回:** `0` 成功, `-1` 失败。
-
----
-*(其他 `core_crypto` 函数如 `free_master_key_pair`, `generate_recovery_key`, `derive_key_from_password`, `encrypt_symmetric_aead`, `decapsulate_session_key` 等，请参考头文件中的详细注释。)*
+*(其他 `core_crypto` 函数请参考头文件中的详细Doxygen注释。)*
 
 ### `pki_handler` 模块
 *头文件: `src/pki/pki_handler.h`*
@@ -231,21 +190,21 @@ Alice 最终会向 Bob 发送一个“传输包”，其中包含两样东西：
 ---
 `int generate_csr(const master_key_pair* mkp, const char* username, char** out_csr_pem)`
 *   **描述:** 使用主密钥对为指定用户名生成一个 PEM 格式的证书签名请求。
-*   **@param** `mkp` 指向已初始化的主密钥对。
-*   **@param** `username` 要嵌入CSR中的用户名 (Common Name)。
-*   **@param** `out_csr_pem` (输出) 指向 `char*` 的指针，函数将分配内存并存储PEM字符串。调用者需使用 `free_csr_pem()` 释放。
+*   **参数:** `mkp` (输入), `username` (输入), `out_csr_pem` (输出)。调用者需使用 `free_csr_pem()` 释放 `out_csr_pem`。
 *   **返回:** `0` 成功, `-1` 失败。
 
 ---
 `int verify_user_certificate(const char* user_cert_pem, const char* trusted_ca_cert_pem, const char* expected_username)`
-*   **描述:** 执行完整的证书验证流程。
-*   **@param** `user_cert_pem` 要验证的用户证书 (PEM格式)。
-*   **@param** `trusted_ca_cert_pem` 受信任的根CA证书 (PEM格式)。
-*   **@param** `expected_username` 期望从证书主体中匹配的用户名。
-*   **返回:** `0` 验证成功, 负值表示不同类型的失败（详见头文件）。
+*   **描述:** 执行完整的、严格的证书验证流程。
+*   **返回:**
+    *   `0`: 所有验证步骤（包括OCSP）全部成功。
+    *   `-1`: 一般性错误 (如内存分配、PEM 解析失败)。
+    *   `-2`: 证书签名链或有效期验证失败。
+    *   `-3`: 证书主体 (Username) 不匹配。
+    *   `-4`: **吊销状态检查失败** (证书被吊销、状态未知、或无法获取OCSP响应)。
 
 ---
-*(其他 `pki_handler` 函数如 `free_csr_pem`, `extract_public_key_from_cert`，请参考头文件中的详细注释。)*
+*(其他 `pki_handler` 函数请参考头文件中的详细Doxygen注释。)*
 
 ### `secure_memory` 模块
 *头文件: `src/common/secure_memory.h`*
@@ -253,24 +212,22 @@ Alice 最终会向 Bob 发送一个“传输包”，其中包含两样东西：
 ---
 `void* secure_alloc(size_t size)`
 *   **描述:** 分配一块受保护的、不可被交换到磁盘的内存。
-*   **@param** `size` 要分配的字节数。
 *   **返回:** 成功时返回指针，失败时返回 `NULL`。
 
 ---
 `void secure_free(void* ptr)`
 *   **描述:** 在释放前安全地擦除一块受保护的内存，然后释放它。
-*   **@param** `ptr` 指向由 `secure_alloc` 分配的内存。
 
 ---
 
 ## 📜 证书说明
 
-本项目使用 **X.509 v3** 证书标准。在演示程序 (`main.c`) 和测试代码中，我们通过 `generate_test_ca` 和 `sign_csr_with_ca` 两个辅助函数模拟了一个迷你的证书颁发机构（CA）。
+本项目使用 **X.509 v3** 证书标准。在演示和测试代码中，我们通过辅助函数模拟了一个迷你的证书颁发机构（CA）。
 
-*   **自签名根CA证书:** `generate_test_ca` 创建了一个自签名的根CA证书。在真实世界中，这个根证书会被预置在客户端中作为信任的锚点。为了使其成为一个合格的CA证书，我们为其添加了必要的 X.509 v3 扩展，如 `Basic Constraints (CA:TRUE)` 和 `Key Usage`。
-*   **用户证书:** `sign_csr_with_ca` 模拟了CA服务器的操作，它接收用户的CSR，并使用CA的私钥对其进行签名，最终生成用户的证书。
+*   **自签名根CA证书:** `generate_test_ca` 创建了一个自签名的根CA证书，作为信任锚点。它包含了必要的 X.509 v3 扩展，如 `Basic Constraints (CA:TRUE)`。
+*   **用户证书:** `sign_csr_with_ca` 接收用户的CSR并用CA私钥对其签名，生成用户证书。为了支持吊销检查测试，此函数现在会自动为签发的用户证书添加一个指向模拟OCSP服务器的**授权信息访问 (AIA)** 扩展。
 
-在 `verify_user_certificate` 函数中，正是利用了 `trusted_ca_cert_pem` 参数提供的根CA证书，来验证用户证书的签名链是否可信。
+在 `verify_user_certificate` 函数中，正是利用了 `trusted_ca_cert_pem` 提供的根CA证书，来验证用户证书的签名链是否可信。
 
 ## 🤝 贡献
 
