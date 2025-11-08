@@ -4,7 +4,8 @@
 #include <sodium.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdlib.h> // [新增] 为 getenv, strtoull
+#include <stdlib.h>
+#include <errno.h> // [FIX] 包含 errno.h 以检查 strtoull 的范围错误
 
 // --- [新增] 运行时安全参数的定义与初始化 ---
 // 这些变量持有程序实际使用的Argon2id参数。
@@ -26,10 +27,13 @@ void crypto_config_load_from_env() {
     const char* opslimit_env = getenv("HSC_ARGON2_OPSLIMIT");
     if (opslimit_env) {
         char* endptr;
+        errno = 0; // [FIX] 在调用 strtoull 之前重置 errno
         unsigned long long ops_from_env = strtoull(opslimit_env, &endptr, 10);
 
-        // 检查: 1. 字符串是否完全转换为数字 2. 值是否不低于安全基线
-        if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT) {
+        // [FIX] 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
+        if (errno == ERANGE) {
+            fprintf(stderr, "  > WARNING: HSC_ARGON2_OPSLIMIT value is out of range. Using default.\n");
+        } else if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT) {
             g_argon2_opslimit = ops_from_env;
             printf("  > Argon2id OpsLimit overridden by environment: %llu\n", g_argon2_opslimit);
         } else {
@@ -41,10 +45,13 @@ void crypto_config_load_from_env() {
     const char* memlimit_env = getenv("HSC_ARGON2_MEMLIMIT");
     if (memlimit_env) {
         char* endptr;
+        errno = 0; // [FIX] 在调用 strtoull 之前重置 errno
         unsigned long long mem_from_env = strtoull(memlimit_env, &endptr, 10);
         
-        // 检查: 1. 字符串是否完全转换为数字 2. 值是否不低于安全基线
-        if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT) {
+        // [FIX] 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
+        if (errno == ERANGE) {
+            fprintf(stderr, "  > WARNING: HSC_ARGON2_MEMLIMIT value is out of range. Using default.\n");
+        } else if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT) {
             g_argon2_memlimit = (size_t)mem_from_env;
             printf("  > Argon2id MemLimit overridden by environment: %zu bytes\n", g_argon2_memlimit);
         } else {

@@ -125,7 +125,7 @@ bool write_file_bytes(const char* filename, const void* data, size_t len) {
 }
 
 /**
- * @brief 安全地从输入路径生成带有新扩展名的输出路径。
+ * @brief [FIX] 安全地从输入路径生成带有新扩展名的输出路径。（重写以使用 snprintf）
  * @param out_buf       (输出) 存放结果的缓冲区。
  * @param out_buf_size  输出缓冲区的大小。
  * @param in_path       输入的原始文件路径。
@@ -133,19 +133,17 @@ bool write_file_bytes(const char* filename, const void* data, size_t len) {
  * @return 成功返回 true，如果路径过长则返回 false。
  */
 bool create_output_path(char* out_buf, size_t out_buf_size, const char* in_path, const char* new_ext) {
-    // 步骤 1: 复制基础路径，为扩展名留出空间
-    size_t new_ext_len = strlen(new_ext);
-    if (new_ext_len >= out_buf_size) return false; // 扩展名本身就太长了
+    // 创建一个 in_path 的可修改副本
+    char base_path[260]; // 假设路径长度在合理范围内
+    strncpy(base_path, in_path, sizeof(base_path) - 1);
+    base_path[sizeof(base_path) - 1] = '\0';
 
-    strncpy(out_buf, in_path, out_buf_size - 1);
-    out_buf[out_buf_size - 1] = '\0';
-
-    // 步骤 2: 查找并移除旧的扩展名（如果存在）
-    char* dot = strrchr(out_buf, '.');
+    // 查找并移除旧的扩展名（如果存在）
+    char* dot = strrchr(base_path, '.');
     // 处理边缘情况，如 ".bashrc" 或 "path/to/.config"
-    char* slash = strrchr(out_buf, '/');
+    char* slash = strrchr(base_path, '/');
     #ifdef _WIN32
-    char* backslash = strrchr(out_buf, '\\');
+    char* backslash = strrchr(base_path, '\\');
     if (backslash > slash) slash = backslash;
     #endif
 
@@ -153,13 +151,14 @@ bool create_output_path(char* out_buf, size_t out_buf_size, const char* in_path,
         *dot = '\0'; // 截断字符串以移除扩展名
     }
 
-    // 步骤 3: 安全地追加新的扩展名
-    size_t base_len = strlen(out_buf);
-    if (base_len + new_ext_len + 1 > out_buf_size) {
+    // 使用 snprintf 安全地构建最终路径
+    int written = snprintf(out_buf, out_buf_size, "%s%s", base_path, new_ext);
+
+    // 严格检查 snprintf 的返回值，防止截断
+    if (written < 0 || (size_t)written >= out_buf_size) {
         fprintf(stderr, "错误: 生成的输出文件名过长。\n");
         return false;
     }
-    strcat(out_buf, new_ext); // strcat 在这里是安全的，因为我们已经检查了空间
 
     return true;
 }
