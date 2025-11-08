@@ -76,7 +76,6 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     X509_REQ* req = NULL;
     BIO* bio = NULL;
     
-    // --- [关键修复] 开始 ---
     // 步骤 1: 显式地从 libsodium 的 64 字节私钥中提取出 32 字节的种子。
     // 这是安全的、符合 API 规范的做法，避免了依赖 libsodium 内部的密钥格式。
     unsigned char private_seed[crypto_sign_SEEDBYTES];
@@ -87,7 +86,6 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     
     // 步骤 3: 立即安全地擦除栈上的种子副本，使其在内存中的生命周期尽可能短。
     secure_zero_memory(private_seed, sizeof(private_seed));
-    // --- [关键修复] 结束 ---
 
     if (!pkey) {
         LOG_PKI_ERROR("EVP_PKEY_new_raw_private_key failed.");

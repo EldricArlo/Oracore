@@ -1,13 +1,10 @@
-// src/cli.c (版本 3.0 - 重构为流式I/O)
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
-
-#include <sodium.h> // 引入完整的 sodium.h 以使用 secretstream API
-
+#include <errno.h>
+#include <sodium.h>
 // 在某些非GNU系统上需要此头文件
 #if defined(__linux__) || defined(__APPLE__)
 #include <endian.h>
@@ -29,7 +26,7 @@
 
 // 打印简化的帮助信息
 void print_usage(const char* prog_name) {
-    fprintf(stderr, "高安全性混合加密系统 v4.1 (流式处理版 CLI)\n\n");
+    fprintf(stderr, "高安全性混合加密系统 v4.2 (流式处理版 CLI)\n\n");
     fprintf(stderr, "用法: %s <命令> [参数...]\n\n", prog_name);
     fprintf(stderr, "命令列表:\n");
     fprintf(stderr, "  gen-keypair <basename>\n");
@@ -48,22 +45,80 @@ void print_usage(const char* prog_name) {
 unsigned char* read_file_bytes(const char* filename, size_t* out_len) {
     FILE* f = fopen(filename, "rb");
     if (!f) { perror("无法打开文件"); return NULL; }
-    fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
-    if (len <= 0) { fclose(f); fprintf(stderr,"错误: 文件为空或无法读取: %s\n", filename); return NULL; }
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    if (len < 0) { // 检查 ftell 的错误
+        perror("ftell 失败");
+        fclose(f);
+        return NULL;
+    }
+    fseek(f, 0, SEEK_SET);
+
+    if (len == 0) { fclose(f); fprintf(stderr,"错误: 文件为空: %s\n", filename); return NULL; }
     unsigned char* buffer = malloc(len + 1);
     if (!buffer) { fclose(f); fprintf(stderr, "内存分配失败\n"); return NULL; }
-    if (fread(buffer, 1, len, f) != (size_t)len) { fclose(f); free(buffer); fprintf(stderr, "读取文件失败: %s\n", filename); return NULL; }
+    if (fread(buffer, 1, len, f) != (size_t)len) {
+        fclose(f); free(buffer); fprintf(stderr, "读取文件失败: %s\n", filename); return NULL;
+    }
     buffer[len] = '\0'; // 确保基于文本的文件(如证书)是null结尾的
-    *out_len = len; fclose(f); return buffer;
+    *out_len = len;
+    fclose(f);
+    return buffer;
 }
 
 // 将字节写入文件 (用于密钥、证书等小文件)
 bool write_file_bytes(const char* filename, const void* data, size_t len) {
     FILE* f = fopen(filename, "wb");
     if (!f) { perror("无法创建文件"); return false; }
-    if (fwrite(data, 1, len, f) != len) { fclose(f); fprintf(stderr, "写入文件失败: %s\n", filename); return false; }
-    fclose(f); return true;
+    if (fwrite(data, 1, len, f) != len) {
+        fclose(f);
+        fprintf(stderr, "写入文件失败: %s\n", filename);
+        return false;
+    }
+    fclose(f);
+    return true;
 }
+
+/**
+ * @brief 安全地从输入路径生成带有新扩展名的输出路径。
+ * @param out_buf       (输出) 存放结果的缓冲区。
+ * @param out_buf_size  输出缓冲区的大小。
+ * @param in_path       输入的原始文件路径。
+ * @param new_ext       要附加或替换的新扩展名 (例如, ".csr")。
+ * @return 成功返回 true，如果路径过长则返回 false。
+ */
+bool create_output_path(char* out_buf, size_t out_buf_size, const char* in_path, const char* new_ext) {
+    // 步骤 1: 复制基础路径，为扩展名留出空间
+    size_t new_ext_len = strlen(new_ext);
+    if (new_ext_len >= out_buf_size) return false; // 扩展名本身就太长了
+
+    strncpy(out_buf, in_path, out_buf_size - 1);
+    out_buf[out_buf_size - 1] = '\0';
+
+    // 步骤 2: 查找并移除旧的扩展名（如果存在）
+    char* dot = strrchr(out_buf, '.');
+    // 处理边缘情况，如 ".bashrc" 或 "path/to/.config"
+    char* slash = strrchr(out_buf, '/');
+    #ifdef _WIN32
+    char* backslash = strrchr(out_buf, '\\');
+    if (backslash > slash) slash = backslash;
+    #endif
+
+    if (dot && (!slash || dot > slash)) {
+        *dot = '\0'; // 截断字符串以移除扩展名
+    }
+
+    // 步骤 3: 安全地追加新的扩展名
+    size_t base_len = strlen(out_buf);
+    if (base_len + new_ext_len + 1 > out_buf_size) {
+        fprintf(stderr, "错误: 生成的输出文件名过长。\n");
+        return false;
+    }
+    strcat(out_buf, new_ext); // strcat 在这里是安全的，因为我们已经检查了空间
+
+    return true;
+}
+
 
 // --- 命令处理函数 ---
 
@@ -76,6 +131,7 @@ int handle_gen_keypair(int argc, char* argv[]) {
     char pub_path[260];
     char priv_path[260];
     
+    // snprintf 是安全的，但我们仍然检查截断
     int written_pub = snprintf(pub_path, sizeof(pub_path), "%s.pub", basename);
     int written_priv = snprintf(priv_path, sizeof(priv_path), "%s.key", basename);
     if (written_pub < 0 || (size_t)written_pub >= sizeof(pub_path) ||
@@ -85,18 +141,27 @@ int handle_gen_keypair(int argc, char* argv[]) {
     }
 
     master_key_pair mkp;
+    mkp.sk = NULL; // 初始化以用于清理
+    int ret = 1;
+
     if (generate_master_key_pair(&mkp) != 0) {
-        fprintf(stderr, "错误: 生成主密钥对失败。\n"); return 1;
+        fprintf(stderr, "错误: 生成主密钥对失败。\n");
+        goto cleanup;
     }
     
-    bool success = write_file_bytes(pub_path, mkp.pk, MASTER_PUBLIC_KEY_BYTES) &&
-                   write_file_bytes(priv_path, mkp.sk, MASTER_SECRET_KEY_BYTES);
-
-    free_master_key_pair(&mkp);
-    if (success) {
-        printf("✅ 成功生成密钥对:\n  公钥 -> %s\n  私钥 -> %s\n", pub_path, priv_path);
+    if (!write_file_bytes(pub_path, mkp.pk, MASTER_PUBLIC_KEY_BYTES) ||
+        !write_file_bytes(priv_path, mkp.sk, MASTER_SECRET_KEY_BYTES)) {
+        goto cleanup;
     }
-    return success ? 0 : 1;
+
+    printf("✅ 成功生成密钥对:\n  公钥 -> %s\n  私钥 -> %s\n", pub_path, priv_path);
+    ret = 0;
+
+cleanup:
+    if (mkp.sk) {
+        free_master_key_pair(&mkp);
+    }
+    return ret;
 }
 
 int handle_gen_csr(int argc, char* argv[]) {
@@ -108,41 +173,47 @@ int handle_gen_csr(int argc, char* argv[]) {
     const char* user_cn = argv[3];
     
     char csr_path[260];
-    const char* dot = strrchr(priv_path, '.');
-    if(dot) {
-        snprintf(csr_path, dot - priv_path + 1, "%s", priv_path);
-    } else {
-        strncpy(csr_path, priv_path, sizeof(csr_path) - 5);
+    if (!create_output_path(csr_path, sizeof(csr_path), priv_path, ".csr")) {
+        return 1;
     }
-    strncat(csr_path, ".csr", sizeof(csr_path) - strlen(csr_path) - 1);
 
-    master_key_pair mkp;
-    size_t sk_len;
+    int ret = 1;
+    master_key_pair mkp = { .sk = NULL };
+    unsigned char* sk_from_file = NULL;
+    char* csr_pem = NULL;
+
     mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
-    if (!mkp.sk) { fprintf(stderr, "安全内存分配失败\n"); return 1; }
-    unsigned char* sk_from_file = read_file_bytes(priv_path, &sk_len);
+    if (!mkp.sk) { fprintf(stderr, "安全内存分配失败\n"); goto cleanup; }
+
+    size_t sk_len;
+    sk_from_file = read_file_bytes(priv_path, &sk_len);
     if (!sk_from_file || sk_len != MASTER_SECRET_KEY_BYTES) {
         fprintf(stderr, "错误: 读取或验证私钥失败。\n");
-        secure_free(mkp.sk); free(sk_from_file); return 1;
+        goto cleanup;
     }
     memcpy(mkp.sk, sk_from_file, MASTER_SECRET_KEY_BYTES);
-    secure_zero_memory(sk_from_file, sk_len);
-    free(sk_from_file);
 
-    char* csr_pem = NULL;
     if (generate_csr(&mkp, user_cn, &csr_pem) != 0) {
         fprintf(stderr, "错误: 生成 CSR 失败。\n");
-        free_master_key_pair(&mkp); return 1;
+        goto cleanup;
     }
 
     if (!write_file_bytes(csr_path, csr_pem, strlen(csr_pem))) {
         fprintf(stderr, "错误: 写入 CSR 文件失败。\n");
-    } else {
-        printf("✅ 成功为用户 '%s' 生成 CSR -> %s\n", user_cn, csr_path);
+        goto cleanup;
     }
-    free_master_key_pair(&mkp);
-    free_csr_pem(csr_pem);
-    return 0;
+
+    printf("✅ 成功为用户 '%s' 生成 CSR -> %s\n", user_cn, csr_path);
+    ret = 0;
+
+cleanup:
+    if (mkp.sk) free_master_key_pair(&mkp);
+    if (sk_from_file) {
+        secure_zero_memory(sk_from_file, sk_len);
+        free(sk_from_file);
+    }
+    if (csr_pem) free_csr_pem(csr_pem);
+    return ret;
 }
 
 int handle_verify_cert(int argc, char* argv[]) {
@@ -162,27 +233,38 @@ int handle_verify_cert(int argc, char* argv[]) {
         fprintf(stderr, "用法: %s verify-cert <待验证证书> --ca <CA根证书> --user <预期用户名>\n", argv[0]);
         return 1;
     }
+    
+    int ret = 1;
+    char* user_cert_pem = NULL;
+    char* ca_cert_pem = NULL;
 
     size_t cert_len, ca_len;
-    char* user_cert_pem = (char*)read_file_bytes(cert_path, &cert_len);
-    char* ca_cert_pem = (char*)read_file_bytes(ca_path, &ca_len);
-    if (!user_cert_pem || !ca_cert_pem) { free(user_cert_pem); free(ca_cert_pem); return 1; }
+    user_cert_pem = (char*)read_file_bytes(cert_path, &cert_len);
+    ca_cert_pem = (char*)read_file_bytes(ca_path, &ca_len);
+    if (!user_cert_pem || !ca_cert_pem) {
+        goto cleanup;
+    }
     
     printf("开始验证证书 %s ...\n", cert_path);
     int result = verify_user_certificate(user_cert_pem, ca_cert_pem, user_cn);
 
-    free(user_cert_pem); free(ca_cert_pem);
-
     switch(result) {
-        case 0:  printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); return 0;
-        case -2: fprintf(stderr, "\033[31m[失败]\033[0m 证书签名链或有效期验证失败。\n"); return 1;
-        case -3: fprintf(stderr, "\033[31m[失败]\033[0m 证书主体 (用户名) 不匹配。\n"); return 1;
-        case -4: fprintf(stderr, "\033[31m[失败]\033[0m 证书吊销状态检查失败 (OCSP)！\n"); return 1;
-        default: fprintf(stderr, "\033[31m[失败]\033[0m 未知的验证错误 (代码: %d)。\n", result); return 1;
+        case 0:  
+            printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); 
+            ret = 0; 
+            break;
+        case -2: fprintf(stderr, "\033[31m[失败]\033[0m 证书签名链或有效期验证失败。\n"); break;
+        case -3: fprintf(stderr, "\033[31m[失败]\033[0m 证书主体 (用户名) 不匹配。\n"); break;
+        case -4: fprintf(stderr, "\033[31m[失败]\033[0m 证书吊销状态检查失败 (OCSP)！\n"); break;
+        default: fprintf(stderr, "\033[31m[失败]\033[0m 未知的验证错误 (代码: %d)。\n", result); break;
     }
+
+cleanup:
+    free(user_cert_pem);
+    free(ca_cert_pem);
+    return ret;
 }
 
-// [新] 流式加密函数
 int handle_hybrid_encrypt(int argc, char* argv[]) {
     const char* in_file = NULL;
     const char* recipient_cert_file = NULL;
@@ -202,20 +284,21 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     }
 
     char out_file[260];
-    snprintf(out_file, sizeof(out_file), "%s.hsc", in_file);
-
+    if (!create_output_path(out_file, sizeof(out_file), in_file, ".hsc")) {
+        return 1;
+    }
+    
     int ret = 1;
     FILE *f_in = NULL, *f_out = NULL;
     master_key_pair sender_mkp = { .sk = NULL };
     char* recipient_cert_pem = NULL;
     unsigned char* encapsulated_key = NULL;
     unsigned char* sk_from_file = NULL;
-
-    // 为流加密创建一个会话密钥
+    size_t sk_len = 0;
     unsigned char session_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+
     randombytes_buf(session_key, sizeof(session_key));
 
-    // --- 步骤1: 封装会话密钥 ---
     size_t cert_len;
     recipient_cert_pem = (char*)read_file_bytes(recipient_cert_file, &cert_len);
     if (!recipient_cert_pem) goto cleanup;
@@ -223,7 +306,6 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     unsigned char recipient_pk[MASTER_PUBLIC_KEY_BYTES];
     if (extract_public_key_from_cert(recipient_cert_pem, recipient_pk) != 0) goto cleanup;
 
-    size_t sk_len;
     sender_mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
     if (!sender_mkp.sk) { fprintf(stderr, "安全内存分配失败\n"); goto cleanup; }
     sk_from_file = read_file_bytes(sender_priv_file, &sk_len);
@@ -236,26 +318,21 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     size_t actual_encapsulated_len;
     if (encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_mkp.sk) != 0) goto cleanup;
 
-    // --- 步骤2: 执行流式加密 ---
     f_in = fopen(in_file, "rb");
     if (!f_in) { perror("无法打开输入文件"); goto cleanup; }
     f_out = fopen(out_file, "wb");
     if (!f_out) { perror("无法创建输出文件"); goto cleanup; }
 
-    // 写入包头: 封装密钥长度 + 封装的密钥
     uint64_t key_len_le = htole64(actual_encapsulated_len);
     if (fwrite(&key_len_le, sizeof(uint64_t), 1, f_out) != 1) { fprintf(stderr, "错误: 写入包头失败\n"); goto cleanup; }
     if (fwrite(encapsulated_key, 1, actual_encapsulated_len, f_out) != actual_encapsulated_len) { fprintf(stderr, "错误: 写入封装密钥失败\n"); goto cleanup; }
     
-    // 初始化流加密
     unsigned char stream_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
     crypto_secretstream_xchacha20poly1305_state st;
     crypto_secretstream_xchacha20poly1305_init_push(&st, stream_header, session_key);
     
-    // 写入流加密的头部
     if (fwrite(stream_header, 1, sizeof(stream_header), f_out) != sizeof(stream_header)) { fprintf(stderr, "错误: 写入流加密头部失败\n"); goto cleanup; }
 
-    // 以块为单位进行读、加密、写
     #define CHUNK_SIZE 4096
     unsigned char buf_in[CHUNK_SIZE];
     unsigned char buf_out[CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
@@ -265,6 +342,7 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
 
     do {
         bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
+        if (ferror(f_in)) { fprintf(stderr, "读取输入文件时出错\n"); goto cleanup; }
         tag = feof(f_in) ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
         
         if (crypto_secretstream_xchacha20poly1305_push(&st, buf_out, &out_len, buf_in, bytes_read, NULL, 0, tag) != 0) {
@@ -288,12 +366,10 @@ cleanup:
         secure_zero_memory(sk_from_file, sk_len);
         free(sk_from_file);
     }
-    secure_zero_memory(session_key, sizeof(session_key)); // 关键: 清理会话密钥
+    secure_zero_memory(session_key, sizeof(session_key));
     return ret;
 }
 
-
-// 流式解密函数
 int handle_hybrid_decrypt(int argc, char* argv[]) {
     const char* in_file = NULL;
     const char* sender_cert_file = NULL;
@@ -313,30 +389,30 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     }
 
     char out_file[260];
-    const char* dot = strrchr(in_file, '.');
-    if(dot && strcmp(dot, ".hsc") == 0) {
-        snprintf(out_file, dot - in_file + 1, "%s", in_file);
-    } else {
-        strncpy(out_file, in_file, sizeof(out_file) - 11);
+    if (!create_output_path(out_file, sizeof(out_file), in_file, ".decrypted")) {
+        return 1;
     }
-    strncat(out_file, ".decrypted", sizeof(out_file) - strlen(out_file) - 1);
-
+    
     int ret = 1;
     FILE *f_in = NULL, *f_out = NULL;
     char* sender_cert_pem = NULL;
     master_key_pair recipient_mkp = { .sk = NULL };
     unsigned char* sk_from_file = NULL;
+    size_t sk_len = 0;
     unsigned char* enc_key = NULL;
     unsigned char* dec_session_key = NULL;
 
     f_in = fopen(in_file, "rb");
     if (!f_in) { perror("无法打开加密文件"); goto cleanup; }
 
-    // --- 步骤1: 读取包头并解封装会话密钥 ---
     uint64_t key_len_le;
     if (fread(&key_len_le, sizeof(uint64_t), 1, f_in) != 1) { fprintf(stderr, "错误: 读取包头失败\n"); goto cleanup; }
     size_t enc_key_len = le64toh(key_len_le);
     
+    if (enc_key_len == 0 || enc_key_len > 1024 * 1024) { // 合理性检查
+        fprintf(stderr, "错误: 无效的封装密钥长度\n"); goto cleanup;
+    }
+
     enc_key = malloc(enc_key_len);
     if (!enc_key) { fprintf(stderr, "内存分配失败\n"); goto cleanup; }
     if (fread(enc_key, 1, enc_key_len, f_in) != enc_key_len) { fprintf(stderr, "错误: 读取封装密钥失败\n"); goto cleanup; }
@@ -347,7 +423,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     unsigned char sender_pk[MASTER_PUBLIC_KEY_BYTES];
     if (extract_public_key_from_cert(sender_cert_pem, sender_pk) != 0) goto cleanup;
     
-    size_t sk_len;
     recipient_mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
     if (!recipient_mkp.sk) { fprintf(stderr, "安全内存分配失败\n"); goto cleanup; }
     sk_from_file = read_file_bytes(recipient_priv_file, &sk_len);
@@ -360,7 +435,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         fprintf(stderr, "错误: 解封装会话密钥失败！可能是密钥或证书错误。\n"); goto cleanup;
     }
 
-    // --- 步骤2: 执行流式解密 ---
     f_out = fopen(out_file, "wb");
     if (!f_out) { perror("无法创建解密文件"); goto cleanup; }
     
@@ -374,25 +448,34 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         fprintf(stderr, "错误: 无效的流加密头部\n"); goto cleanup;
     }
     
-    #define CHUNK_SIZE 4096
-    unsigned char buf_in[CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
-    unsigned char buf_out[CHUNK_SIZE];
+    #define DECRYPT_CHUNK_SIZE (4096 + crypto_secretstream_xchacha20poly1305_ABYTES)
+    unsigned char buf_in[DECRYPT_CHUNK_SIZE];
+    unsigned char buf_out[4096];
     size_t bytes_read;
     unsigned long long out_len;
     unsigned char tag;
+    bool stream_finished = false;
 
     do {
         bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
+        if (ferror(f_in)) { fprintf(stderr, "读取加密文件时出错\n"); goto cleanup; }
+
         if (crypto_secretstream_xchacha20poly1305_pull(&st, buf_out, &out_len, &tag, buf_in, bytes_read, NULL, 0) != 0) {
             fprintf(stderr, "错误: 解密块失败！数据可能被篡改。\n"); goto cleanup;
         }
-        if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL && feof(f_in)) {
-             // 流正常结束
+
+        if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL) {
+            stream_finished = true;
         }
+        
         if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
              fprintf(stderr, "错误: 写入解密块失败\n"); goto cleanup;
         }
     } while (!feof(f_in));
+
+    if (!stream_finished) {
+        fprintf(stderr, "警告: 加密流未正常结束，文件可能不完整。\n");
+    }
 
     printf("✅ 混合解密完成！\n  解密文件 -> %s\n", out_file);
     ret = 0;
