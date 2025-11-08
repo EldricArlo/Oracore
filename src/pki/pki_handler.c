@@ -119,42 +119,54 @@ cleanup:
     return ret;
 }
 
-// 用于 libcurl 接收数据的内存块结构体
+// ======================= [性能修复 1/3] =======================
+// 修改内存块结构体以包含容量信息
 struct memory_chunk {
     char* memory;
-    size_t size;
+    size_t size;      // 当前已用大小
+    size_t capacity;  // 当前分配的总容量
 };
+// =============================================================
 
-// libcurl 写入回调函数
+// ======================= [性能修复 2/3] =======================
+// libcurl 写入回调函数，采用指数增长策略
 static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t realsize = size * nmemb;
     struct memory_chunk* mem = (struct memory_chunk*)userp;
 
-    char* ptr = realloc(mem->memory, mem->size + realsize + 1);
-    if (ptr == NULL) {
-        fprintf(stderr, "OCSP Error: not enough memory (realloc returned NULL)\n");
-        return 0;
+    // 检查是否需要扩展容量
+    if (mem->size + realsize + 1 > mem->capacity) {
+        // 计算新的容量，至少是当前容量的两倍，或足以容纳新数据的容量
+        size_t new_capacity = (mem->capacity > 0) ? mem->capacity * 2 : 1024;
+        if (new_capacity < mem->size + realsize + 1) {
+            new_capacity = mem->size + realsize + 1;
+        }
+
+        char* ptr = realloc(mem->memory, new_capacity);
+        if (ptr == NULL) {
+            fprintf(stderr, "OCSP Error: not enough memory (realloc returned NULL)\n");
+            return 0; // 返回 0 会让 cURL 知道发生了错误
+        }
+        mem->memory = ptr;
+        mem->capacity = new_capacity;
     }
 
-    mem->memory = ptr;
     memcpy(&(mem->memory[mem->size]), contents, realsize);
     mem->size += realsize;
-    mem->memory[mem->size] = 0;
+    mem->memory[mem->size] = 0; // 始终保持 C 字符串的 null 终止特性
 
     return realsize;
 }
+// =============================================================
 
 // 使用 libcurl 执行 HTTP POST 请求的辅助函数
 static struct memory_chunk perform_http_post(const char* url, const unsigned char* data, size_t data_len) {
     CURL* curl;
     CURLcode res;
-    struct memory_chunk chunk = { .memory = NULL, .size = 0 };
-
-    chunk.memory = malloc(1);
-    if (chunk.memory == NULL) {
-        return chunk;
-    }
-    chunk.memory[0] = '\0';
+    // ======================= [性能修复 3/3] =======================
+    // 正确初始化 memory_chunk 结构体
+    struct memory_chunk chunk = { .memory = NULL, .size = 0, .capacity = 0 };
+    // =============================================================
 
     curl = curl_easy_init();
     if (curl) {
@@ -169,23 +181,16 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
         
-        // ======================= [关键安全修复] =======================
-        // 启用对OCSP服务器TLS证书的验证，防止中间人攻击。
-        // 这是绝对必要的安全措施。
+        // [关键安全修复] 启用对OCSP服务器TLS证书的验证
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-        
-        // 在生产环境中，还应配置CURLOPT_CAINFO指向一个可信的CA证书包，
-        // 以便cURL可以验证服务器证书的信任链。如果未设置，cURL会
-        // 尝试使用其内置的或系统默认的CA包。
-        // 例如: curl_easy_setopt(curl, CURLOPT_CAINFO, "/etc/ssl/certs/ca-certificates.crt");
-        // =============================================================
 
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
             fprintf(stderr, "OCSP Error: curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-            free(chunk.memory);
+            free(chunk.memory); // 即使失败也要释放已分配的内存
             chunk.memory = NULL;
             chunk.size = 0;
+            // capacity 也应清零，但结构体本身将被返回，所以没问题
         }
         
         curl_easy_cleanup(curl);
@@ -210,11 +215,14 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
 
     // 步骤 1: 从证书的 Authority Information Access (AIA) 扩展中获取 OCSP URL
     ocsp_uris = X509_get1_ocsp(user_cert);
+    // ======================= [安全策略修复 1/2] =======================
+    // 实施“故障关闭”策略：如果找不到OCSP URI，则视为吊销检查失败。
     if (!ocsp_uris || sk_OPENSSL_STRING_num(ocsp_uris) <= 0) {
-        fprintf(stderr, "         > 警告: 证书中未找到 OCSP URI。跳过吊销检查。\n");
-        ret = 0; // 如果没有提供URI，我们无法检查，只能假设其有效
+        fprintf(stderr, "         > 失败: 证书中未找到 OCSP URI。无法验证吊销状态。\n");
+        ret = -4; // 将其视为与“已吊销”同等级别的失败
         goto cleanup;
     }
+    // =================================================================
     const char* ocsp_uri = sk_OPENSSL_STRING_value(ocsp_uris, 0);
     printf("         > OCSP 服务器: %s\n", ocsp_uri);
 
@@ -236,11 +244,15 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     
     req_len = BIO_get_mem_data(req_bio, &req_data);
     struct memory_chunk response_chunk = perform_http_post(ocsp_uri, req_data, req_len);
+    // ======================= [安全策略修复 2/2] =======================
+    // 实施“故障关闭”策略：如果HTTP请求失败，则视为吊销检查失败。
     if (response_chunk.memory == NULL || response_chunk.size == 0) {
         fprintf(stderr, "         > 失败: 未能从 OCSP 服务器获取响应。\n");
         if(response_chunk.memory) free(response_chunk.memory);
+        ret = -4; // 将其视为与“已吊销”同等级别的失败
         goto cleanup;
     }
+    // =================================================================
     
     // 步骤 4: 解析并验证 OCSP 响应
     const unsigned char* p = (const unsigned char*)response_chunk.memory;
@@ -303,7 +315,7 @@ cleanup:
     OCSP_RESPONSE_free(resp);
     OCSP_BASICRESP_free(bresp);
     BIO_free(req_bio);
-    if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris); // The one and only correct free function.
+    if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris);
     return ret;
 }
 

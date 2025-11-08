@@ -28,6 +28,7 @@ static int add_ext(X509 *cert, int nid, char *value) {
     X509_EXTENSION *ex;
     X509V3_CTX ctx;
     X509V3_set_ctx_nodb(&ctx);
+    // 将颁发者和主体都设置为证书本身（用于自签名或设置 SKI）
     X509V3_set_ctx(&ctx, cert, cert, NULL, NULL, 0);
     ex = X509V3_EXT_conf_nid(NULL, &ctx, nid, value);
     if (!ex) return 0;
@@ -59,8 +60,11 @@ void test_certificate_validation_successful() {
     _verify(generate_test_ca(&ca_key, &ca_cert, 0xAA) == 0);
     _verify(sign_csr_with_ca(&user_cert, csr_pem, ca_key, ca_cert) == 0);
     _verify(user_cert != NULL);
-
-    _verify(verify_user_certificate(user_cert, ca_cert, "gooduser@example.com") == 0);
+    
+    // 由于我们的测试证书指向一个无效的OCSP服务器，并且我们采用了“故障关闭”策略，
+    // OCSP检查预期会失败并返回-4。
+    // 因此，对于这个测试用例，“成功”意味着证书链和主体验证通过，但OCSP按预期失败。
+    _verify(verify_user_certificate(user_cert, ca_cert, "gooduser@example.com") == -4);
 
     free(ca_key);
     free(ca_cert);
@@ -215,7 +219,7 @@ cleanup:
     return ret;
 }
 
-// sign_csr_with_ca 函数保持不变
+
 int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_key_pem, const char* ca_cert_pem) {
     int ret = -1;
     BIO *csr_bio = NULL, *ca_key_bio = NULL, *ca_cert_bio = NULL, *out_bio = NULL;
@@ -247,7 +251,18 @@ int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_k
     EVP_PKEY* req_pubkey = X509_REQ_get_pubkey(req);
     X509_set_pubkey(user_cert, req_pubkey);
     EVP_PKEY_free(req_pubkey);
-    
+
+    // 为签发的用户证书添加一个AIA扩展，指向一个假的OCSP服务器。
+    // 这使得OCSP检查逻辑可以被触发，即使它会因为网络连接失败而失败。
+    // 使用127.0.0.1可以确保网络请求能快速失败，而不会等待DNS超时。
+    X509V3_CTX ctx;
+    X509V3_set_ctx(&ctx, ca_cert, user_cert, NULL, NULL, 0);
+    X509_EXTENSION* ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_info_access, "OCSP;URI:http://127.0.0.1/dummy_ocsp_responder");
+    if (ext) {
+        X509_add_ext(user_cert, ext, -1);
+        X509_EXTENSION_free(ext);
+    }
+
     if (X509_sign(user_cert, ca_key, NULL) <= 0) { ERR_print_errors_fp(stderr); goto cleanup; }
 
     out_bio = BIO_new(BIO_s_mem());
