@@ -12,20 +12,7 @@
 void print_hex(const char* label, const unsigned char* data, size_t len);
 
 // 添加 X.509 v3 扩展的辅助函数
-static int add_ext(X509 *cert, int nid, char *value) {
-    X509_EXTENSION *ex;
-    X509V3_CTX ctx;
-    // 初始化上下文，将颁发者和主体都设置为证书本身（用于自签名或设置 SKI）
-    X509V3_set_ctx_nodb(&ctx);
-    X509V3_set_ctx(&ctx, cert, cert, NULL, NULL, 0);
-    ex = X509V3_EXT_conf_nid(NULL, &ctx, nid, value);
-    if (!ex) {
-        return 0;
-    }
-    X509_add_ext(cert, ex, -1);
-    X509_EXTENSION_free(ex);
-    return 1;
-}
+static int add_ext(X509 *cert, int nid, char *value);
 
 // [测试辅助] 生成一个自签名的根 CA 证书。在真实世界中，这在离线HSM中完成。
 int generate_test_ca(char** ca_key_pem, char** ca_cert_pem);
@@ -35,49 +22,54 @@ int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_k
 
 
 int main() {
+    // [委员会修改] 统一资源管理模式
+    int ret = 1; // 默认返回码为失败
+
+    // --- 声明所有需要清理的资源，并初始化为安全状态 ---
+    master_key_pair alice_mkp = { .sk = NULL };
+    char* alice_csr_pem = NULL;
+    char* ca_key_pem = NULL;
+    char* ca_cert_pem = NULL;
+    char* alice_cert_pem = NULL;
+    unsigned char* encrypted_file = NULL;
+    unsigned char* encapsulated_session_key = NULL;
+    unsigned char* decrypted_session_key = NULL;
+    unsigned char* decrypted_file_content = NULL;
+
     // --- 初始化 ---
     printf("--- 高安全性混合加密系统 v4.0 客户端演示 ---\n");
     if (crypto_client_init() != 0) { 
         fprintf(stderr, "错误: Libsodium 密码学库初始化失败！\n");
-        return 1; 
+        goto cleanup; // [修改]
     }
     if (pki_init() != 0) {
         fprintf(stderr, "错误: OpenSSL PKI 库初始化失败！\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     printf("密码学库初始化成功。\n\n");
 
     // --- 阶段一 & 模拟 CA ---
     printf("--- 阶段一: 'Alice' 账户创建与证书签发 ---\n");
     const char* alice_username = "alice@example.com";
-    master_key_pair alice_mkp;
+    
     if (generate_master_key_pair(&alice_mkp) != 0) {
         fprintf(stderr, "错误: 生成 Alice 的主密钥对失败。\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     
-    char* alice_csr_pem = NULL;
     if (generate_csr(&alice_mkp, alice_username, &alice_csr_pem) != 0) {
         fprintf(stderr, "错误: 生成 Alice 的 CSR 失败。\n");
-        free_master_key_pair(&alice_mkp);
-        return 1;
+        goto cleanup; // [修改]
     }
     
-    char* ca_key_pem = NULL, *ca_cert_pem = NULL, *alice_cert_pem = NULL;
     if (generate_test_ca(&ca_key_pem, &ca_cert_pem) != 0) {
         fprintf(stderr, "测试错误: 创建模拟 CA 失败。\n");
-        free_master_key_pair(&alice_mkp);
-        free_csr_pem(alice_csr_pem);
-        return 1;
+        goto cleanup; // [修改]
     }
 
     if (sign_csr_with_ca(&alice_cert_pem, alice_csr_pem, ca_key_pem, ca_cert_pem) != 0) {
         fprintf(stderr, "测试错误: 签署用户证书失败。\n");
-        free_master_key_pair(&alice_mkp);
-        free_csr_pem(alice_csr_pem);
-        free(ca_key_pem);
-        free(ca_cert_pem);
-        return 1;
+        goto cleanup; // [修改]
     }
     printf("'Alice' 的证书已成功签发。\n\n");
 
@@ -96,14 +88,15 @@ int main() {
     
     size_t file_content_len = strlen(file_content);
     size_t enc_file_buf_len = file_content_len + crypto_aead_xchacha20poly1305_ietf_ABYTES + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
-    unsigned char* encrypted_file = malloc(enc_file_buf_len);
+    encrypted_file = malloc(enc_file_buf_len);
     if (!encrypted_file) {
-        fprintf(stderr, "内存分配失败！\n"); return 1;
+        fprintf(stderr, "内存分配失败！\n");
+        goto cleanup; // [修改]
     }
     unsigned long long actual_enc_file_len;
     if (encrypt_symmetric_aead(encrypted_file, &actual_enc_file_len, (unsigned char*)file_content, file_content_len, session_key) != 0) {
         fprintf(stderr, "严重错误: 对称加密文件失败！\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     printf("  > 文件内容已使用 AEAD 对称加密。\n\n");
     
@@ -111,7 +104,7 @@ int main() {
     printf("2. 验证接收者 ('Alice') 的证书...\n");
     if (verify_user_certificate(alice_cert_pem, ca_cert_pem, alice_username) != 0) {
         fprintf(stderr, "严重错误: 接收者证书验证失败！中止共享。\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     printf("  > 接收者证书验证成功！\n\n");
     
@@ -120,28 +113,25 @@ int main() {
     unsigned char recipient_pk[MASTER_PUBLIC_KEY_BYTES];
     if (extract_public_key_from_cert(alice_cert_pem, recipient_pk) != 0) {
         fprintf(stderr, "严重错误: 无法从证书中提取公钥！\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     print_hex("  > 提取到的接收者公钥", recipient_pk, sizeof(recipient_pk));
     printf("\n");
 
     // 4. 封装会话密钥
     printf("4. 为接收者封装会话密钥...\n");
-    // 缓冲区大小计算是正确的，它必须容纳: Nonce + 密文 + 认证标签
     size_t encapsulated_key_buf_len = crypto_box_NONCEBYTES + sizeof(session_key) + crypto_box_MACBYTES;
-    unsigned char* encapsulated_session_key = malloc(encapsulated_key_buf_len);
+    encapsulated_session_key = malloc(encapsulated_key_buf_len);
     if (!encapsulated_session_key) {
-        fprintf(stderr, "内存分配失败！\n"); return 1;
+        fprintf(stderr, "内存分配失败！\n");
+        goto cleanup; // [修改]
     }
     
-    // 声明一个变量来接收加密后的实际长度
     size_t actual_encapsulated_len;
-
-    // 调用已修复的函数，传入新参数
     if (encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len, session_key, sizeof(session_key),
                                 recipient_pk, alice_mkp.sk) != 0) {
         fprintf(stderr, "严重错误: 封装会话密钥失败！\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     printf("  > 会话密钥已使用 `crypto_box` (非对称加密) 封装。\n\n");
     
@@ -155,18 +145,18 @@ int main() {
 
     // 1. 解封装会话密钥
     printf("1. 解封装会话密钥...\n");
-    unsigned char* decrypted_session_key = secure_alloc(sizeof(session_key));
+    decrypted_session_key = secure_alloc(sizeof(session_key));
     if (!decrypted_session_key) {
-        fprintf(stderr, "安全内存分配失败！\n"); return 1;
+        fprintf(stderr, "安全内存分配失败！\n");
+        goto cleanup; // [修改]
     }
 
-    // 调用解密函数时，传递加密时返回的 *实际数据长度*，而不是缓冲区的总容量
     if (decapsulate_session_key(decrypted_session_key,
                                 encapsulated_session_key, actual_encapsulated_len,
                                 alice_mkp.pk, // 发送者公钥
                                 alice_mkp.sk) != 0) { // 接收者私钥
         fprintf(stderr, "解密错误: 无法解封装会话密钥！\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     print_hex("  > [解密] 恢复的会话密钥", decrypted_session_key, sizeof(session_key));
 
@@ -178,16 +168,17 @@ int main() {
 
     // 2. 使用恢复的会话密钥解密文件内容
     printf("2. 使用恢复的会话密钥解密文件内容...\n");
-    unsigned char* decrypted_file_content = malloc(file_content_len + 1);
+    decrypted_file_content = malloc(file_content_len + 1);
      if (!decrypted_file_content) {
-        fprintf(stderr, "内存分配失败！\n"); return 1;
+        fprintf(stderr, "内存分配失败！\n");
+        goto cleanup; // [修改]
     }
     unsigned long long actual_dec_file_len;
     if (decrypt_symmetric_aead(decrypted_file_content, &actual_dec_file_len,
                                encrypted_file, actual_enc_file_len,
                                decrypted_session_key) != 0) {
         fprintf(stderr, "解密错误: 无法解密文件内容！\n");
-        return 1;
+        goto cleanup; // [修改]
     }
     decrypted_file_content[actual_dec_file_len] = '\0';
     
@@ -197,7 +188,11 @@ int main() {
     } else {
         printf("  > 验证失败: 恢复的文件内容与原始内容不匹配！\n\n");
     }
+    
+    // [修改] 所有操作成功，设置成功返回码
+    ret = 0; 
 
+cleanup:
     // --- 清理工作 ---
     printf("--- 清理所有资源 ---\n");
     free(ca_key_pem);
@@ -211,11 +206,11 @@ int main() {
     free(decrypted_file_content);
     printf("清理完成。\n");
 
-    return 0;
+    return ret;
 }
 
 
-// --- 辅助函数的实现 (与测试文件保持一致) ---
+// --- 辅助函数的实现 (这些函数已使用 goto cleanup 模式，无需修改) ---
 
 
 void print_hex(const char* label, const unsigned char* data, size_t len) {
@@ -224,6 +219,21 @@ void print_hex(const char* label, const unsigned char* data, size_t len) {
         printf("%02x", data[i]);
     }
     printf("\n");
+}
+
+static int add_ext(X509 *cert, int nid, char *value) {
+    X509_EXTENSION *ex;
+    X509V3_CTX ctx;
+    // 初始化上下文，将颁发者和主体都设置为证书本身（用于自签名或设置 SKI）
+    X509V3_set_ctx_nodb(&ctx);
+    X509V3_set_ctx(&ctx, cert, cert, NULL, NULL, 0);
+    ex = X509V3_EXT_conf_nid(NULL, &ctx, nid, value);
+    if (!ex) {
+        return 0;
+    }
+    X509_add_ext(cert, ex, -1);
+    X509_EXTENSION_free(ex);
+    return 1;
 }
 
 int generate_test_ca(char** ca_key_pem, char** ca_cert_pem) {
