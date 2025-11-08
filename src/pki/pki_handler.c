@@ -69,11 +69,17 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     EVP_PKEY* pkey = NULL;
     X509_REQ* req = NULL;
     BIO* bio = NULL;
+    X509_NAME* subject = NULL;
     
+    // 从 Ed25519 私钥中提取出 32 字节的核心种子
     unsigned char private_seed[crypto_sign_SEEDBYTES];
     crypto_sign_ed25519_sk_to_seed(private_seed, mkp->sk);
 
+    // 使用种子创建 OpenSSL 的 EVP_PKEY 对象
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_seed, sizeof(private_seed));
+
+    // [关键安全修复] 无论 pkey 创建是否成功，都必须立即擦除栈上的私钥种子副本，
+    // 以最大限度地减少其在内存中的暴露时间。
     secure_zero_memory(private_seed, sizeof(private_seed));
 
     if (!pkey) { LOG_PKI_ERROR("EVP_PKEY_new_raw_private_key failed."); goto cleanup; }
@@ -81,9 +87,11 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     req = X509_REQ_new();
     if (!req) { LOG_PKI_ERROR("X509_REQ_new failed."); goto cleanup; }
     
-    X509_REQ_set_version(req, 0);
+    X509_REQ_set_version(req, 0L);
 
-    X509_NAME* subject = X509_REQ_get_subject_name(req);
+    subject = X509_REQ_get_subject_name(req);
+    if (!subject) { LOG_PKI_ERROR("X509_REQ_get_subject_name failed."); goto cleanup; }
+
     if (!X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, (const unsigned char*)username, -1, -1, 0)) {
         LOG_PKI_ERROR("X509_NAME_add_entry_by_txt failed."); goto cleanup;
     }
@@ -181,9 +189,9 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
 
 static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
     int ret = -1;
-    OCSP_REQUEST* req = NULL;
+    OCSP_REQUEST* ocsp_req = NULL;
     OCSP_CERTID* cid = NULL;
-    OCSP_RESPONSE* resp = NULL;
+    OCSP_RESPONSE* ocsp_resp = NULL;
     OCSP_BASICRESP* bresp = NULL;
     BIO* req_bio = NULL;
     unsigned char* req_data = NULL;
@@ -201,16 +209,16 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     const char* ocsp_uri = sk_OPENSSL_STRING_value(ocsp_uris, 0);
     printf("         > OCSP Server: %s\n", ocsp_uri);
 
-    req = OCSP_REQUEST_new();
-    if (!req) goto cleanup;
+    ocsp_req = OCSP_REQUEST_new();
+    if (!ocsp_req) goto cleanup;
     
     cid = OCSP_cert_to_id(NULL, user_cert, issuer_cert);
     if (!cid) goto cleanup;
-    if (!OCSP_request_add0_id(req, cid)) { OCSP_CERTID_free(cid); cid = NULL; goto cleanup; }
+    if (!OCSP_request_add0_id(ocsp_req, cid)) { OCSP_CERTID_free(cid); cid = NULL; goto cleanup; }
     cid = NULL;
 
     req_bio = BIO_new(BIO_s_mem());
-    if (!req_bio || !i2d_OCSP_REQUEST_bio(req_bio, req)) goto cleanup;
+    if (!req_bio || !i2d_OCSP_REQUEST_bio(req_bio, ocsp_req)) goto cleanup;
     
     req_len = BIO_get_mem_data(req_bio, &req_data);
     struct memory_chunk response_chunk = perform_http_post(ocsp_uri, req_data, req_len);
@@ -222,16 +230,16 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     }
     
     const unsigned char* p = (const unsigned char*)response_chunk.memory;
-    resp = d2i_OCSP_RESPONSE(NULL, &p, response_chunk.size);
+    ocsp_resp = d2i_OCSP_RESPONSE(NULL, &p, response_chunk.size);
     free(response_chunk.memory);
-    if (!resp) { LOG_PKI_ERROR("Failed to parse OCSP response."); goto cleanup; }
+    if (!ocsp_resp) { LOG_PKI_ERROR("Failed to parse OCSP response."); goto cleanup; }
 
-    if (OCSP_response_status(resp) != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
-        LOG_PKI_ERROR_FMT("OCSP response status was not successful: %s", OCSP_response_status_str(OCSP_response_status(resp)));
+    if (OCSP_response_status(ocsp_resp) != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
+        LOG_PKI_ERROR_FMT("OCSP response status was not successful: %s", OCSP_response_status_str(OCSP_response_status(ocsp_resp)));
         goto cleanup;
     }
 
-    bresp = OCSP_response_get1_basic(resp);
+    bresp = OCSP_response_get1_basic(ocsp_resp);
     if (!bresp) { LOG_PKI_ERROR("Could not get Basic OCSP Response from response."); goto cleanup; }
 
     if (OCSP_basic_verify(bresp, NULL, store, 0) <= 0) {
@@ -249,8 +257,6 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
         goto cleanup;
     }
 
-    // [委员会修正] 将时效性检查移动到正确的位置，并使用正确的变量
-    // 这可以防止重放一个旧的、但合法的“Good”状态的OCSP响应
     if (OCSP_check_validity(this_update, next_update, 300L, -1L) <= 0) {
         LOG_PKI_ERROR("OCSP response is not within its validity period (stale response).");
         goto cleanup;
@@ -277,8 +283,8 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
 
 cleanup:
     OCSP_CERTID_free(cid);
-    OCSP_REQUEST_free(req);
-    OCSP_RESPONSE_free(resp);
+    OCSP_REQUEST_free(ocsp_req);
+    OCSP_RESPONSE_free(ocsp_resp);
     OCSP_BASICRESP_free(bresp);
     BIO_free(req_bio);
     if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris);
@@ -300,6 +306,7 @@ int verify_user_certificate(const char* user_cert_pem,
     X509* ca_cert = NULL;
     X509_STORE* store = NULL;
     X509_STORE_CTX* ctx = NULL;
+    X509_NAME* subject_name = NULL;
 
     if (!user_bio || !ca_bio) { LOG_PKI_ERROR("Failed to create BIO for certificates."); goto cleanup; }
     user_cert = PEM_read_bio_X509(user_bio, NULL, NULL, NULL);
@@ -326,9 +333,10 @@ int verify_user_certificate(const char* user_cert_pem,
     printf("      > SUCCESS: Certificate is signed by a trusted CA and is within its validity period.\n");
 
     printf("    Step iii (Subject Verification):\n");
-    X509_NAME* subject_name = X509_get_subject_name(user_cert);
+    subject_name = X509_get_subject_name(user_cert);
+    if (!subject_name) { LOG_PKI_ERROR("Could not get subject name from certificate."); ret_code = -3; goto cleanup; }
+
     char cn[256] = {0};
-    
     int cn_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName, cn, sizeof(cn) - 1);
     if (cn_len < 0) {
         LOG_PKI_ERROR("Could not extract Common Name from certificate.");

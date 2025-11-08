@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <sodium.h>
+
 // 在某些非GNU系统上需要此头文件
 #if defined(__linux__) || defined(__APPLE__)
 #include <endian.h>
@@ -21,6 +22,7 @@
 #include "common/secure_memory.h"
 #include "core_crypto/crypto_client.h"
 #include "pki/pki_handler.h"
+
 
 // --- 辅助函数 ---
 
@@ -43,8 +45,7 @@ void print_usage(const char* prog_name) {
 
 #define MAX_METADATA_FILE_SIZE (1024 * 1024)
 
-// [委员会重构] 新增函数：安全地将固定大小的文件（如密钥）直接读入预分配的缓冲区。
-// 这避免了将敏感数据（私钥）读入标准堆内存中。
+// 安全地将固定大小的文件（如密钥）直接读入预分配的缓冲区。
 bool read_fixed_size_file(const char* filename, void* buffer, size_t expected_len) {
     FILE* f = fopen(filename, "rb");
     if (!f) {
@@ -69,7 +70,12 @@ bool read_fixed_size_file(const char* filename, void* buffer, size_t expected_le
     }
 
     if (fread(buffer, 1, expected_len, f) != expected_len) {
-        fprintf(stderr, "读取文件失败: %s\n", filename);
+        // 如果读取失败，检查是文件结尾还是I/O错误
+        if (ferror(f)) {
+            perror("读取文件时出错");
+        } else {
+            fprintf(stderr, "读取文件失败 (未达到预期长度): %s\n", filename);
+        }
         fclose(f);
         return false;
     }
@@ -78,14 +84,14 @@ bool read_fixed_size_file(const char* filename, void* buffer, size_t expected_le
     return true;
 }
 
-// [委员会重构] 原 read_file_bytes 重命名为 read_variable_size_file。
-// 此函数用于读取非敏感、可变大小的文件（如证书），使用 malloc 是可接受的。
+// 读取非敏感、可变大小的文件（如证书），使用 malloc 是可接受的。
 unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
     FILE* f = fopen(filename, "rb");
     if (!f) { perror("无法打开文件"); return NULL; }
+    
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
-    if (len < 0) { // 检查 ftell 的错误
+    if (len < 0) {
         perror("ftell 失败");
         fclose(f);
         return NULL;
@@ -99,64 +105,96 @@ unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
     }
 
     if (len == 0) { fclose(f); fprintf(stderr,"错误: 文件为空: %s\n", filename); return NULL; }
+    
     unsigned char* buffer = malloc(len + 1);
     if (!buffer) { fclose(f); fprintf(stderr, "内存分配失败\n"); return NULL; }
+    
     if (fread(buffer, 1, len, f) != (size_t)len) {
-        fclose(f); free(buffer); fprintf(stderr, "读取文件失败: %s\n", filename); return NULL;
+        if (ferror(f)) {
+            perror("读取文件时出错");
+        } else {
+            fprintf(stderr, "读取文件失败 (未达到预期长度): %s\n", filename);
+        }
+        fclose(f); 
+        free(buffer); 
+        return NULL;
     }
-    buffer[len] = '\0'; // 确保基于文本的文件(如证书)是null结尾的
+    
+    buffer[len] = '\0';
     *out_len = len;
     fclose(f);
     return buffer;
 }
 
 
-// 将字节写入文件 (用于密钥、证书等小文件)
+// 将字节写入文件
 bool write_file_bytes(const char* filename, const void* data, size_t len) {
     FILE* f = fopen(filename, "wb");
     if (!f) { perror("无法创建文件"); return false; }
+    
     if (fwrite(data, 1, len, f) != len) {
+        // 检查I/O错误
+        if (ferror(f)) {
+            perror("写入文件时出错");
+        } else {
+            fprintf(stderr, "写入文件失败: %s\n", filename);
+        }
         fclose(f);
-        fprintf(stderr, "写入文件失败: %s\n", filename);
         return false;
     }
+    
     fclose(f);
     return true;
 }
 
+
 /**
- * @brief [FIX] 安全地从输入路径生成带有新扩展名的输出路径。（重写以使用 snprintf）
+ * @brief [COMMITTEE FIX] 安全地从输入路径生成带有新扩展名的输出路径。
+ *        此函数已被完全重写，以消除所有中间拷贝和复杂的指针操作，
+ *        通过一次 `snprintf` 调用完成所有工作，并进行严格的返回值检查，
+ *        从而提供最高级别的缓冲区溢出保护。
+ *
  * @param out_buf       (输出) 存放结果的缓冲区。
  * @param out_buf_size  输出缓冲区的大小。
  * @param in_path       输入的原始文件路径。
  * @param new_ext       要附加或替换的新扩展名 (例如, ".csr")。
- * @return 成功返回 true，如果路径过长则返回 false。
+ * @return 成功返回 true，如果路径过长或发生错误则返回 false。
  */
 bool create_output_path(char* out_buf, size_t out_buf_size, const char* in_path, const char* new_ext) {
-    // 创建一个 in_path 的可修改副本
-    char base_path[260]; // 假设路径长度在合理范围内
-    strncpy(base_path, in_path, sizeof(base_path) - 1);
-    base_path[sizeof(base_path) - 1] = '\0';
-
-    // 查找并移除旧的扩展名（如果存在）
-    char* dot = strrchr(base_path, '.');
-    // 处理边缘情况，如 ".bashrc" 或 "path/to/.config"
-    char* slash = strrchr(base_path, '/');
+    // 步骤 1: 查找路径中最后一个点 '.' 和最后一个路径分隔符 '/' 或 '\' 的位置。
+    const char* dot = strrchr(in_path, '.');
+    const char* slash = strrchr(in_path, '/');
     #ifdef _WIN32
-    char* backslash = strrchr(base_path, '\\');
+    const char* backslash = strrchr(in_path, '\\');
     if (backslash > slash) slash = backslash;
     #endif
 
+    size_t base_len;
+    // 如果点存在，并且它在最后一个路径分隔符之后（处理像 "./foo.bar/baz" 这样的情况），
+    // 那么我们认为它是一个文件扩展名。
     if (dot && (!slash || dot > slash)) {
-        *dot = '\0'; // 截断字符串以移除扩展名
+        // 基础路径的长度就是从字符串开始到点之前的部分。
+        base_len = (size_t)(dot - in_path);
+    } else {
+        // 否则，整个输入路径都被视为基础路径。
+        base_len = strlen(in_path);
     }
 
-    // 使用 snprintf 安全地构建最终路径
-    int written = snprintf(out_buf, out_buf_size, "%s%s", base_path, new_ext);
+    // 步骤 2: 使用 `snprintf` 和 `%.*s` 格式说明符安全地构建最终路径。
+    // `%.*s` 会精确地从 `in_path` 中拷贝 `base_len` 个字符，
+    // 然后 `snprintf` 会追加新的扩展名 `new_ext`。
+    int written = snprintf(out_buf, out_buf_size, "%.*s%s", (int)base_len, in_path, new_ext);
 
-    // 严格检查 snprintf 的返回值，防止截断
+    // 步骤 3: 严格检查 `snprintf` 的返回值，这是防止缓冲区溢出的关键。
+    // - `written < 0` 表示发生了编码错误。
+    // - `(size_t)written >= out_buf_size` 表示缓冲区大小不足，输出被截断。
     if (written < 0 || (size_t)written >= out_buf_size) {
-        fprintf(stderr, "错误: 生成的输出文件名过长。\n");
+        fprintf(stderr, "错误: 生成的输出文件名过长或发生编码错误。\n");
+        // 在失败时显式地清空输出缓冲区，防止调用者使用部分生成的、
+        // 不正确的路径。
+        if (out_buf_size > 0) {
+            out_buf[0] = '\0';
+        }
         return false;
     }
 
@@ -172,21 +210,22 @@ int handle_gen_keypair(int argc, char* argv[]) {
         return 1;
     }
     const char* basename = argv[2];
-    char pub_path[260];
-    char priv_path[260];
+    char pub_path[FILENAME_MAX];  // 使用标准宏代替魔法数字
+    char priv_path[FILENAME_MAX];
     
-    // snprintf 是安全的，但我们仍然检查截断
+    // snprintf 是构建字符串的安全方式，但必须检查其返回值
     int written_pub = snprintf(pub_path, sizeof(pub_path), "%s.pub", basename);
     int written_priv = snprintf(priv_path, sizeof(priv_path), "%s.key", basename);
+
+    // 严格检查 snprintf 是否成功且未截断
     if (written_pub < 0 || (size_t)written_pub >= sizeof(pub_path) ||
         written_priv < 0 || (size_t)written_priv >= sizeof(priv_path)) {
         fprintf(stderr, "错误: 文件名过长，无法生成输出路径。\n");
         return 1;
     }
 
-    master_key_pair mkp;
-    mkp.sk = NULL; // 初始化以用于清理
-    int ret = 1;
+    master_key_pair mkp = { .sk = NULL }; // 初始化为安全状态
+    int ret = 1; // 默认失败
 
     if (generate_master_key_pair(&mkp) != 0) {
         fprintf(stderr, "错误: 生成主密钥对失败。\n");
@@ -195,16 +234,16 @@ int handle_gen_keypair(int argc, char* argv[]) {
     
     if (!write_file_bytes(pub_path, mkp.pk, MASTER_PUBLIC_KEY_BYTES) ||
         !write_file_bytes(priv_path, mkp.sk, MASTER_SECRET_KEY_BYTES)) {
+        // write_file_bytes 内部会打印详细错误
         goto cleanup;
     }
 
     printf("✅ 成功生成密钥对:\n  公钥 -> %s\n  私钥 -> %s\n", pub_path, priv_path);
-    ret = 0;
+    ret = 0; // 标记成功
 
 cleanup:
-    if (mkp.sk) {
-        free_master_key_pair(&mkp);
-    }
+    // 无论成功或失败，都安全清理资源
+    free_master_key_pair(&mkp);
     return ret;
 }
 
@@ -216,21 +255,19 @@ int handle_gen_csr(int argc, char* argv[]) {
     const char* priv_path = argv[2];
     const char* user_cn = argv[3];
     
-    char csr_path[260];
+    char csr_path[FILENAME_MAX];
     if (!create_output_path(csr_path, sizeof(csr_path), priv_path, ".csr")) {
         return 1;
     }
 
-    int ret = 1;
+    int ret = 1; // 默认失败
     master_key_pair mkp = { .sk = NULL };
     char* csr_pem = NULL;
 
     mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
     if (!mkp.sk) { fprintf(stderr, "错误: 安全内存分配失败。\n"); goto cleanup; }
 
-    // [委员会重构] 直接将私钥读入安全内存，避免在标准堆中短暂停留。
     if (!read_fixed_size_file(priv_path, mkp.sk, MASTER_SECRET_KEY_BYTES)) {
-        fprintf(stderr, "错误: 读取私钥文件 '%s' 失败。\n", priv_path);
         goto cleanup;
     }
 
@@ -240,16 +277,15 @@ int handle_gen_csr(int argc, char* argv[]) {
     }
 
     if (!write_file_bytes(csr_path, csr_pem, strlen(csr_pem))) {
-        fprintf(stderr, "错误: 写入 CSR 文件到 '%s' 失败。\n", csr_path);
         goto cleanup;
     }
 
     printf("✅ 成功为用户 '%s' 生成 CSR -> %s\n", user_cn, csr_path);
-    ret = 0;
+    ret = 0; // 标记成功
 
 cleanup:
-    if (mkp.sk) free_master_key_pair(&mkp);
-    if (csr_pem) free_csr_pem(csr_pem);
+    free_master_key_pair(&mkp);
+    free_csr_pem(csr_pem);
     return ret;
 }
 
@@ -271,16 +307,15 @@ int handle_verify_cert(int argc, char* argv[]) {
         return 1;
     }
     
-    int ret = 1;
+    int ret = 1; // 默认失败
     char* user_cert_pem = NULL;
     char* ca_cert_pem = NULL;
-
     size_t cert_len, ca_len;
-    // [委员会重构] 调用重命名后的函数
+
     user_cert_pem = (char*)read_variable_size_file(cert_path, &cert_len);
     ca_cert_pem = (char*)read_variable_size_file(ca_path, &ca_len);
     if (!user_cert_pem || !ca_cert_pem) {
-        fprintf(stderr, "错误: 无法加载证书文件进行验证。\n");
+        fprintf(stderr, "错误: 无法加载一个或多个证书文件进行验证。\n");
         goto cleanup;
     }
     
@@ -290,7 +325,7 @@ int handle_verify_cert(int argc, char* argv[]) {
     switch(result) {
         case 0:  
             printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); 
-            ret = 0; 
+            ret = 0; // 标记成功
             break;
         case -2: fprintf(stderr, "\033[31m[失败]\033[0m 证书签名链或有效期验证失败。\n"); break;
         case -3: fprintf(stderr, "\033[31m[失败]\033[0m 证书主体 (用户名) 不匹配。\n"); break;
@@ -322,24 +357,21 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
         return 1;
     }
 
-    char out_file[260];
+    char out_file[FILENAME_MAX];
     if (!create_output_path(out_file, sizeof(out_file), in_file, ".hsc")) {
         return 1;
     }
     
-    int ret = 1;
+    int ret = 1; // 默认失败
     FILE *f_in = NULL, *f_out = NULL;
     master_key_pair sender_mkp = { .sk = NULL };
     char* recipient_cert_pem = NULL;
     unsigned char* encapsulated_key = NULL;
-    
-    // [委员会修正] 修复了 crypto_secretstream_xchacha20poly1305_KEYBYTES 的拼写错误
     unsigned char session_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
 
     randombytes_buf(session_key, sizeof(session_key));
 
     size_t cert_len;
-    // [委员会重构] 调用重命名后的函数
     recipient_cert_pem = (char*)read_variable_size_file(recipient_cert_file, &cert_len);
     if (!recipient_cert_pem) {
         fprintf(stderr, "错误: 无法读取接收方证书 '%s'。\n", recipient_cert_file);
@@ -355,15 +387,14 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     sender_mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
     if (!sender_mkp.sk) { fprintf(stderr, "错误: 安全内存分配失败。\n"); goto cleanup; }
 
-    // [委员会重构] 直接将发送方私钥读入安全内存
     if (!read_fixed_size_file(sender_priv_file, sender_mkp.sk, MASTER_SECRET_KEY_BYTES)) {
-        fprintf(stderr, "错误: 读取发送方私钥 '%s' 失败。\n", sender_priv_file);
         goto cleanup;
     }
 
     size_t enc_key_buf_len = crypto_box_NONCEBYTES + sizeof(session_key) + crypto_box_MACBYTES;
     encapsulated_key = malloc(enc_key_buf_len);
     if (!encapsulated_key) { fprintf(stderr, "错误: 内存分配失败 (用于封装密钥)。\n"); goto cleanup; }
+    
     size_t actual_encapsulated_len;
     if (encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_mkp.sk) != 0) {
         fprintf(stderr, "错误: 封装会话密钥失败。请检查密钥和证书是否匹配。\n");
@@ -395,6 +426,7 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     do {
         bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
         if (ferror(f_in)) { fprintf(stderr, "读取输入文件时出错。\n"); goto cleanup; }
+        
         tag = feof(f_in) ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
         
         if (crypto_secretstream_xchacha20poly1305_push(&st, buf_out, &out_len, buf_in, bytes_read, NULL, 0, tag) != 0) {
@@ -406,14 +438,14 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     } while (!feof(f_in));
 
     printf("✅ 混合加密完成！\n  输出文件 -> %s\n", out_file);
-    ret = 0;
+    ret = 0; // 标记成功
 
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
     free(encapsulated_key);
     free(recipient_cert_pem);
-    if (sender_mkp.sk) free_master_key_pair(&sender_mkp);
+    free_master_key_pair(&sender_mkp);
     secure_zero_memory(session_key, sizeof(session_key));
     return ret;
 }
@@ -436,12 +468,12 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         return 1;
     }
 
-    char out_file[260];
+    char out_file[FILENAME_MAX];
     if (!create_output_path(out_file, sizeof(out_file), in_file, ".decrypted")) {
         return 1;
     }
     
-    int ret = 1;
+    int ret = 1; // 默认失败
     FILE *f_in = NULL, *f_out = NULL;
     char* sender_cert_pem = NULL;
     master_key_pair recipient_mkp = { .sk = NULL };
@@ -464,12 +496,11 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     if (fread(enc_key, 1, enc_key_len, f_in) != enc_key_len) { fprintf(stderr, "错误: 读取封装密钥失败。文件不完整。\n"); goto cleanup; }
     
     size_t cert_len;
-    // [委员会重构] 调用重命名后的函数
     sender_cert_pem = (char*)read_variable_size_file(sender_cert_file, &cert_len);
     if (!sender_cert_pem) {
-        fprintf(stderr, "错误: 无法读取发送方证书 '%s'。\n", sender_cert_file);
         goto cleanup;
     }
+    
     unsigned char sender_pk[MASTER_PUBLIC_KEY_BYTES];
     if (extract_public_key_from_cert(sender_cert_pem, sender_pk) != 0) {
         fprintf(stderr, "错误: 从发送方证书 '%s' 提取公钥失败。\n", sender_cert_file);
@@ -479,14 +510,13 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     recipient_mkp.sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
     if (!recipient_mkp.sk) { fprintf(stderr, "错误: 安全内存分配失败。\n"); goto cleanup; }
 
-    // [委员会重构] 直接将接收方私钥读入安全内存
     if (!read_fixed_size_file(recipient_priv_file, recipient_mkp.sk, MASTER_SECRET_KEY_BYTES)) {
-        fprintf(stderr, "错误: 读取接收方私钥 '%s' 失败。\n", recipient_priv_file);
         goto cleanup;
     }
 
     dec_session_key = secure_alloc(crypto_secretstream_xchacha20poly1305_KEYBYTES);
     if (!dec_session_key) { fprintf(stderr, "错误: 安全内存分配失败 (用于会话密钥)。\n"); goto cleanup; }
+    
     if (decapsulate_session_key(dec_session_key, enc_key, enc_key_len, sender_pk, recipient_mkp.sk) != 0) {
         fprintf(stderr, "错误: 解封装会话密钥失败！这通常意味着您提供了错误的私钥、错误的发送方证书，或者文件已被篡改。\n"); goto cleanup;
     }
@@ -515,6 +545,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     do {
         bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
         if (ferror(f_in)) { fprintf(stderr, "读取加密文件时出错。\n"); goto cleanup; }
+        if (bytes_read == 0 && feof(f_in)) break;
 
         if (crypto_secretstream_xchacha20poly1305_pull(&st, buf_out, &out_len, &tag, buf_in, bytes_read, NULL, 0) != 0) {
             fprintf(stderr, "错误: 解密文件块失败！数据可能被篡改。\n"); goto cleanup;
@@ -534,15 +565,15 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     }
 
     printf("✅ 混合解密完成！\n  解密文件 -> %s\n", out_file);
-    ret = 0;
+    ret = 0; // 标记成功
 
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
     free(enc_key);
     free(sender_cert_pem);
-    if (recipient_mkp.sk) free_master_key_pair(&recipient_mkp);
-    if (dec_session_key) secure_free(dec_session_key);
+    free_master_key_pair(&recipient_mkp);
+    secure_free(dec_session_key);
     return ret;
 }
 
