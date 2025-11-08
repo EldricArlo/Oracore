@@ -5,10 +5,11 @@
 
 # --- Compiler and Flags ---
 CC = gcc
-# CFLAGS: -g for debug, -I for include path, Wall/Wextra for warnings, std=c11 for standard
+# CFLAGS: -g for debug, -I for include paths, Wall/Wextra for warnings, std=c11 for standard
 # -MMD -MP for auto dependency generation
 # -DWIN32_LEAN_AND_MEAN -DNOCRYPT for Windows compatibility with OpenSSL
-CFLAGS = -g -I./src -Wall -Wextra -std=c11 -MMD -MP -DWIN32_LEAN_AND_MEAN -DNOCRYPT
+# [核心修改] 将 include 路径扩展到 tests/ 目录，以支持 test_helpers.h
+CFLAGS = -g -I./src -I./tests -Wall -Wextra -std=c11 -MMD -MP -DWIN32_LEAN_AND_MEAN -DNOCRYPT
 
 # --- Libraries ---
 # Common libraries needed for linking applications and tests
@@ -38,11 +39,18 @@ CLI_EXECUTABLE = $(BIN_DIR)/hsc_cli
 # [委员会核心改进] 自动发现所有测试文件并生成对应的可执行文件路径
 # 这将匹配 tests/test_*.c 和 tests/*_test.c 等所有文件
 TEST_SRCS = $(wildcard $(TEST_DIR)/test_*.c) $(wildcard $(TEST_DIR)/*_test.c)
+# [核心修改] 从测试源文件中排除辅助模块，因为它不是一个独立的可执行测试
+TEST_SRCS := $(filter-out $(TEST_DIR)/test_helpers.c, $(TEST_SRCS))
 TEST_OBJS = $(TEST_SRCS:.c=.o)
-TEST_EXECUTABLES = $(patsubst %.c,$(BIN_DIR)/%,$(notdir $(TEST_SRCS)))
+TEST_EXECUTABLES = $(patsubst $(TEST_DIR)/%.c,$(BIN_DIR)/%,$(TEST_SRCS))
 
+# [核心修改] 自动发现并管理共享的测试辅助模块
+TEST_HELPER_SRCS = $(wildcard $(TEST_DIR)/test_helpers.c)
+TEST_HELPER_OBJS = $(TEST_HELPER_SRCS:.c=.o)
+
+# [核心修改] 更新所有对象文件列表，以包含新的测试辅助模块
 # List of all object files for dependency tracking
-ALL_OBJS = $(LIB_OBJS) $(APP_MAIN_OBJ) $(CLI_MAIN_OBJ) $(TEST_OBJS)
+ALL_OBJS = $(LIB_OBJS) $(APP_MAIN_OBJ) $(CLI_MAIN_OBJ) $(TEST_OBJS) $(TEST_HELPER_OBJS)
 DEPS = $(ALL_OBJS:.o=.d)
 
 
@@ -70,13 +78,14 @@ $(CLI_EXECUTABLE): $(CLI_MAIN_OBJ) $(LIB_OBJS) | $(BIN_DIR)
 # Main target to build all test executables
 build_tests: $(TEST_EXECUTABLES)
 
-# [委员会核心改进] 静态模式规则，用于链接任何一个测试可执行文件
-# 例如: 'bin/test_symmetric_crypto' 依赖于 'tests/test_symmetric_crypto.o' 和所有库对象
-$(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.o $(LIB_OBJS) | $(BIN_DIR)
+# [核心修改] 更新静态模式规则，将 test_helpers.o 链接到每一个测试可执行文件中
+# 例如: 'bin/test_symmetric_crypto' 依赖于 'tests/test_symmetric_crypto.o', 所有库对象, 以及所有测试辅助对象
+$(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.o $(LIB_OBJS) $(TEST_HELPER_OBJS) | $(BIN_DIR)
 	@echo "Linking test executable: $@"
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-# Generic rule for compiling any .c file to a .o file
+# Generic rule for compiling any .c file to a .o file, regardless of its location
+# [核心修改] 明确指定了 include 路径，以确保编译器能找到所有头文件
 %.o: %.c
 	@echo "Compiling $<"
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -101,10 +110,8 @@ test: build_tests
 clean:
 	@echo "Cleaning up..."
 	rm -rf $(BIN_DIR)
-	find $(SRC_DIR) -name "*.o" -delete
-	find $(SRC_DIR) -name "*.d" -delete
-	find $(TEST_DIR) -name "*.o" -delete
-	find $(TEST_DIR) -name "*.d" -delete
+	find . -type f -name "*.o" -delete
+	find . -type f -name "*.d" -delete
 
 # Include automatically generated dependency files
 -include $(DEPS)
