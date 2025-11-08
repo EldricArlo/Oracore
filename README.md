@@ -220,6 +220,87 @@ brew install libsodium openssl@3 curl
 
 ---
 
+## 如何使用该项目
+
+#### 方式一：作为库进行二次开发 (集成到你自己的应用中)
+
+`src/main.c` 文件就是最佳的示例。一个典型的完整流程如下：
+
+1.  **初始化**:
+    ```c
+    crypto_client_init();
+    pki_init();
+    ```
+
+2.  **为用户 "Alice" 创建身份**:
+    ```c
+    master_key_pair alice_mkp;
+    generate_master_key_pair(&alice_mkp); // 生成主密钥对
+    ```
+
+3.  **为 Alice 申请证书 (模拟)**:
+    ```c
+    char* csr = NULL;
+    generate_csr(&alice_mkp, "alice@example.com", &csr); // 生成CSR
+    // ... 将 CSR 发送给 CA，获取签发的证书 alice_cert_pem ...
+    ```
+
+4.  **Alice 要加密并分享文件给 Bob**:
+    *   **本地加密**:
+        ```c
+        // 1. 生成一次性会话密钥
+        unsigned char session_key[SESSION_KEY_BYTES];
+        randombytes_buf(session_key, sizeof(session_key));
+        
+        // 2. 用会话密钥加密文件
+        encrypt_symmetric_aead(encrypted_file, ..., file_content, ..., session_key);
+        ```
+    *   **封装密钥**:
+        ```c
+        // 3. 获取并验证 Bob 的证书
+        verify_user_certificate(bob_cert_pem, trusted_ca_pem, "bob@example.com");
+        
+        // 4. 从 Bob 的证书里提取公钥
+        unsigned char bob_pk[MASTER_PUBLIC_KEY_BYTES];
+        extract_public_key_from_cert(bob_cert_pem, bob_pk);
+        
+        // 5. 用 Bob 的公钥和 Alice 的私钥封装会话密钥
+        encapsulate_session_key(encapsulated_key, ..., session_key, ..., bob_pk, alice_mkp.sk);
+        ```
+
+5.  **Bob 接收并解密文件**:
+    *   **解封装密钥**:
+        ```c
+        // 1. 获取并验证 Alice 的证书，提取其公钥 alice_pk
+        
+        // 2. 用 Alice 的公钥和 Bob 的私钥解封装会话密钥
+        unsigned char* decrypted_session_key = secure_alloc(...);
+        decapsulate_session_key(decrypted_session_key, encapsulated_key, ..., alice_pk, bob_mkp.sk);
+        ```
+    *   **解密文件**:
+        ```c
+        // 3. 用恢复的会话密钥解密文件
+        decrypt_symmetric_aead(decrypted_file, ..., encrypted_file, ..., decrypted_session_key);
+        ```
+
+#### 方式二：使用编译好的命令行工具 (`hsc_cli`)
+
+`Makefile` 已经为您准备好了一个名为 `hsc_cli` 的命令行工具。这是与系统交互最直接的方式。
+
+*   `hsc_cli gen-keypair --pub alice.pub --priv alice.key`
+    *   生成一个密钥对，公钥存入 `alice.pub`，私钥存入 `alice.key`。
+*   `hsc_cli gen-csr --priv alice.key --user "alice@example.com" --out alice.csr`
+    *   使用 `alice.key` 私钥，为用户 "alice@example.com" 生成 `alice.csr` 文件。
+*   `hsc_cli verify-cert --cert alice.pem --ca ca.pem --user "alice@example.com"`
+    *   使用根证书 `ca.pem` 来验证 `alice.pem` 证书是否有效且属于 "alice@example.com"。
+*   `hsc_cli hybrid-encrypt --in secret.txt --out-data secret.enc --out-key secret.key.enc --recipient-cert bob.pem --sender-priv alice.key`
+    *   **加密**：用 `alice.key` 作为发送方，加密 `secret.txt` 给 `bob.pem` 证书的持有者。
+*   `hsc_cli hybrid-decrypt --in-data secret.enc --in-key secret.key.enc --out plain.txt --sender-cert alice.pem --recipient-priv bob.key`
+    *   **解密**：Bob 使用自己的私钥 `bob.key` 和发送方 Alice 的证书 `alice.pem` 来解密文件。
+
+
+---
+
 ## 📜 证书说明
 
 本项目使用 **X.509 v3** 证书标准。在演示和测试代码中，我们通过辅助函数模拟了一个迷你的证书颁发机构（CA）。
