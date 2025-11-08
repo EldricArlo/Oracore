@@ -6,6 +6,7 @@
 ![Language](https://img.shields.io/badge/language-C11-purple)
 ![Libsodium](https://img.shields.io/badge/dependency-libsodium-_31D843)
 ![OpenSSL](https://img.shields.io/badge/dependency-OpenSSL_3-0075A8)
+![Libcurl](https://img.shields.io/badge/dependency-libcurl-E5522D)
 
 本项目是一个使用C语言实现的、专注于安全性的高级混合加密客户端库。它演示了如何结合使用行业领先的密码学库（libsodium 和 OpenSSL）来构建一个健壮的、端到端的加密解决方案。该方案集成了对称加密、非对称加密和公钥基础设施（PKI），适用于需要高度保密性和身份认证的应用场景。
 
@@ -56,16 +57,17 @@
 *   **构建工具:** `make`
 *   **Libsodium:** 一个现代化且易于使用的密码学库。
 *   **OpenSSL:** 用于处理证书和PKI操作 (需要 3.x 版本或更高)。
+*   **Libcurl:** 用于执行OCSP检查所需的HTTP请求。
 
 **在 Debian/Ubuntu 上安装依赖:**
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential libsodium-dev libssl-dev
+sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-dev
 ```
 
 **在 macOS 上使用 Homebrew 安装依赖:**
 ```bash
-brew install libsodium openssl
+brew install libsodium openssl curl
 ```
 
 ### 编译与运行
@@ -99,6 +101,8 @@ brew install libsodium openssl
     ```bash
     make clean
     ```
+
+**注意:** 要使OCSP检查成功，您的程序需要能够访问互联网，并且目标证书中必须包含一个真实可用的OCSP服务器地址。在我们的测试环境中，我们生成的自签名证书可能不包含此信息，因此您可能会看到“警告: 证书中未找到 OCSP URI”的消息，这在测试场景下是正常的。在与真实的CA交互时，此功能将按预期工作。
 
 ## 📂 项目结构
 
