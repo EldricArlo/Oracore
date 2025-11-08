@@ -24,7 +24,7 @@ APP_MAIN_SRC = src/main.c
 APP_MAIN_OBJ = $(APP_MAIN_SRC:.c=.o)
 APP_EXECUTABLE = high_security_app
 
-# [NEW] Define source, object, and executable for the new CLI tool
+# Define source, object, and executable for the new CLI tool
 CLI_MAIN_SRC = src/cli.c
 CLI_MAIN_OBJ = $(CLI_MAIN_SRC:.c=.o)
 CLI_EXECUTABLE = hsc_cli
@@ -46,7 +46,7 @@ $(APP_EXECUTABLE): $(LIB_OBJS) $(APP_MAIN_OBJ)
 	@echo "Linking main application: $@"
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-# [NEW] Add the build rule for our new CLI executable
+# Add the build rule for our new CLI executable
 $(CLI_EXECUTABLE): $(LIB_OBJS) $(CLI_MAIN_OBJ)
 	@echo "Linking CLI application: $@"
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

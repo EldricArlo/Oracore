@@ -15,7 +15,7 @@ int tests_failed = 0;
 #define _assert(test) do { if (!(test)) { FAIL(); tests_failed++; return; } } while(0)
 #define _verify(test) do { _assert(test); } while(0)
 
-// [FIX 1/2] 将 RUN_TEST 宏更新为健壮的版本。
+// 将 RUN_TEST 宏更新为健壮的版本。
 // 这个版本会在运行测试函数前后比较失败计数器，只有在计数器未增加时才打印 [PASS]。
 #define RUN_TEST(test) do { \
     printf("  Running test: %s...", #test); \
@@ -25,9 +25,7 @@ int tests_failed = 0;
     if(tests_failed == prev_fails) printf("\033[32m [PASS]\033[0m\n"); \
 } while(0)
 
-
 // --- 测试用例 ---
-// (所有 test_* 函数本身无需任何改动)
 
 void test_initialization() {
     _verify(crypto_client_init() == 0);
@@ -184,7 +182,7 @@ int main() {
 
     run_all_tests();
     
-    // [FIX 2/2] 更新最终的报告信息，使其更准确地报告失败的断言总数。
+    // 更新最终的报告信息，使其更准确地报告失败的断言总数。
     if (tests_failed > 0) {
         printf("\n\033[31mRESULT: %d assertion(s) FAILED across all tests.\033[0m\n", tests_failed);
         return 1;

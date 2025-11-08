@@ -3,7 +3,7 @@
 
 #include <sodium.h>
 #include <string.h>
-#include <stdio.h> // For error printing
+#include <stdio.h>
 
 int crypto_client_init() {
     // 规范要求: 必须使用经过审查的专业密码学库。
@@ -19,7 +19,7 @@ int crypto_client_init() {
  * @brief 生成一个全新的 Ed25519 主密钥对，用于签名。
  */
 int generate_master_key_pair(master_key_pair* kp) {
-    // [修复] 将 assert 替换为返回错误码的运行时检查。
+    // 将 assert 替换为返回错误码的运行时检查。
     if (kp == NULL) {
         return -1;
     }

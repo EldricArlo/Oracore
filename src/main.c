@@ -1,8 +1,7 @@
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h> // For malloc, free
+#include <stdlib.h>
 #include <openssl/pem.h>
-// 包含 v3 扩展和错误处理所需的头文件
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include "common/secure_memory.h"
@@ -82,9 +81,8 @@ int main() {
     }
     printf("'Alice' 的证书已成功签发。\n\n");
 
-    // =================================================================
+
     // 阶段三：文件加密与安全共享 (端到端演示)
-    // =================================================================
     printf("--- 端到端共享演示: Alice 加密文件并分享给自己 ---\n");
 
     // 1. 本地加密 (生成会话密钥，加密文件内容)
@@ -129,7 +127,6 @@ int main() {
 
     // 4. 封装会话密钥
     printf("4. 为接收者封装会话密钥...\n");
-    // ======================= [修复开始] =======================
     // 缓冲区大小计算是正确的，它必须容纳: Nonce + 密文 + 认证标签
     size_t encapsulated_key_buf_len = crypto_box_NONCEBYTES + sizeof(session_key) + crypto_box_MACBYTES;
     unsigned char* encapsulated_session_key = malloc(encapsulated_key_buf_len);
@@ -146,7 +143,6 @@ int main() {
         fprintf(stderr, "严重错误: 封装会话密钥失败！\n");
         return 1;
     }
-    // ======================= [修复结束] =======================
     printf("  > 会话密钥已使用 `crypto_box` (非对称加密) 封装。\n\n");
     
     printf("--- 文件上传包准备就绪 ---\n");
@@ -154,9 +150,7 @@ int main() {
     printf("  - 为接收者'Alice'封装的会话密钥 (crypto_box)\n");
     printf("--------------------------\n\n");
 
-    // =================================================================
     // 演示：作为接收者解密
-    // =================================================================
     printf("--- 作为接收者 'Alice' 解密文件 ---\n");
 
     // 1. 解封装会话密钥
@@ -166,16 +160,14 @@ int main() {
         fprintf(stderr, "安全内存分配失败！\n"); return 1;
     }
 
-    // ======================= [修复开始] =======================
     // 调用解密函数时，传递加密时返回的 *实际数据长度*，而不是缓冲区的总容量
     if (decapsulate_session_key(decrypted_session_key,
-                                encapsulated_session_key, actual_encapsulated_len, // <-- 使用实际长度
+                                encapsulated_session_key, actual_encapsulated_len,
                                 alice_mkp.pk, // 发送者公钥
                                 alice_mkp.sk) != 0) { // 接收者私钥
         fprintf(stderr, "解密错误: 无法解封装会话密钥！\n");
         return 1;
     }
-    // ======================= [修复结束] =======================
     print_hex("  > [解密] 恢复的会话密钥", decrypted_session_key, sizeof(session_key));
 
     if (sodium_memcmp(session_key, decrypted_session_key, sizeof(session_key)) != 0) {
@@ -224,7 +216,7 @@ int main() {
 
 
 // --- 辅助函数的实现 (与测试文件保持一致) ---
-// (此部分代码无需改动)
+
 
 void print_hex(const char* label, const unsigned char* data, size_t len) {
     printf("%s: ", label);
@@ -263,12 +255,10 @@ int generate_test_ca(char** ca_key_pem, char** ca_cert_pem) {
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (unsigned char*)"Test System Root CA", -1, -1, 0);
     X509_set_issuer_name(cert, name);
 
-    // ======================= [修复] =======================
     // 添加 X.509 v3 扩展，使其成为一个合格的 CA 证书
     add_ext(cert, NID_basic_constraints, "critical,CA:TRUE");
     add_ext(cert, NID_key_usage, "critical,digitalSignature,keyCertSign,cRLSign");
     add_ext(cert, NID_subject_key_identifier, "hash");
-    // =======================================================
 
     if (!X509_sign(cert, pkey, NULL)) {
         ERR_print_errors_fp(stderr);

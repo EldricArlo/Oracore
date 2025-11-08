@@ -5,7 +5,7 @@
 #include <openssl/err.h>
 #include <openssl/provider.h>
 #include <openssl/crypto.h>
-#include <openssl/ocsp.h> 
+#include <openssl/ocsp.h>
 #include <curl/curl.h>
 
 #include "pki_handler.h"
@@ -14,25 +14,43 @@
 #include <stdlib.h>
 #include <string.h>
 
+// ======================= 错误报告宏 =======================
+// 使用此宏来控制错误报告的详细程度。
+// 在编译时通过 -DDEBUG_MODE 标志启用详细错误（包括OpenSSL错误栈）。
+// 在生产构建中，它只会打印通用的错误消息，以避免泄露内部实现细节。
+#ifdef DEBUG_MODE
+#define LOG_PKI_ERROR(msg) do { \
+    fprintf(stderr, "PKI Error (Debug): %s\n", msg); \
+    ERR_print_errors_fp(stderr); \
+} while(0)
+#define LOG_PKI_ERROR_FMT(fmt, ...) do { \
+    fprintf(stderr, "PKI Error (Debug): " fmt "\n", __VA_ARGS__); \
+    ERR_print_errors_fp(stderr); \
+} while(0)
+#else
+#define LOG_PKI_ERROR(msg) \
+    fprintf(stderr, "Error: A critical security operation could not be completed.\n")
+#define LOG_PKI_ERROR_FMT(fmt, ...) \
+    fprintf(stderr, "Error: A critical security operation could not be completed.\n")
+#endif
+
 
 // --- 初始化函数 ---
 int pki_init() {
     // 为多线程安全初始化 libcurl。此函数是全局的，可以安全地多次调用。
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-        fprintf(stderr, "PKI Error: Failed to initialize libcurl.\n");
+        LOG_PKI_ERROR("Failed to initialize libcurl.");
         return -1;
     }
 
     if (OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS | OPENSSL_INIT_LOAD_CONFIG, NULL) == 0) {
-        fprintf(stderr, "PKI Error: Failed to initialize OpenSSL crypto library.\n");
-        ERR_print_errors_fp(stderr);
+        LOG_PKI_ERROR("Failed to initialize OpenSSL crypto library.");
         return -1;
     }
 
     OSSL_PROVIDER* provider = OSSL_PROVIDER_load(NULL, "default");
     if (provider == NULL) {
-        fprintf(stderr, "PKI Error: Failed to load OpenSSL default provider.\n");
-        ERR_print_errors_fp(stderr);
+        LOG_PKI_ERROR("Failed to load OpenSSL default provider.");
         return -1;
     }
     return 0;
@@ -58,14 +76,13 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, mkp->sk, crypto_sign_SEEDBYTES);
     if (!pkey) {
-        fprintf(stderr, "PKI Error: EVP_PKEY_new_raw_private_key failed.\n");
-        ERR_print_errors_fp(stderr);
+        LOG_PKI_ERROR("EVP_PKEY_new_raw_private_key failed.");
         goto cleanup;
     }
     
     req = X509_REQ_new();
     if (!req) {
-        fprintf(stderr, "PKI Error: X509_REQ_new failed.\n");
+        LOG_PKI_ERROR("X509_REQ_new failed.");
         goto cleanup;
     }
     
@@ -73,29 +90,28 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
 
     X509_NAME* subject = X509_REQ_get_subject_name(req);
     if (!X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, (const unsigned char*)username, -1, -1, 0)) {
-        fprintf(stderr, "PKI Error: X509_NAME_add_entry_by_txt failed.\n");
+        LOG_PKI_ERROR("X509_NAME_add_entry_by_txt failed.");
         goto cleanup;
     }
 
     if (X509_REQ_set_pubkey(req, pkey) <= 0) {
-        fprintf(stderr, "PKI Error: X509_REQ_set_pubkey failed.\n");
+        LOG_PKI_ERROR("X509_REQ_set_pubkey failed.");
         goto cleanup;
     }
 
     if (X509_REQ_sign(req, pkey, NULL) <= 0) {
-        fprintf(stderr, "PKI Error: X509_REQ_sign failed.\n");
-        ERR_print_errors_fp(stderr);
+        LOG_PKI_ERROR("X509_REQ_sign failed.");
         goto cleanup;
     }
 
     bio = BIO_new(BIO_s_mem());
     if (!bio) {
-        fprintf(stderr, "PKI Error: BIO_new failed.\n");
+        LOG_PKI_ERROR("BIO_new failed.");
         goto cleanup;
     }
     
     if (!PEM_write_bio_X509_REQ(bio, req)) {
-        fprintf(stderr, "PKI Error: PEM_write_bio_X509_REQ failed.\n");
+        LOG_PKI_ERROR("PEM_write_bio_X509_REQ failed.");
         goto cleanup;
     }
 
@@ -108,7 +124,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
             (*out_csr_pem)[mem->length] = '\0';
             ret = 0;
         } else {
-             fprintf(stderr, "PKI Error: malloc failed for CSR PEM string.\n");
+             LOG_PKI_ERROR("malloc failed for CSR PEM string.");
         }
     }
     
@@ -119,24 +135,17 @@ cleanup:
     return ret;
 }
 
-// ======================= [性能修复 1/3] =======================
-// 修改内存块结构体以包含容量信息
 struct memory_chunk {
     char* memory;
-    size_t size;      // 当前已用大小
-    size_t capacity;  // 当前分配的总容量
+    size_t size;
+    size_t capacity;
 };
-// =============================================================
 
-// ======================= [性能修复 2/3] =======================
-// libcurl 写入回调函数，采用指数增长策略
 static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t realsize = size * nmemb;
     struct memory_chunk* mem = (struct memory_chunk*)userp;
 
-    // 检查是否需要扩展容量
     if (mem->size + realsize + 1 > mem->capacity) {
-        // 计算新的容量，至少是当前容量的两倍，或足以容纳新数据的容量
         size_t new_capacity = (mem->capacity > 0) ? mem->capacity * 2 : 1024;
         if (new_capacity < mem->size + realsize + 1) {
             new_capacity = mem->size + realsize + 1;
@@ -144,8 +153,9 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
 
         char* ptr = realloc(mem->memory, new_capacity);
         if (ptr == NULL) {
+            // 在此场景下，打印具体错误是安全的，因为它不泄露加密细节
             fprintf(stderr, "OCSP Error: not enough memory (realloc returned NULL)\n");
-            return 0; // 返回 0 会让 cURL 知道发生了错误
+            return 0;
         }
         mem->memory = ptr;
         mem->capacity = new_capacity;
@@ -153,20 +163,16 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
 
     memcpy(&(mem->memory[mem->size]), contents, realsize);
     mem->size += realsize;
-    mem->memory[mem->size] = 0; // 始终保持 C 字符串的 null 终止特性
+    mem->memory[mem->size] = 0;
 
     return realsize;
 }
-// =============================================================
 
 // 使用 libcurl 执行 HTTP POST 请求的辅助函数
 static struct memory_chunk perform_http_post(const char* url, const unsigned char* data, size_t data_len) {
     CURL* curl;
     CURLcode res;
-    // ======================= [性能修复 3/3] =======================
-    // 正确初始化 memory_chunk 结构体
     struct memory_chunk chunk = { .memory = NULL, .size = 0, .capacity = 0 };
-    // =============================================================
 
     curl = curl_easy_init();
     if (curl) {
@@ -181,16 +187,15 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
         
-        // [关键安全修复] 启用对OCSP服务器TLS证书的验证
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
-            fprintf(stderr, "OCSP Error: curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-            free(chunk.memory); // 即使失败也要释放已分配的内存
+            // 对于网络错误，向用户显示具体错误是有用的
+            fprintf(stderr, "OCSP Error: HTTP request failed: %s\n", curl_easy_strerror(res));
+            free(chunk.memory);
             chunk.memory = NULL;
             chunk.size = 0;
-            // capacity 也应清零，但结构体本身将被返回，所以没问题
         }
         
         curl_easy_cleanup(curl);
@@ -201,7 +206,7 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
 
 // 真实的OCSP检查函数
 static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
-    int ret = -1; // Default to general error
+    int ret = -1;
     OCSP_REQUEST* req = NULL;
     OCSP_CERTID* cid = NULL;
     OCSP_RESPONSE* resp = NULL;
@@ -213,79 +218,69 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
 
     printf("      iv. [检查吊销状态 (OCSP)]:\n");
 
-    // 步骤 1: 从证书的 Authority Information Access (AIA) 扩展中获取 OCSP URL
     ocsp_uris = X509_get1_ocsp(user_cert);
-    // ======================= [安全策略修复 1/2] =======================
-    // 实施“故障关闭”策略：如果找不到OCSP URI，则视为吊销检查失败。
     if (!ocsp_uris || sk_OPENSSL_STRING_num(ocsp_uris) <= 0) {
         fprintf(stderr, "         > 失败: 证书中未找到 OCSP URI。无法验证吊销状态。\n");
-        ret = -4; // 将其视为与“已吊销”同等级别的失败
+        ret = -4;
         goto cleanup;
     }
-    // =================================================================
     const char* ocsp_uri = sk_OPENSSL_STRING_value(ocsp_uris, 0);
     printf("         > OCSP 服务器: %s\n", ocsp_uri);
 
-    // 步骤 2: 创建 OCSP 请求
     req = OCSP_REQUEST_new();
     if (!req) goto cleanup;
     
     cid = OCSP_cert_to_id(NULL, user_cert, issuer_cert);
     if (!cid) goto cleanup;
     if (!OCSP_request_add0_id(req, cid)) {
-        OCSP_CERTID_free(cid); // If add fails, we must free it
+        OCSP_CERTID_free(cid);
         goto cleanup;
     }
-    cid = NULL; // ownership transferred to req
+    cid = NULL;
 
-    // 步骤 3: 发送 HTTP 请求
     req_bio = BIO_new(BIO_s_mem());
     if (!req_bio || !i2d_OCSP_REQUEST_bio(req_bio, req)) goto cleanup;
     
     req_len = BIO_get_mem_data(req_bio, &req_data);
     struct memory_chunk response_chunk = perform_http_post(ocsp_uri, req_data, req_len);
-    // ======================= [安全策略修复 2/2] =======================
-    // 实施“故障关闭”策略：如果HTTP请求失败，则视为吊销检查失败。
     if (response_chunk.memory == NULL || response_chunk.size == 0) {
         fprintf(stderr, "         > 失败: 未能从 OCSP 服务器获取响应。\n");
         if(response_chunk.memory) free(response_chunk.memory);
-        ret = -4; // 将其视为与“已吊销”同等级别的失败
+        ret = -4;
         goto cleanup;
     }
-    // =================================================================
     
-    // 步骤 4: 解析并验证 OCSP 响应
     const unsigned char* p = (const unsigned char*)response_chunk.memory;
     resp = d2i_OCSP_RESPONSE(NULL, &p, response_chunk.size);
     free(response_chunk.memory);
     if (!resp) {
-        fprintf(stderr, "         > 失败: 解析 OCSP 响应失败。\n");
+        LOG_PKI_ERROR("Failed to parse OCSP response.");
         goto cleanup;
     }
 
     if (OCSP_response_status(resp) != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
-        fprintf(stderr, "         > 失败: OCSP 响应状态不成功 (%s)。\n", OCSP_response_status_str(OCSP_response_status(resp)));
+        LOG_PKI_ERROR_FMT("OCSP response status was not successful: %s", OCSP_response_status_str(OCSP_response_status(resp)));
         goto cleanup;
     }
 
     bresp = OCSP_response_get1_basic(resp);
     if (!bresp) {
-        fprintf(stderr, "         > 失败: 无法从响应中获取 Basic OCSP Response。\n");
+        LOG_PKI_ERROR("Could not get Basic OCSP Response from response.");
         goto cleanup;
     }
 
     if (OCSP_basic_verify(bresp, NULL, store, 0) <= 0) {
-        fprintf(stderr, "         > 失败: OCSP 响应签名验证失败！\n");
+        LOG_PKI_ERROR("OCSP response signature verification failed.");
         goto cleanup;
     }
 
-    // 步骤 5: 检查特定证书的状态
     int status, reason;
     ASN1_GENERALIZEDTIME* rev_time = NULL, *this_update = NULL, *next_update = NULL;
-    cid = OCSP_cert_to_id(NULL, user_cert, issuer_cert); // Re-create for lookup
+    cid = OCSP_cert_to_id(NULL, user_cert, issuer_cert);
     if (!cid) goto cleanup;
 
     if (!OCSP_resp_find_status(bresp, cid, &status, &reason, &rev_time, &this_update, &next_update)) {
+        // 这是策略失败，而不是系统错误，因此显示具体消息
         fprintf(stderr, "         > 失败: 在OCSP响应中找不到此证书的状态。\n");
         goto cleanup;
     }
@@ -304,7 +299,7 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
             ret = -4;
             break;
         default:
-             fprintf(stderr, "         > 失败: 未知的证书状态代码。\n");
+             LOG_PKI_ERROR("Unknown OCSP certificate status code encountered.");
              ret = -1;
              break;
     }
@@ -336,13 +331,13 @@ int verify_user_certificate(const char* user_cert_pem,
     X509_STORE_CTX* ctx = NULL;
 
     if (!user_bio || !ca_bio) {
-        fprintf(stderr, "Verify Error: Failed to create BIO for certificates.\n");
+        LOG_PKI_ERROR("Failed to create BIO for certificates.");
         goto cleanup;
     }
     user_cert = PEM_read_bio_X509(user_bio, NULL, NULL, NULL);
     ca_cert = PEM_read_bio_X509(ca_bio, NULL, NULL, NULL);
     if (!user_cert || !ca_cert) {
-        fprintf(stderr, "Verify Error: Failed to parse PEM certificates.\n");
+        LOG_PKI_ERROR("Failed to parse PEM certificates.");
         goto cleanup;
     }
 
@@ -351,7 +346,7 @@ int verify_user_certificate(const char* user_cert_pem,
     if (!store) goto cleanup;
     
     if (X509_STORE_add_cert(store, ca_cert) != 1) {
-        fprintf(stderr, "Verify Error: Failed to add CA cert to store.\n");
+        LOG_PKI_ERROR("Failed to add CA cert to store.");
         goto cleanup;
     }
     
@@ -359,12 +354,13 @@ int verify_user_certificate(const char* user_cert_pem,
     if (!ctx) goto cleanup;
 
     if (X509_STORE_CTX_init(ctx, store, user_cert, NULL) != 1) {
-        fprintf(stderr, "Verify Error: Failed to initialize verification context.\n");
+        LOG_PKI_ERROR("Failed to initialize verification context.");
         goto cleanup;
     }
     
     if (X509_verify_cert(ctx) != 1) {
         long err = X509_STORE_CTX_get_error(ctx);
+        // 向用户显示具体的验证失败原因非常重要
         fprintf(stderr, "      > 失败: %s\n", X509_verify_cert_error_string(err));
         ret_code = -2;
         goto cleanup;
@@ -377,7 +373,7 @@ int verify_user_certificate(const char* user_cert_pem,
     
     int cn_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName, cn, sizeof(cn) - 1);
     if (cn_len < 0) {
-        fprintf(stderr, "      > 失败: 无法从证书中提取 Common Name。\n");
+        LOG_PKI_ERROR("Could not extract Common Name from certificate.");
         ret_code = -3;
         goto cleanup;
     }
@@ -391,7 +387,7 @@ int verify_user_certificate(const char* user_cert_pem,
 
     int ocsp_res = check_ocsp_status(user_cert, ca_cert, store);
     if (ocsp_res != 0) {
-        ret_code = ocsp_res; // Propagate specific OCSP error code (-4)
+        ret_code = ocsp_res;
         goto cleanup;
     }
 
@@ -423,25 +419,25 @@ int extract_public_key_from_cert(const char* user_cert_pem,
 
     cert = PEM_read_bio_X509(cert_bio, NULL, NULL, NULL);
     if (!cert) {
-        fprintf(stderr, "Extract PK Error: Failed to parse certificate PEM.\n");
+        LOG_PKI_ERROR("Failed to parse certificate PEM for public key extraction.");
         goto cleanup;
     }
 
     pkey = X509_get_pubkey(cert);
     if (!pkey) {
-        fprintf(stderr, "Extract PK Error: Failed to get public key from certificate.\n");
+        LOG_PKI_ERROR("Failed to get public key from certificate.");
         goto cleanup;
     }
     
     if (EVP_PKEY_id(pkey) != EVP_PKEY_ED25519) {
-        fprintf(stderr, "Extract PK Error: Public key is not of type Ed25519.\n");
+        LOG_PKI_ERROR("Public key in certificate is not of the expected type (Ed25519).");
         goto cleanup;
     }
 
     size_t pub_key_len = MASTER_PUBLIC_KEY_BYTES;
     if (EVP_PKEY_get_raw_public_key(pkey, public_key_out, &pub_key_len) != 1 ||
         pub_key_len != MASTER_PUBLIC_KEY_BYTES) {
-        fprintf(stderr, "Extract PK Error: Failed to get raw public key bytes.\n");
+        LOG_PKI_ERROR("Failed to get raw public key bytes from certificate.");
         goto cleanup;
     }
     
