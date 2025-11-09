@@ -1,41 +1,26 @@
-// --- START OF FILE src/main.c (FIXED by Code Review Committee) ---
+// --- START OF FILE src/main.c (REPAIRED - FINAL) ---
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-// [委员会建议] 为了清晰，将外部库头文件放在前面
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
-
-// [委员会建议] 接着是项目内部的头文件
-#include "hsc_kernel.h" // 假设已遵循P0建议，未来应只包含此文件
-// 当前为保持兼容，暂时保留内部包含
-#include "common/secure_memory.h"
-#include "core_crypto/crypto_client.h"
-#include "pki/pki_handler.h"
-
+#include <sodium.h> 
+#include "hsc_kernel.h"
 
 // --- 用于演示的辅助函数 ---
 void print_hex(const char* label, const unsigned char* data, size_t len);
-
-// [测试辅助] 添加 X.509 v3 扩展的辅助函数
 static int add_ext(X509 *cert, int nid, char *value);
-
-// [测试辅助] 生成一个自签名的根 CA 证书。在真实世界中，这在离线HSM中完成。
 int generate_test_ca(char** ca_key_pem, char** ca_cert_pem);
-
-// [测试辅助] 使用 CA 签署用户的 CSR 来生成用户证书。在真实世界中，这是CA服务器的工作。
 int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_key_pem, const char* ca_cert_pem);
 
 
 int main() {
-    // [委员会修改] 1. 统一资源管理模式：默认返回码为失败
     int ret = 1;
 
-    // [委员会修改] 2. 声明所有需要清理的资源，并初始化为安全状态 (NULL)
-    //    这确保了无论何时跳转到 cleanup，free() 调用都是安全的。
+    // 声明所有需要清理的资源
     hsc_master_key_pair* alice_mkp = NULL;
     char* alice_csr_pem = NULL;
     char* ca_key_pem = NULL;
@@ -48,7 +33,6 @@ int main() {
 
     // --- 初始化 ---
     printf("--- 高安全性混合加密系统 v4.0 内核库演示 ---\n");
-    // [委员会建议] hsc_init() 是更符合架构的API
     if (hsc_init() != 0) {
         fprintf(stderr, "错误: 高安全内核库初始化失败！\n");
         goto cleanup;
@@ -59,14 +43,12 @@ int main() {
     printf("--- 阶段一: 'Alice' 账户创建与证书签发 ---\n");
     const char* alice_username = "alice@example.com";
     
-    // [委员会建议] hsc_generate_master_key_pair() 是正确的API
     alice_mkp = hsc_generate_master_key_pair();
     if (alice_mkp == NULL) {
         fprintf(stderr, "错误: 生成 Alice 的主密钥对失败。\n");
         goto cleanup;
     }
     
-    // [委员会建议] hsc_generate_csr() 是正确的API
     if (hsc_generate_csr(alice_mkp, alice_username, &alice_csr_pem) != 0) {
         fprintf(stderr, "错误: 生成 Alice 的 CSR 失败。\n");
         goto cleanup;
@@ -90,23 +72,22 @@ int main() {
     // 1. 本地加密 (生成会话密钥，加密文件内容)
     printf("1. 本地文件加密...\n");
     unsigned char session_key[HSC_SESSION_KEY_BYTES];
-    randombytes_buf(session_key, sizeof(session_key));
+    hsc_random_bytes(session_key, sizeof(session_key));
     print_hex("  > [明文] 会话密钥", session_key, sizeof(session_key));
     
     const char* file_content = "这是文件的机密内容。This is the secret content of the file.";
     printf("  > [明文] 文件内容: \"%s\"\n", file_content);
     
     size_t file_content_len = strlen(file_content);
-    // [委员会建议] 使用 security_spec.h 或 hsc_kernel.h 中定义的常量
-    size_t enc_file_buf_len = file_content_len + crypto_aead_xchacha20poly1305_ietf_ABYTES + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+    size_t enc_file_buf_len = file_content_len + HSC_AEAD_OVERHEAD_BYTES;
     encrypted_file = malloc(enc_file_buf_len);
     if (!encrypted_file) {
         fprintf(stderr, "内存分配失败！\n");
         goto cleanup;
     }
     unsigned long long actual_enc_file_len;
-    // [委员会注] 此处暂时保留内部调用，待架构重构后替换
-    if (encrypt_symmetric_aead(encrypted_file, &actual_enc_file_len, (unsigned char*)file_content, file_content_len, session_key) != 0) {
+    
+    if (hsc_aead_encrypt(encrypted_file, &actual_enc_file_len, (unsigned char*)file_content, file_content_len, session_key) != 0) {
         fprintf(stderr, "严重错误: 对称加密文件失败！\n");
         goto cleanup;
     }
@@ -132,7 +113,7 @@ int main() {
 
     // 4. 封装会话密钥
     printf("4. 为接收者封装会话密钥...\n");
-    size_t encapsulated_key_buf_len = crypto_box_NONCEBYTES + sizeof(session_key) + crypto_box_MACBYTES;
+    size_t encapsulated_key_buf_len = sizeof(session_key) + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES;
     encapsulated_session_key = malloc(encapsulated_key_buf_len);
     if (!encapsulated_session_key) {
         fprintf(stderr, "内存分配失败！\n");
@@ -145,11 +126,11 @@ int main() {
         fprintf(stderr, "严重错误: 封装会话密钥失败！\n");
         goto cleanup;
     }
-    printf("  > 会话密钥已使用 `crypto_box` (非对称加密) 封装。\n\n");
+    printf("  > 会话密钥已使用非对称加密封装。\n\n");
     
     printf("--- 文件上传包准备就绪 ---\n");
     printf("  - 加密的文件内容 (AEAD)\n");
-    printf("  - 为接收者'Alice'封装的会话密钥 (crypto_box)\n");
+    printf("  - 为接收者'Alice'封装的会话密钥\n");
     printf("--------------------------\n\n");
 
     // 演示：作为接收者解密
@@ -157,20 +138,19 @@ int main() {
 
     // 1. 解封装会话密钥
     printf("1. 解封装会话密钥...\n");
-    decrypted_session_key = secure_alloc(sizeof(session_key));
+    decrypted_session_key = hsc_secure_alloc(sizeof(session_key));
     if (!decrypted_session_key) {
         fprintf(stderr, "安全内存分配失败！\n");
         goto cleanup;
     }
 
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    // 为了自解密，我们需要从我们自己的密钥对中提取公钥
     hsc_extract_public_key_from_cert(alice_cert_pem, sender_pk);
 
     if (hsc_decapsulate_session_key(decrypted_session_key,
                                 encapsulated_session_key, actual_encapsulated_len,
-                                sender_pk,  // 发送者公钥
-                                alice_mkp) != 0) { // 接收者密钥对
+                                sender_pk,
+                                alice_mkp) != 0) {
         fprintf(stderr, "解密错误: 无法解封装会话密钥！\n");
         goto cleanup;
     }
@@ -178,7 +158,6 @@ int main() {
 
     if (sodium_memcmp(session_key, decrypted_session_key, sizeof(session_key)) != 0) {
         fprintf(stderr, "验证失败: 恢复的会话密钥与原始密钥不匹配！\n");
-        // 这是一个验证失败，也应视为整体失败
         goto cleanup;
     } else {
         printf("  > 验证成功: 恢复的会话密钥与原始密钥匹配。\n\n");
@@ -192,8 +171,8 @@ int main() {
         goto cleanup;
     }
     unsigned long long actual_dec_file_len;
-    // [委员会注] 暂时保留内部调用
-    if (decrypt_symmetric_aead(decrypted_file_content, &actual_dec_file_len,
+    
+    if (hsc_aead_decrypt(decrypted_file_content, &actual_dec_file_len,
                                encrypted_file, actual_enc_file_len,
                                decrypted_session_key) != 0) {
         fprintf(stderr, "解密错误: 无法解密文件内容！\n");
@@ -209,30 +188,23 @@ int main() {
         goto cleanup;
     }
     
-    // [委员会修改] 3. 所有操作成功，设置成功返回码
     ret = 0; 
     printf("\033[32m--- 演示成功完成 ---\033[0m\n");
 
 cleanup:
-    // [委员会修改] 4. 统一的清理代码块，负责释放所有资源
     printf("\n--- 清理所有资源 ---\n");
     free(ca_key_pem);
     free(ca_cert_pem);
     
-    // [委员会建议] hsc_free_pem_string() 是正确的API
     hsc_free_pem_string(alice_csr_pem);
-    
     free(alice_cert_pem);
-
-    // [委员会建议] hsc_free_master_key_pair() 是正确的API
     hsc_free_master_key_pair(&alice_mkp);
     
     free(encrypted_file);
     free(encapsulated_session_key);
-    secure_free(decrypted_session_key);
+    hsc_secure_free(decrypted_session_key);
     free(decrypted_file_content);
 
-    // [委员会建议] hsc_cleanup() 是正确的API
     hsc_cleanup();
     printf("清理完成。\n");
 
@@ -240,7 +212,7 @@ cleanup:
 }
 
 
-// --- 辅助函数的实现 (这些函数无需修改，但为了完整性而保留) ---
+// --- 辅助函数的实现 (这些函数是演示的一部分，保持不变) ---
 
 void print_hex(const char* label, const unsigned char* data, size_t len) {
     printf("%s: ", label);
@@ -268,11 +240,10 @@ int generate_test_ca(char** ca_key_pem, char** ca_cert_pem) {
     X509 *cert = NULL;
     BIO *key_bio = NULL, *cert_bio = NULL;
     
-    // 初始化指针为 NULL
     *ca_key_pem = NULL;
     *ca_cert_pem = NULL;
 
-    unsigned char ca_sk_seed[crypto_sign_SEEDBYTES];
+    unsigned char ca_sk_seed[32];
     memset(ca_sk_seed, 0xCA, sizeof(ca_sk_seed));
 
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, ca_sk_seed, sizeof(ca_sk_seed));
@@ -320,16 +291,12 @@ int generate_test_ca(char** ca_key_pem, char** ca_cert_pem) {
     ret = 0;
 
 cleanup:
-    if (ret != 0) { // 如果失败，确保释放已分配的内存
-        free(*ca_key_pem);
-        *ca_key_pem = NULL;
-        free(*ca_cert_pem);
-        *ca_cert_pem = NULL;
+    if (ret != 0) { 
+        free(*ca_key_pem); *ca_key_pem = NULL;
+        free(*ca_cert_pem); *ca_cert_pem = NULL;
     }
-    EVP_PKEY_free(pkey);
-    X509_free(cert);
-    BIO_free(key_bio);
-    BIO_free(cert_bio);
+    EVP_PKEY_free(pkey); X509_free(cert);
+    BIO_free(key_bio); BIO_free(cert_bio);
     return ret;
 }
 
@@ -367,7 +334,6 @@ int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_k
     X509_set_subject_name(user_cert, X509_REQ_get_subject_name(req));
     X509_set_pubkey(user_cert, req_pubkey);
     
-    // 为测试OCSP添加AIA扩展
     add_ext(user_cert, NID_info_access, "OCSP;URI:http://ocsp.example.com");
 
     if (X509_sign(user_cert, ca_key, NULL) <= 0) goto cleanup;
@@ -387,20 +353,11 @@ int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_k
     ret = 0;
 
 cleanup:
-    if (ret != 0) {
-        free(*user_cert_pem);
-        *user_cert_pem = NULL;
-    }
+    if (ret != 0) { free(*user_cert_pem); *user_cert_pem = NULL; }
     EVP_PKEY_free(req_pubkey);
-    BIO_free(csr_bio);
-    BIO_free(ca_key_bio);
-    BIO_free(ca_cert_bio);
-    BIO_free(out_bio);
-    X509_REQ_free(req);
-    EVP_PKEY_free(ca_key);
-    X509_free(ca_cert);
-    X509_free(user_cert);
+    BIO_free(csr_bio); BIO_free(ca_key_bio); BIO_free(ca_cert_bio); BIO_free(out_bio);
+    X509_REQ_free(req); EVP_PKEY_free(ca_key); X509_free(ca_cert); X509_free(user_cert);
     return ret;
 }
 
-// --- END OF FILE src/main.c (FIXED by Code Review Committee) ---
+// --- END OF FILE src/main.c (REPAIRED - FINAL) ---

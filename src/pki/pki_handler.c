@@ -1,3 +1,5 @@
+// --- START OF FILE src/pki_handler.c (REPAIRED) ---
+
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -176,9 +178,11 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
             fprintf(stderr, "OCSP Error: HTTP request failed: %s\n", curl_easy_strerror(res));
+            // [PRIORITY 1 FIX] 修复内存泄漏：当网络请求失败时，释放已经分配的内存。
             free(chunk.memory);
             chunk.memory = NULL;
             chunk.size = 0;
+            chunk.capacity = 0;
         }
         
         curl_easy_cleanup(curl);
@@ -403,3 +407,4 @@ cleanup:
     if (cert_bio) BIO_free(cert_bio);
     return ret;
 }
+// --- END OF FILE src/pki_handler.c (REPAIRED) ---
