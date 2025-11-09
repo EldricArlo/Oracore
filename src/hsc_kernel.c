@@ -1,3 +1,5 @@
+// --- START OF FILE src/hsc_kernel.c (CORRECTED VERSION) ---
+
 #include "hsc_kernel.h"
 
 // 包含所有内部模块的头文件
@@ -30,14 +32,13 @@ const uint8_t HSC_STREAM_TAG_FINAL = crypto_secretstream_xchacha20poly1305_TAG_F
 static bool read_key_file(const char* filename, void* buffer, size_t expected_len) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
-    fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
-    bool success = false;
-    if (len >= 0 && (size_t)len == expected_len) {
-        if (fread(buffer, 1, expected_len, f) == expected_len) {
-            success = true;
-        }
-    }
-    fclose(f); return success;
+    // [COMMITTEE FIX] Use robust fread instead of ftell to support non-regular files
+    // and ensure the file has the exact expected length.
+    size_t bytes_read = fread(buffer, 1, expected_len, f);
+    char dummy_byte;
+    bool is_eof = (fread(&dummy_byte, 1, 1, f) == 0 && feof(f));
+    fclose(f);
+    return (bytes_read == expected_len && is_eof);
 }
 
 static bool write_key_file(const char* filename, const void* data, size_t len) {
@@ -60,7 +61,6 @@ void hsc_cleanup() {
     curl_global_cleanup();
 }
 
-// [NEW] API 实现：随机数生成
 void hsc_random_bytes(void* buf, size_t size) {
     randombytes_buf(buf, size);
 }
@@ -112,18 +112,22 @@ void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
 
 int hsc_generate_csr(const hsc_master_key_pair* mkp, const char* username, char** out_csr_pem) {
     if (mkp == NULL) return -1;
+    // This is a wrapper call to the actual implementation in pki_handler.c
     return generate_csr(&mkp->internal_kp, username, out_csr_pem);
 }
 
 void hsc_free_pem_string(char* pem_string) {
+    // This is a wrapper call to the actual implementation in pki_handler.c
     free_csr_pem(pem_string);
 }
 
 int hsc_verify_user_certificate(const char* user_cert_pem, const char* trusted_ca_cert_pem, const char* expected_username) {
+    // This is a wrapper call to the actual implementation in pki_handler.c
     return verify_user_certificate(user_cert_pem, trusted_ca_cert_pem, expected_username);
 }
 
 int hsc_extract_public_key_from_cert(const char* user_cert_pem, unsigned char* public_key_out) {
+    // This is a wrapper call to the actual implementation in pki_handler.c
     return extract_public_key_from_cert(user_cert_pem, public_key_out);
 }
 
@@ -140,11 +144,9 @@ int hsc_decapsulate_session_key(unsigned char* decrypted_output, const unsigned 
     return decapsulate_session_key(decrypted_output, encrypted_input, encrypted_input_len, sender_pk, my_kp->internal_kp.sk);
 }
 
-// --- API 实现：对称加密 ---
-// [NOTE] The committee review found that a public API for single-shot AEAD was missing.
-// I am assuming it was intended to exist and that the internal `encrypt_symmetric_aead`
-// should be exposed this way. If not, this code could be removed, but it's needed
-// by main.c.
+
+// --- API 实现：单次对称加解密 ---
+
 int hsc_aead_encrypt(unsigned char* ciphertext, unsigned long long* ciphertext_len,
                      const unsigned char* message, size_t message_len,
                      const unsigned char* key) {
@@ -199,8 +201,7 @@ int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, u
 }
 
 // --- API 实现：安全内存管理 ---
-// [NOTE] Also exposing secure memory functions as per the review, as these
-// are useful for clients handling sensitive data like decrypted session keys.
+
 void* hsc_secure_alloc(size_t size) {
     return secure_alloc(size);
 }
@@ -208,3 +209,4 @@ void* hsc_secure_alloc(size_t size) {
 void hsc_secure_free(void* ptr) {
     secure_free(ptr);
 }
+// --- END OF FILE src/hsc_kernel.c (CORRECTED VERSION) ---
