@@ -112,7 +112,7 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
 
 ### 5.1. 作为命令行工具 (`hsc_cli`)
 
-`hsc_cli` 是一个功能齐全、**支持灵活参数顺序**的命令行工具，用于执行所有核心的加密和 PKI 操作。
+`hsc_cli` 是一个功能齐全的命令行工具，用于执行所有核心的加密和 PKI 操作。
 
 **完整工作流示例：Alice 加密文件并安全地发送给 Bob**
 
@@ -132,7 +132,6 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     ```bash
     ./bin/hsc_cli verify-cert bob.pem --ca ca.pem --user "bob@example.com"
     ```
-    > **提示:** 带有值的选项 (如 `--ca` 和 `--user`) 现在可以按任意顺序列出。
 
 4.  **🔒 (Alice) 加密文件给 Bob:**
     ```bash
@@ -143,8 +142,7 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
 
 5.  **🔓 (Bob) 收到文件后解密:**
     ```bash
-    # Bob 也可以调换 --from 和 --to 的顺序
-    ./bin/hsc_cli decrypt secret.hsc --to bob.key --from alice.pem
+    ./bin/hsc_cli decrypt secret.hsc --from alice.pem --to bob.key
     cat secret.decrypted
     ```
 
@@ -235,7 +233,7 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
 ========================================================================
 [ 原始数据 ] -> 生成 [会话密钥]
                     |        |
-(对称加密) <---------'        '-> (非对称封装) 使用: Bob公钥, Alice私钥
+(对称加密) <--------'        '-> (非对称封装) 使用: Bob公钥, Alice私钥
      |                                |
 [加密数据]                     [封装后的会话密钥]
      |                                |
@@ -341,3 +339,4 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
 适用于任何闭源的商业应用程序、产品或服务。如果您不希望受到AGPLv3开源条款的约束，您必须获得一份商业许可。
 
 **如需获取商业许可，请联系: `eldric520lol@gmail.com`**
+

@@ -1,4 +1,4 @@
-// --- START OF FILE src/cli.c (FINAL CLEANED & REPAIRED VERSION) ---
+// --- START OF FILE src/cli.c (FINAL FIX WITH SODIUM.H INCLUDED) ---
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,6 +7,14 @@
 #include <stdint.h>
 #include <errno.h>
 
+// [COMMITTEE FIX] 引入 getopt_long 以增强参数解析
+#include <getopt.h>
+// 在某些环境中（如 MinGW），optind 需要手动声明
+#if defined(__MINGW32__) || defined(__MINGW64__)
+extern int optind;
+#endif
+
+// [COMMITTEE FIX] 重新包含 sodium.h 以解决 'sodium_memzero' 隐式声明错误
 #include <sodium.h> 
 
 #include "hsc_kernel.h"
@@ -108,16 +116,40 @@ cleanup:
 }
 
 int handle_verify_cert(int argc, char* argv[]) {
-    const char* cert_path = NULL, *ca_path = NULL, *user_cn = NULL;
-    if (argc < 3) { goto usage; } cert_path = argv[2];
-    for (int i = 3; i < argc; ++i) {
-        if (strcmp(argv[i], "--ca") == 0 && i + 1 < argc) ca_path = argv[++i];
-        else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) user_cn = argv[++i];
+    if (argc < 3) { print_usage(argv[0]); return 1; }
+
+    const char* cert_path = argv[2];
+    const char* ca_path = NULL;
+    const char* user_cn = NULL;
+
+    // [COMMITTEE FIX] 使用 getopt_long 解析参数
+    static struct option long_options[] = {
+        {"ca",   required_argument, 0, 'c'},
+        {"user", required_argument, 0, 'u'},
+        {0, 0, 0, 0}
+    };
+
+    int opt;
+    optind = 3; // 从 argv[3] 开始解析
+    while ((opt = getopt_long(argc, argv, "c:u:", long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                ca_path = optarg;
+                break;
+            case 'u':
+                user_cn = optarg;
+                break;
+            default:
+                print_usage(argv[0]);
+                return 1;
+        }
     }
+
     if (!cert_path || !ca_path || !user_cn) {
-    usage:
-        print_usage(argv[0]); return 1;
+        print_usage(argv[0]);
+        return 1;
     }
+
     int ret = 1;
     unsigned char* user_cert_pem = NULL, *ca_cert_pem = NULL; size_t cert_len, ca_len;
     user_cert_pem = read_variable_size_file(cert_path, &cert_len);
@@ -138,16 +170,40 @@ cleanup:
 }
 
 int handle_hybrid_encrypt(int argc, char* argv[]) {
-    const char* in_file = NULL, *recipient_cert_file = NULL, *sender_priv_file = NULL;
-    if (argc < 3) { goto usage; } in_file = argv[2];
-    for (int i = 3; i < argc; ++i) {
-        if (strcmp(argv[i], "--to") == 0 && i + 1 < argc) recipient_cert_file = argv[++i];
-        else if (strcmp(argv[i], "--from") == 0 && i + 1 < argc) sender_priv_file = argv[++i];
+    if (argc < 3) { print_usage(argv[0]); return 1; }
+
+    const char* in_file = argv[2];
+    const char* recipient_cert_file = NULL;
+    const char* sender_priv_file = NULL;
+
+    // [COMMITTEE FIX] 使用 getopt_long 解析参数
+    static struct option long_options[] = {
+        {"to",   required_argument, 0, 't'},
+        {"from", required_argument, 0, 'f'},
+        {0, 0, 0, 0}
+    };
+    
+    int opt;
+    optind = 3; // 从 argv[3] 开始解析
+    while ((opt = getopt_long(argc, argv, "t:f:", long_options, NULL)) != -1) {
+        switch (opt) {
+            case 't':
+                recipient_cert_file = optarg;
+                break;
+            case 'f':
+                sender_priv_file = optarg;
+                break;
+            default:
+                print_usage(argv[0]);
+                return 1;
+        }
     }
+
     if (!in_file || !recipient_cert_file || !sender_priv_file) {
-    usage:
-        print_usage(argv[0]); return 1;
+        print_usage(argv[0]);
+        return 1;
     }
+
     char out_file[FILENAME_MAX];
     if (!create_output_path(out_file, sizeof(out_file), in_file, ".hsc")) return 1;
     
@@ -177,7 +233,6 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     
     unsigned char key_len_buf[8]; store64_le(key_len_buf, actual_encapsulated_len);
     
-    // [PRIORITY 1 FIX] 增强 fwrite 的错误检查
     if (fwrite(key_len_buf, 1, sizeof(key_len_buf), f_out) != sizeof(key_len_buf)) {
         fprintf(stderr, "错误: 写入文件头失败。可能磁盘已满。\n");
         goto cleanup;
@@ -191,7 +246,6 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     st = hsc_crypto_stream_state_new_push(stream_header, session_key);
     if (st == NULL) goto cleanup;
     
-    // [PRIORITY 1 FIX] 增强 fwrite 的错误检查
     if (fwrite(stream_header, 1, sizeof(stream_header), f_out) != sizeof(stream_header)) {
         fprintf(stderr, "错误: 写入流加密头失败。可能磁盘已满。\n");
         goto cleanup;
@@ -211,7 +265,6 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
             fprintf(stderr, "错误: 加密文件块失败。\n");
             goto cleanup;
         }
-        // [PRIORITY 1 FIX] 增强 fwrite 的错误检查
         if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
             fprintf(stderr, "错误: 写入加密数据块失败。可能磁盘已满。\n");
             goto cleanup;
@@ -223,7 +276,6 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
-    // [PRIORITY 1 FIX] 如果加密失败，删除不完整的输出文件
     if (ret != 0) {
         remove(out_file);
     }
@@ -235,16 +287,40 @@ cleanup:
 }
 
 int handle_hybrid_decrypt(int argc, char* argv[]) {
-    const char* in_file = NULL, *sender_cert_file = NULL, *recipient_priv_file = NULL;
-    if (argc < 3) { goto usage; } in_file = argv[2];
-    for (int i = 3; i < argc; i++) {
-        if (strcmp(argv[i], "--from") == 0 && i + 1 < argc) sender_cert_file = argv[++i];
-        else if (strcmp(argv[i], "--to") == 0 && i + 1 < argc) recipient_priv_file = argv[++i];
+    if (argc < 3) { print_usage(argv[0]); return 1; }
+    
+    const char* in_file = argv[2];
+    const char* sender_cert_file = NULL;
+    const char* recipient_priv_file = NULL;
+
+    // [COMMITTEE FIX] 使用 getopt_long 解析参数
+    static struct option long_options[] = {
+        {"to",   required_argument, 0, 't'},
+        {"from", required_argument, 0, 'f'},
+        {0, 0, 0, 0}
+    };
+    
+    int opt;
+    optind = 3; // 从 argv[3] 开始解析
+    while ((opt = getopt_long(argc, argv, "t:f:", long_options, NULL)) != -1) {
+        switch (opt) {
+            case 't':
+                recipient_priv_file = optarg;
+                break;
+            case 'f':
+                sender_cert_file = optarg;
+                break;
+            default:
+                print_usage(argv[0]);
+                return 1;
+        }
     }
+    
     if (!in_file || !sender_cert_file || !recipient_priv_file) {
-    usage:
-        print_usage(argv[0]); return 1;
+        print_usage(argv[0]);
+        return 1;
     }
+
     char out_file[FILENAME_MAX];
     if (!create_output_path(out_file, sizeof(out_file), in_file, ".decrypted")) return 1;
 
@@ -264,7 +340,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     }
     size_t enc_key_len = load64_le(key_len_buf);
     
-    // [PRIORITY 1 FIX] 使用安全的宏替换魔数，并提供明确的错误信息。
     if (enc_key_len == 0 || enc_key_len > HSC_MAX_ENCAPSULATED_KEY_SIZE) {
         fprintf(stderr, "错误: 文件格式无效，加密的会话密钥长度（%zu字节）异常。\n", enc_key_len);
         goto cleanup;
@@ -314,17 +389,15 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         if (tag == HSC_STREAM_TAG_FINAL) {
             stream_finished = true;
         }
-        // [PRIORITY 1 FIX] 增强 fwrite 的错误检查
         if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
             fprintf(stderr, "错误: 写入解密数据块失败。可能磁盘已满。\n");
             goto cleanup;
         }
     } while (!feof(f_in));
     
-    // [PRIORITY 1 FIX] 将截断流视为硬性错误，而非警告。
     if (!stream_finished) {
         fprintf(stderr, "错误: 解密失败！加密流被意外截断，文件不完整或已损坏。\n");
-        goto cleanup; // 设置 ret=1 并跳转到 cleanup
+        goto cleanup;
     }
 
     printf("✅ 混合解密完成！\n  解密文件 -> %s\n", out_file);
@@ -332,7 +405,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
-    // [PRIORITY 1 FIX] 如果解密失败，删除不完整的输出文件
     if (ret != 0) {
         remove(out_file);
     }
@@ -369,4 +441,4 @@ int main(int argc, char* argv[]) {
     hsc_cleanup();
     return ret;
 }
-// --- END OF FILE src/cli.c (FINAL CLEANED & REPAIRED VERSION) ---
+// --- END OF FILE src/cli.c (FINAL FIX WITH SODIUM.H INCLUDED) ---

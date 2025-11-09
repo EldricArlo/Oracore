@@ -5,8 +5,8 @@
 
 # --- Compiler and Flags ---
 CC = gcc
-# [COMMITTEE NOTE] Added a target for the demo application
-CFLAGS = -g -Iinclude -Isrc -Wall -Wextra -std=c11 -fPIC -MMD -MP -DWIN32_LEAN_AND_MEAN -DNOCRYPT
+# [COMMITTEE NOTE] Base CFLAGS, platform specifics will be added below
+CFLAGS = -g -Iinclude -Isrc -Wall -Wextra -std=c11 -fPIC -MMD -MP
 
 # --- Libraries ---
 LDFLAGS = -lsodium -lssl -lcrypto -lcurl
@@ -17,14 +17,22 @@ SRC_DIR = src
 TEST_DIR = tests
 
 # --- Platform-Specific Adjustments ---
+# [COMMITTEE FIX] Improved and unified platform detection
 ifeq ($(OS),Windows_NT)
+    # Native Windows build environment (e.g., cmd.exe with MinGW)
     TARGET_LIB_NAME = hsc_kernel.dll
     TARGET_CLI_EXT = .exe
+    CFLAGS += -D_WIN32 -DWIN32_LEAN_AND_MEAN -DNOCRYPT
+    # For executables on Windows, -fPIC is not needed/used
     CFLAGS_EXEC = $(filter-out -fPIC,$(CFLAGS))
 else
+    # Assume Unix-like environment (Linux, macOS, etc.)
     TARGET_LIB_NAME = libhsc_kernel.so
     TARGET_CLI_EXT =
+    # Add original defines here as well for consistency if needed, though they are Windows-specific
+    CFLAGS += -DWIN32_LEAN_AND_MEAN -DNOCRYPT
     CFLAGS_EXEC = $(CFLAGS)
+    # Add rpath so executables in bin/ can find the library in bin/
     LDFLAGS += -Wl,-rpath,'$$ORIGIN'
 endif
 
@@ -38,7 +46,6 @@ KERNEL_OBJS = $(KERNEL_SRCS:.c=.o)
 CLI_SRC = $(SRC_DIR)/cli.c
 CLI_OBJ = $(CLI_SRC:.c=.o)
 
-# [COMMITTEE FIX] Define source and object files for the demo application
 DEMO_SRC = $(SRC_DIR)/main.c
 DEMO_OBJ = $(DEMO_SRC:.c=.o)
 
@@ -50,7 +57,6 @@ TEST_OBJS = $(TEST_SRCS:.c=.o)
 # --- Target Executables and Libraries ---
 TARGET_LIB = $(BIN_DIR)/$(TARGET_LIB_NAME)
 TARGET_CLI = $(BIN_DIR)/hsc_cli$(TARGET_CLI_EXT)
-# [COMMITTEE FIX] Add the demo executable target
 TARGET_DEMO = $(BIN_DIR)/hsc_demo$(TARGET_CLI_EXT)
 TEST_EXECUTABLES = $(patsubst $(TEST_DIR)/%.c,$(BIN_DIR)/%,$(TEST_SRCS))
 
@@ -60,15 +66,14 @@ DEPS = $(ALL_OBJS:.o=.d)
 
 # --- Build Rules ---
 
-# [COMMITTEE FIX] Add 'demo' to the .PHONY list and the 'all' target
 .PHONY: all kernel cli demo tests clean run-tests
 
 all: cli demo tests
 
-# CLI depends on kernel library (implicitly via TARGET_LIB)
+# CLI depends on kernel library
 cli: $(TARGET_CLI)
 
-# [COMMITTEE FIX] Add the 'demo' phony target
+# Demo depends on kernel library
 demo: $(TARGET_DEMO)
 
 # Build all test executables
@@ -83,19 +88,17 @@ $(TARGET_LIB): $(KERNEL_OBJS) | $(BIN_DIR)
 	@echo "==> Linking Kernel Library: $@"
 	$(CC) -shared -o $@ $^ $(LDFLAGS)
 
-# Linking the CLI application, ensuring it looks for the library in BIN_DIR
+# Linking the CLI application
 $(TARGET_CLI): $(CLI_OBJ) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking CLI Client: $@"
-	# [COMMITTEE NOTE] The cli.c object file now depends on the kernel library for linking.
 	$(CC) $(CFLAGS_EXEC) -o $@ $< -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
 
-# [COMMITTEE FIX] Add the linking rule for the demo application
+# Linking the demo application
 $(TARGET_DEMO): $(DEMO_OBJ) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking Demo Application: $@"
-	# [COMMITTEE NOTE] The main.c object file also depends on the kernel library.
 	$(CC) $(CFLAGS_EXEC) -o $@ $< -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
 
-# Linking all test executables, also looking for the library in BIN_DIR
+# Linking all test executables
 $(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.o $(TEST_HELPER_OBJS) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking Test Executable: $@"
 	$(CC) $(CFLAGS_EXEC) -o $@ $^ -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)

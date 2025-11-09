@@ -1,4 +1,4 @@
-// --- START OF FILE src/pki_handler.c (REPAIRED) ---
+// --- START OF FILE src/pki_handler.c (REPAIRED WITH TIMEOUT FIX) ---
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
@@ -165,6 +165,10 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
     if (curl) {
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "Content-Type: application/ocsp-request");
+
+        // [COMMITTEE FIX: PRIORITY HIGH] 添加网络超时以增强健壮性
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L); // 5秒连接超时
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);      // 10秒总操作超时
 
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -407,4 +411,4 @@ cleanup:
     if (cert_bio) BIO_free(cert_bio);
     return ret;
 }
-// --- END OF FILE src/pki_handler.c (REPAIRED) ---
+// --- END OF FILE src/pki_handler.c (REPAIRED WITH TIMEOUT FIX) ---
