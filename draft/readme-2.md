@@ -248,14 +248,14 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
                        |
                   [ 传输包 ]
                       | |
-           .----------' '-------------.
-           |                          |
-[封装后的会话密钥]                 [加密数据]
-           |                          |
-           v                          |
+           .----------' '------------.
+           |                         |
+[封装后的会话密钥]                [加密数据]
+           |                         |
+           v                         |
 (非对称解封装) 使用: Bob私钥, Alice公钥 |
-           |                          |
-           v                          |
+           |                         |
+           v                         |
       [恢复的会话密钥] <---------------' (对称解密)
            |
            v
@@ -270,19 +270,6 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
 *   **`HSC_ARGON2_MEMLIMIT`**: 设置 Argon2id 的内存使用量（以字节为单位）。
 
 **重要安全说明：** 此功能**只能用于提升安全参数**。如果设置的环境变量值低于项目中内置的最小安全基线，程序将自动忽略这些不安全的值，并强制使用内置的最小值。
-
-**[COMMITTEE FIX] 新增使用示例:**
-
-```bash
-# 示例：将操作限制提升至 10，内存限制提升至 512MB。
-# 注意：HSC_ARGON2_MEMLIMIT 需要以字节为单位。
-# 512 * 1024 * 1024 = 536870912 字节。
-export HSC_ARGON2_OPSLIMIT=10
-export HSC_ARGON2_MEMLIMIT=536870912
-
-# 在设置了环境变量的 Shell 中运行程序，它将自动使用这些更强的参数。
-./bin/hsc_cli gen-keypair my_strong_key
-```
 
 ## 8. 🛠️ API 核心参考 (`include/hsc_kernel.h`)
 

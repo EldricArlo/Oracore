@@ -29,8 +29,7 @@ else
     # Assume Unix-like environment (Linux, macOS, etc.)
     TARGET_LIB_NAME = libhsc_kernel.so
     TARGET_CLI_EXT =
-    # Add original defines here as well for consistency if needed, though they are Windows-specific
-    CFLAGS += -DWIN32_LEAN_AND_MEAN -DNOCRYPT
+    # [COMMITTEE FIX] Removed Windows-specific flags from the Unix build path.
     CFLAGS_EXEC = $(CFLAGS)
     # Add rpath so executables in bin/ can find the library in bin/
     LDFLAGS += -Wl,-rpath,'$$ORIGIN'
@@ -99,7 +98,7 @@ $(TARGET_DEMO): $(DEMO_OBJ) $(TARGET_LIB) | $(BIN_DIR)
 	$(CC) $(CFLAGS_EXEC) -o $@ $< -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
 
 # Linking all test executables
-$(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.o $(TEST_HELPER_OBJS) $(TARGET_LIB) | $(BIN_DIR)
+$(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.c $(TEST_HELPER_OBJS) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking Test Executable: $@"
 	$(CC) $(CFLAGS_EXEC) -o $@ $^ -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
 
