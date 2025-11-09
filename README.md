@@ -1,46 +1,46 @@
-# 高安全性混合加密内核库 (High-Security Hybrid Encryption Kernel Library)
+# Oracipher Core High-Security Hybrid Encryption Kernel Library
 
 | Build | License | Language | Dependencies |
 | :---: | :---: | :---: | :--- |
 | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen) | ![License](https://img.shields.io/badge/license-Dual--Licensed-blue) | ![Language](https://img.shields.io/badge/language-C11-purple) | ![Libsodium](https://img.shields.io/badge/libsodium-v1.0.18+-brightgreen) ![OpenSSL](https://img.shields.io/badge/OpenSSL-v3.0+-0075A8) ![Libcurl](https://img.shields.io/badge/libcurl-v7.68+-E5522D) |
 
-## 1. 🎯 项目愿景与核心原则
+## 1. 😎 项目愿景与核心原则
 
 本项目是一个使用 C11 标准实现的、专注于安全性的高级混合加密内核库。它旨在提供一个经过实战检验的蓝图，展示如何将行业领先的密码学库（**libsodium**, **OpenSSL**, **libcurl**）组合成一个健壮、可靠且易于使用的端到端加密解决方案。
 
 我们的设计遵循以下核心安全原则：
 
-*   🛡️ **选择经审查的现代密码学：** 绝不自行实现加密算法。只使用社区公认的、抗侧信道攻击的现代密码学原语。
-*   🏰 **纵深防御：** 安全性不依赖于任何单一层面。从内存管理、API设计到协议流程，层层设防。
-*   🚦 **安全默认值与“故障关闭”：** 系统的默认行为必须是安全的。在遇到不确定状态（如无法验证证书吊销状态）时，系统必须选择失败并终止操作（Fail-Closed），而非继续执行。
-*   ⏱️ **最小化敏感数据暴露：** 私钥等关键数据的生命周期、作用域和内存驻留时间必须被严格控制在绝对必要的最小范围内。
+*   🥸 **选择经审查的现代密码学：** 绝不自行实现加密算法。只使用社区公认的、抗侧信道攻击的现代密码学原语。
+*   🤠 **纵深防御：** 安全性不依赖于任何单一层面。从内存管理、API设计到协议流程，层层设防。
+*   🙃 **安全默认值与“故障关闭”：** 系统的默认行为必须是安全的。在遇到不确定状态（如无法验证证书吊销状态）时，系统必须选择失败并终止操作（Fail-Closed），而非继续执行。
+*   🫥 **最小化敏感数据暴露：** 私钥等关键数据的生命周期、作用域和内存驻留时间必须被严格控制在绝对必要的最小范围内。
 
-## 2. ✨ 核心特性
+## 2. 🥲 核心特性
 
-*   🧬 **健壮的混合加密模型:**
+*   😮 **健壮的混合加密模型:**
     *   **对称加密:** 为大数据块提供基于 **XChaCha20-Poly1035** 的AEAD流式加密，为小数据块提供单次AEAD加密。
     *   **非对称加密:** 使用 **X25519** (基于 Curve25519) 对对称会话密钥进行密钥封装，确保只有预期的接收者才能解密。
 
-*   🔬 **现代化的密码学原语栈:**
+*   🫨 **现代化的密码学原语栈:**
     *   **密钥派生:** 采用 **Argon2id**，这是当前密码哈希竞赛的获胜者，能有效抵御 GPU 和 ASIC 破解。
     *   **数字签名:** 采用 **Ed25519**，提供高速、高安全性的数字签名能力。
     *   **密钥统一:** 巧妙地利用 Ed25519 密钥可安全转换为 X25519 密钥的特性，使用一套主密钥对同时满足签名和加密的需求。
 
-*   📜 **全面的公钥基础设施 (PKI) 支持:**
+*   😏 **全面的公钥基础设施 (PKI) 支持:**
     *   **证书生命周期:** 支持生成符合 X.509 v3 标准的证书签名请求 (CSR)。
     *   **严格的证书验证:** 提供标准化的证书验证流程，包括信任链、有效期和主题匹配。
     *   **强制的吊销检查 (OCSP):** 内置严格的在线证书状态协议 (OCSP) 检查，并采用“故障关闭”策略，在无法确认证书状态良好时立即中止操作。
 
-*   🔒 **固若金汤的内存安全:**
+*   🧐 **固若金汤的内存安全:**
     *   通过公共 API 暴露 `libsodium` 的安全内存功能，允许客户端安全地处理敏感数据（如会话密钥）。
     *   所有内部私钥均存储在被锁定的内存中，**防止被操作系统交换到磁盘**，并在释放前被安全擦除。
 
-*   ⚙️ **高质量的工程实践:**
+*   😵‍💫 **高质量的工程实践:**
     *   **清晰的API边界:** 提供一个统一的公共头文件 `hsc_kernel.h`，采用不透明指针封装所有内部实现细节，实现了高内聚、低耦合。
     *   **经过单元测试:** 包含一套覆盖核心加密和PKI功能的单元测试，确保代码的正确性和可靠性。
     *   **完善的文档与示例:** 提供详尽的 `README.md` 以及可直接运行的演示程序和命令行工具。
 
-## 3. 📂 项目结构
+## 3. 🤓 项目结构
 
 项目采用清晰、分层的目录结构，以实现关注点分离。
 
@@ -62,7 +62,7 @@
 └── README.md             # 本项目的说明文档
 ```
 
-## 4. 🚀 快速入门
+## 4. 🤥 快速入门
 
 ### 4.1. 依赖环境
 
@@ -89,7 +89,7 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     ```bash
     make run-tests
     ```
-    > ℹ️ **关于 OCSP 测试的预期行为说明**
+    > 😝 **关于 OCSP 测试的预期行为说明**
     >
     > `test_pki_verification` 的一个测试用例会故意使用一个指向无效 OCSP 服务器的证书进行验证。由于网络请求必然失败，`hsc_verify_user_certificate` 函数**必须**返回 `-4` 以表示吊销状态检查失败。测试代码会断言返回值确实是 `-4`，以此证明我们的“故障关闭”安全机制工作正常。
 
@@ -108,7 +108,7 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     make clean
     ```
 
-## 5. 📖 使用指南
+## 5. ☺️ 使用指南
 
 ### 5.1. 作为命令行工具 (`hsc_cli`)
 
@@ -116,32 +116,32 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
 
 **完整工作流示例：Alice 加密文件并安全地发送给 Bob**
 
-1.  **🔑 (双方) 生成主密钥对:**
+1.  **😒 (双方) 生成主密钥对:**
     ```bash
     ./bin/hsc_cli gen-keypair alice
     ./bin/hsc_cli gen-keypair bob
     ```
 
-2.  **📝 (双方) 生成 CSR 并获取证书:** (此处假设 CA 已签发 `alice.pem` 和 `bob.pem`)
+2.  **☺️ (双方) 生成 CSR 并获取证书:** (此处假设 CA 已签发 `alice.pem` 和 `bob.pem`)
     ```bash
     ./bin/hsc_cli gen-csr alice.key "alice@example.com"
     # (将 alice.csr 发送给 CA, 获得 alice.pem)
     ```
 
-3.  **✅ (Alice) 验证 Bob 的证书:** (假设 `ca.pem` 是受信任的根 CA 证书)
+3.  **🤨 (Alice) 验证 Bob 的证书:** (假设 `ca.pem` 是受信任的根 CA 证书)
     ```bash
     ./bin/hsc_cli verify-cert bob.pem --ca ca.pem --user "bob@example.com"
     ```
     > **提示:** 带有值的选项 (如 `--ca` 和 `--user`) 现在可以按任意顺序列出。
 
-4.  **🔒 (Alice) 加密文件给 Bob:**
+4.  **😑 (Alice) 加密文件给 Bob:**
     ```bash
     echo "This is top secret information." > secret.txt
     ./bin/hsc_cli encrypt secret.txt --to bob.pem --from alice.key
     ```
     现在 Alice 可以将 `secret.hsc` 和她自己的证书 `alice.pem` 发送给 Bob。
 
-5.  **🔓 (Bob) 收到文件后解密:**
+5.  **😉 (Bob) 收到文件后解密:**
     ```bash
     # Bob 也可以调换 --from 和 --to 的顺序
     ./bin/hsc_cli decrypt secret.hsc --to bob.key --from alice.pem
@@ -224,7 +224,7 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     hsc_secure_free(dec_session_key);
     ```
 
-## 6. 🔐 技术架构深度解析
+## 6. 😶 技术架构深度解析
 
 本项目的核心是**混合加密（Hybrid Encryption）**模型，它结合了非对称加密和对称加密的优点，实现了既安全又高效的数据传输。
 
@@ -262,7 +262,7 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
       [ 原始数据 ]
 ```
 
-## 7. 🔧 高级配置：通过环境变量增强安全性
+## 7. 😄 高级配置：通过环境变量增强安全性
 
 为了在不修改代码的情况下适应未来更强的硬件和安全需求，本项目支持通过环境变量来**提升**密钥派生函数 (Argon2id) 的计算强度。
 
@@ -271,7 +271,7 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
 
 **重要安全说明：** 此功能**只能用于提升安全参数**。如果设置的环境变量值低于项目中内置的最小安全基线，程序将自动忽略这些不安全的值，并强制使用内置的最小值。
 
-**[COMMITTEE FIX] 新增使用示例:**
+** 新增使用示例:**
 
 ```bash
 # 示例：将操作限制提升至 10，内存限制提升至 512MB。
@@ -284,7 +284,7 @@ export HSC_ARGON2_MEMLIMIT=536870912
 ./bin/hsc_cli gen-keypair my_strong_key
 ```
 
-## 8. 🛠️ API 核心参考 (`include/hsc_kernel.h`)
+## 8. 😀 API 核心参考 (`include/hsc_kernel.h`)
 
 ### 初始化与清理
 | 函数 | 描述 |
@@ -335,15 +335,15 @@ export HSC_ARGON2_MEMLIMIT=536870912
 | `void hsc_secure_free(void* ptr)` | 安全地擦除并释放受保护的内存。 |
 
 
-## 9. 🤝 贡献
+## 9. 🥳 贡献
 
 我们欢迎任何形式的贡献！如果您发现了 bug、有功能建议或想改进文档，请随时提交 Pull Request 或创建 Issue。
 
-## 10. 📜 证书说明 (Certificate Description)
+## 10. 🥺 证书说明 (Certificate Description)
 
 本项目采用 **X.509 v3** 证书体系来将一个公钥与一个用户身份（如 `alice@example.com`）绑定起来，从而建立信任。证书验证流程包括**签名链验证**、**有效期检查**、**主题身份核对**和**吊销状态检查 (OCSP)**，并采用严格的“故障关闭”策略。
 
-## 11. 📄 许可证 (License) - 双重许可模式
+## 11. 🥸 许可证 (License) - 双重许可模式
 
 本项目采用**双重许可 (Dual-License)** 模式：
 
@@ -354,3 +354,4 @@ export HSC_ARGON2_MEMLIMIT=536870912
 适用于任何闭源的商业应用程序、产品或服务。如果您不希望受到AGPLv3开源条款的约束，您必须获得一份商业许可。
 
 **如需获取商业许可，请联系: `eldric520lol@gmail.com`**
+
