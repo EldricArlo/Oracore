@@ -1,5 +1,3 @@
-// --- START OF FILE src/main.c (REPAIRED - FINAL) ---
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -334,7 +332,8 @@ int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_k
     X509_set_subject_name(user_cert, X509_REQ_get_subject_name(req));
     X509_set_pubkey(user_cert, req_pubkey);
     
-    add_ext(user_cert, NID_info_access, "OCSP;URI:http://ocsp.example.com");
+    // [COMMITTEE FIX] Changed OCSP URI to use HTTPS to prevent metadata leakage.
+    add_ext(user_cert, NID_info_access, "OCSP;URI:https://ocsp.example.com");
 
     if (X509_sign(user_cert, ca_key, NULL) <= 0) goto cleanup;
 
@@ -360,4 +359,3 @@ cleanup:
     return ret;
 }
 
-// --- END OF FILE src/main.c (REPAIRED - FINAL) ---

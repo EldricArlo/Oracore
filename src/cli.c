@@ -1,5 +1,3 @@
-// --- START OF FILE src/cli.c (FINAL FIX WITH SODIUM.H INCLUDED) ---
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,20 +43,86 @@ void print_usage(const char* prog_name) {
     fprintf(stderr, "  decrypt <file.hsc> --from <sender-cert> --to <recipient-priv-key>\n");
 }
 
-#define MAX_METADATA_FILE_SIZE (1024 * 1024)
+// [COMMITTEE FIX] Refactored to support streams (e.g., pipes) and handle empty files correctly.
+// This new implementation reads in chunks, is not vulnerable to issues with ftell on non-regular files,
+// and treats a filename of "-" as stdin.
+#define READ_CHUNK_SIZE 4096
 unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
-    FILE* f = fopen(filename, "rb");
-    if (!f) { perror("无法打开文件"); return NULL; }
-    fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
-    if (len < 0 || len > MAX_METADATA_FILE_SIZE) { fclose(f); return NULL; }
-    if (len == 0) { fclose(f); return NULL; }
-    unsigned char* buffer = malloc(len + 1);
-    if (!buffer) { fclose(f); return NULL; }
-    if (fread(buffer, 1, len, f) != (size_t)len) {
-        fclose(f); free(buffer); return NULL;
+    FILE* f;
+    bool is_stdin = (strcmp(filename, "-") == 0);
+
+    if (is_stdin) {
+        f = stdin;
+    } else {
+        f = fopen(filename, "rb");
+        if (!f) {
+            perror("无法打开文件");
+            return NULL;
+        }
     }
-    buffer[len] = '\0'; *out_len = len; fclose(f); return buffer;
+
+    unsigned char* buffer = NULL;
+    size_t total_read = 0;
+    size_t capacity = 0;
+    
+    while (true) {
+        if (capacity < total_read + READ_CHUNK_SIZE) {
+            // Use geometric growth for efficiency
+            size_t new_capacity = (capacity == 0) ? READ_CHUNK_SIZE : capacity * 2;
+            unsigned char* new_buffer = realloc(buffer, new_capacity);
+            if (!new_buffer) {
+                fprintf(stderr, "错误: 读取文件时内存分配失败。\n");
+                free(buffer);
+                if (!is_stdin) fclose(f);
+                return NULL;
+            }
+            buffer = new_buffer;
+            capacity = new_capacity;
+        }
+
+        size_t bytes_to_read = capacity - total_read;
+        size_t bytes_read = fread(buffer + total_read, 1, bytes_to_read, f);
+        total_read += bytes_read;
+
+        if (bytes_read < bytes_to_read) {
+            if (ferror(f)) {
+                perror("读取文件时发生错误");
+                free(buffer);
+                if (!is_stdin) fclose(f);
+                return NULL;
+            }
+            // End of file reached, break the loop
+            break;
+        }
+    }
+    
+    if (!is_stdin) {
+        fclose(f);
+    }
+
+    // Add null terminator
+    unsigned char* final_buffer = realloc(buffer, total_read + 1);
+    if (!final_buffer && total_read > 0) {
+        // Fallback: realloc should not fail on shrink, but if it does, the original buffer is still valid.
+        buffer[total_read] = '\0';
+        *out_len = total_read;
+        return buffer;
+    }
+    
+    // Handle edge case of empty file where realloc(NULL, 1) or malloc(1) is needed
+    if (!final_buffer) {
+        final_buffer = malloc(1);
+        if (!final_buffer) {
+            fprintf(stderr, "错误: 为空内容分配缓冲区失败。\n");
+            return NULL;
+        }
+    }
+    
+    final_buffer[total_read] = '\0';
+    *out_len = total_read;
+    return final_buffer;
 }
+
 bool write_file_bytes(const char* filename, const void* data, size_t len) {
     FILE* f = fopen(filename, "wb");
     if (!f) { return false; }
@@ -441,4 +505,3 @@ int main(int argc, char* argv[]) {
     hsc_cleanup();
     return ret;
 }
-// --- END OF FILE src/cli.c (FINAL FIX WITH SODIUM.H INCLUDED) ---

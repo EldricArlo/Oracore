@@ -1,5 +1,3 @@
-// --- START OF FILE src/hsc_kernel.c (REPAIRED) ---
-
 #include "hsc_kernel.h"
 
 // 包含所有内部模块的头文件
@@ -210,4 +208,3 @@ void* hsc_secure_alloc(size_t size) {
 void hsc_secure_free(void* ptr) {
     secure_free(ptr);
 }
-// --- END OF FILE src/hsc_kernel.c (REPAIRED) ---
