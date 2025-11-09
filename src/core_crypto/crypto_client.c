@@ -5,9 +5,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h> // [FIX] 包含 errno.h 以检查 strtoull 的范围错误
+#include <errno.h> // 包含 errno.h 以检查 strtoull 的范围错误
 
-// --- [新增] 运行时安全参数的定义与初始化 ---
+// --- 运行时安全参数的定义与初始化 ---
 // 这些变量持有程序实际使用的Argon2id参数。
 // 它们被初始化为编译时的基线值，确保在任何配置加载前都有一个安全的默认值。
 unsigned long long g_argon2_opslimit = BASELINE_ARGON2ID_OPSLIMIT;
@@ -15,7 +15,7 @@ size_t g_argon2_memlimit = BASELINE_ARGON2ID_MEMLIMIT;
 
 
 /**
- * @brief [新增] 从环境变量加载并验证密码学参数。
+ * @brief 从环境变量加载并验证密码学参数。
  *        此函数会读取 HSC_ARGON2_OPSLIMIT 和 HSC_ARGON2_MEMLIMIT 环境变量。
  *        如果环境变量被设置、解析成功，并且其值不低于内置的安全基线，
  *        则程序将使用这些更高强度的值。否则，将打印警告并保持安全的默认基线值。
@@ -27,10 +27,10 @@ void crypto_config_load_from_env() {
     const char* opslimit_env = getenv("HSC_ARGON2_OPSLIMIT");
     if (opslimit_env) {
         char* endptr;
-        errno = 0; // [FIX] 在调用 strtoull 之前重置 errno
+        errno = 0; // 在调用 strtoull 之前重置 errno
         unsigned long long ops_from_env = strtoull(opslimit_env, &endptr, 10);
 
-        // [FIX] 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
+        // 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
         if (errno == ERANGE) {
             fprintf(stderr, "  > WARNING: HSC_ARGON2_OPSLIMIT value is out of range. Using default.\n");
         } else if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT) {
@@ -45,10 +45,10 @@ void crypto_config_load_from_env() {
     const char* memlimit_env = getenv("HSC_ARGON2_MEMLIMIT");
     if (memlimit_env) {
         char* endptr;
-        errno = 0; // [FIX] 在调用 strtoull 之前重置 errno
+        errno = 0; // 在调用 strtoull 之前重置 errno
         unsigned long long mem_from_env = strtoull(memlimit_env, &endptr, 10);
         
-        // [FIX] 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
+        // 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
         if (errno == ERANGE) {
             fprintf(stderr, "  > WARNING: HSC_ARGON2_MEMLIMIT value is out of range. Using default.\n");
         } else if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT) {
@@ -71,7 +71,7 @@ int crypto_client_init() {
         return -1; // 初始化失败
     }
 
-    // [新增] 初始化后立即从环境变量加载配置参数
+    // 初始化后立即从环境变量加载配置参数
     crypto_config_load_from_env();
     
     return 0;
@@ -133,7 +133,7 @@ void free_recovery_key(recovery_key* rk) {
 }
 
 bool validate_argon2id_params(unsigned long long opslimit, size_t memlimit) {
-    // [修改] 规范 3.1: 抗降级攻击
+    // 规范 3.1: 抗降级攻击
     // 客户端必须强制执行一个最小安全基线。
     // 此函数现在总是与编译时定义的 BASELINE_ 宏进行比较，
     // 以确保无论运行时配置如何，它都能拒绝来自外部的、低于绝对安全底线的值。

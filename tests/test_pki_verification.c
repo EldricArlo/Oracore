@@ -4,7 +4,7 @@
 
 #include "core_crypto/crypto_client.h"
 #include "pki/pki_handler.h"
-#include "test_helpers.h" // [核心修改] 包含新的共享测试辅助函数头文件
+#include "test_helpers.h" // 包含新的共享测试辅助函数头文件
 
 /**
  * @brief 测试 CSR 的生成与释放流程
@@ -258,5 +258,5 @@ int main() {
     return 0;
 }
 
-// [核心修改] 移除了此文件中所有的辅助函数实现（generate_test_ca 和 sign_csr_with_ca_timed）。
+// 移除了此文件中所有的辅助函数实现（generate_test_ca 和 sign_csr_with_ca_timed）。
 // 这些函数现在位于 tests/test_helpers.c 中。

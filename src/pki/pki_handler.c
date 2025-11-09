@@ -1,5 +1,3 @@
-// --- START OF FILE src/pki_handler.c (REPAIRED WITH TIMEOUT FIX) ---
-
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -80,7 +78,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     // 使用种子创建 OpenSSL 的 EVP_PKEY 对象
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_seed, sizeof(private_seed));
 
-    // [关键安全修复] 无论 pkey 创建是否成功，都必须立即擦除栈上的私钥种子副本，
+    // 无论 pkey 创建是否成功，都必须立即擦除栈上的私钥种子副本，
     // 以最大限度地减少其在内存中的暴露时间。
     secure_zero_memory(private_seed, sizeof(private_seed));
 
@@ -166,7 +164,7 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "Content-Type: application/ocsp-request");
 
-        // [COMMITTEE FIX: PRIORITY HIGH] 添加网络超时以增强健壮性
+        // 添加网络超时以增强健壮性
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L); // 5秒连接超时
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);      // 10秒总操作超时
 
@@ -182,7 +180,7 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
             fprintf(stderr, "OCSP Error: HTTP request failed: %s\n", curl_easy_strerror(res));
-            // [PRIORITY 1 FIX] 修复内存泄漏：当网络请求失败时，释放已经分配的内存。
+            // 修复内存泄漏：当网络请求失败时，释放已经分配的内存。
             free(chunk.memory);
             chunk.memory = NULL;
             chunk.size = 0;
@@ -411,4 +409,3 @@ cleanup:
     if (cert_bio) BIO_free(cert_bio);
     return ret;
 }
-// --- END OF FILE src/pki_handler.c (REPAIRED WITH TIMEOUT FIX) ---

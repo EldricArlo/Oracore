@@ -5,7 +5,7 @@
 
 // --- 核心设计原则: 强制的最小安全基线 ---
 
-// [修改] 规范 3.1: 抗降级攻击 - 内置的最小 Argon2id 安全参数基线
+// 规范 3.1: 抗降级攻击 - 内置的最小 Argon2id 安全参数基线
 // 这些值是不可降低的绝对最小值。
 // 它们应根据当前的最佳实践定期审查和更新。
 // 使用 crypto_pwhash_OPSLIMIT_MODERATE 和 crypto_pwhash_MEMLIMIT_MODERATE 作为参考
@@ -13,7 +13,7 @@
 #define BASELINE_ARGON2ID_MEMLIMIT 268435456 // 256 MB
 
 
-// --- [新增] 运行时安全参数 ---
+// --- 运行时安全参数 ---
 // 这些全局变量将持有程序实际使用的 Argon2id 参数。
 // 它们在启动时被初始化为基线值，但可以被环境变量覆盖（只能调高）。
 extern unsigned long long g_argon2_opslimit;

@@ -5,14 +5,14 @@
 #include <stdint.h>
 #include <errno.h>
 
-// [COMMITTEE FIX] 引入 getopt_long 以增强参数解析
+// 引入 getopt_long 以增强参数解析
 #include <getopt.h>
 // 在某些环境中（如 MinGW），optind 需要手动声明
 #if defined(__MINGW32__) || defined(__MINGW64__)
 extern int optind;
 #endif
 
-// [COMMITTEE FIX] 重新包含 sodium.h 以解决 'sodium_memzero' 隐式声明错误
+// 重新包含 sodium.h 以解决 'sodium_memzero' 隐式声明错误
 #include <sodium.h> 
 
 #include "hsc_kernel.h"
@@ -43,7 +43,7 @@ void print_usage(const char* prog_name) {
     fprintf(stderr, "  decrypt <file.hsc> --from <sender-cert> --to <recipient-priv-key>\n");
 }
 
-// [COMMITTEE FIX] Refactored to support streams (e.g., pipes) and handle empty files correctly.
+// Refactored to support streams (e.g., pipes) and handle empty files correctly.
 // This new implementation reads in chunks, is not vulnerable to issues with ftell on non-regular files,
 // and treats a filename of "-" as stdin.
 #define READ_CHUNK_SIZE 4096
@@ -186,7 +186,7 @@ int handle_verify_cert(int argc, char* argv[]) {
     const char* ca_path = NULL;
     const char* user_cn = NULL;
 
-    // [COMMITTEE FIX] 使用 getopt_long 解析参数
+    // 使用 getopt_long 解析参数
     static struct option long_options[] = {
         {"ca",   required_argument, 0, 'c'},
         {"user", required_argument, 0, 'u'},
@@ -240,7 +240,7 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     const char* recipient_cert_file = NULL;
     const char* sender_priv_file = NULL;
 
-    // [COMMITTEE FIX] 使用 getopt_long 解析参数
+    // 使用 getopt_long 解析参数
     static struct option long_options[] = {
         {"to",   required_argument, 0, 't'},
         {"from", required_argument, 0, 'f'},
@@ -357,7 +357,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     const char* sender_cert_file = NULL;
     const char* recipient_priv_file = NULL;
 
-    // [COMMITTEE FIX] 使用 getopt_long 解析参数
+    // 使用 getopt_long 解析参数
     static struct option long_options[] = {
         {"to",   required_argument, 0, 't'},
         {"from", required_argument, 0, 'f'},

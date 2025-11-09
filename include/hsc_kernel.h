@@ -1,5 +1,3 @@
-// --- START OF FILE include/hsc_kernel.h (FINAL VERSION WITH TYPO FIX) ---
-
 #ifndef HSC_KERNEL_H
 #define HSC_KERNEL_H
 
@@ -15,7 +13,7 @@
 // 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
 #define HSC_STREAM_TAG_BYTES      16 // The size of the authentication tag
-// [TYPO FIX HERE] 将 Hsc_... 修改为 HSC_...
+// 将 Hsc_... 修改为 HSC_...
 #define HSC_STREAM_CHUNK_OVERHEAD (HSC_STREAM_TAG_BYTES)
 
 // 为单次 AEAD 加密提供的开销常量
@@ -93,4 +91,3 @@ void hsc_secure_free(void* ptr);
 
 #endif // HSC_KERNEL_H
 
-// --- END OF FILE include/hsc_kernel.h (FINAL VERSION WITH TYPO FIX) ---

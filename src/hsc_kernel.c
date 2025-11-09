@@ -1,5 +1,3 @@
-// --- START OF FILE src/hsc_kernel.c (CORRECTED VERSION) ---
-
 #include "hsc_kernel.h"
 
 // 包含所有内部模块的头文件
@@ -9,8 +7,8 @@
 
 #include <string.h>
 #include <curl/curl.h>
-#include <sodium.h> // For crypto functions and constants
-#include <stdlib.h> // For malloc/free
+#include <sodium.h>
+#include <stdlib.h>
 
 // --- 不透明结构体的内部定义 ---
 
@@ -32,7 +30,7 @@ const uint8_t HSC_STREAM_TAG_FINAL = crypto_secretstream_xchacha20poly1305_TAG_F
 static bool read_key_file(const char* filename, void* buffer, size_t expected_len) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
-    // [COMMITTEE FIX] Use robust fread instead of ftell to support non-regular files
+    // Use robust fread instead of ftell to support non-regular files
     // and ensure the file has the exact expected length.
     size_t bytes_read = fread(buffer, 1, expected_len, f);
     char dummy_byte;
@@ -47,7 +45,6 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
     bool success = (fwrite(data, 1, len, f) == len);
     fclose(f); return success;
 }
-
 
 // --- API 实现：初始化与清理 ---
 
@@ -64,7 +61,6 @@ void hsc_cleanup() {
 void hsc_random_bytes(void* buf, size_t size) {
     randombytes_buf(buf, size);
 }
-
 
 // --- API 实现：主密钥管理 ---
 
@@ -107,7 +103,6 @@ void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
     free(*kp); *kp = NULL;
 }
 
-
 // --- API 实现：PKI与证书管理 ---
 
 int hsc_generate_csr(const hsc_master_key_pair* mkp, const char* username, char** out_csr_pem) {
@@ -131,7 +126,6 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem, unsigned char* p
     return extract_public_key_from_cert(user_cert_pem, public_key_out);
 }
 
-
 // --- API 实现：非对称加密 (密钥封装) ---
 
 int hsc_encapsulate_session_key(unsigned char* encrypted_output, size_t* encrypted_output_len, const unsigned char* session_key, size_t session_key_len, const unsigned char* recipient_pk, const hsc_master_key_pair* my_kp) {
@@ -143,7 +137,6 @@ int hsc_decapsulate_session_key(unsigned char* decrypted_output, const unsigned 
     if (my_kp == NULL) return -1;
     return decapsulate_session_key(decrypted_output, encrypted_input, encrypted_input_len, sender_pk, my_kp->internal_kp.sk);
 }
-
 
 // --- API 实现：单次对称加解密 ---
 
@@ -209,4 +202,3 @@ void* hsc_secure_alloc(size_t size) {
 void hsc_secure_free(void* ptr) {
     secure_free(ptr);
 }
-// --- END OF FILE src/hsc_kernel.c (CORRECTED VERSION) ---

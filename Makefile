@@ -5,7 +5,7 @@
 
 # --- Compiler and Flags ---
 CC = gcc
-# [COMMITTEE NOTE] Base CFLAGS, platform specifics will be added below
+# Base CFLAGS, platform specifics will be added below
 CFLAGS = -g -Iinclude -Isrc -Wall -Wextra -std=c11 -fPIC -MMD -MP
 
 # --- Libraries ---
@@ -17,7 +17,7 @@ SRC_DIR = src
 TEST_DIR = tests
 
 # --- Platform-Specific Adjustments ---
-# [COMMITTEE FIX] Improved and unified platform detection
+# Improved and unified platform detection
 ifeq ($(OS),Windows_NT)
     # Native Windows build environment (e.g., cmd.exe with MinGW)
     TARGET_LIB_NAME = hsc_kernel.dll
@@ -29,7 +29,7 @@ else
     # Assume Unix-like environment (Linux, macOS, etc.)
     TARGET_LIB_NAME = libhsc_kernel.so
     TARGET_CLI_EXT =
-    # [COMMITTEE FIX] Removed Windows-specific flags from the Unix build path.
+    # Removed Windows-specific flags from the Unix build path.
     CFLAGS_EXEC = $(CFLAGS)
     # Add rpath so executables in bin/ can find the library in bin/
     LDFLAGS += -Wl,-rpath,'$$ORIGIN'
