@@ -226,7 +226,7 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
 
 ## 6. 😶 技术架构深度解析
 
-本项目的核心是**混合加密（Hybrid Encryption）**模型，它结合了非对称加密和对称加密的优点，实现了既安全又高效的数据传输。
+本项目的核心是混合加密（Hybrid Encryption）模型，它结合了非对称加密和对称加密的优点，实现了既安全又高效的数据传输。
 
 **数据流与密钥关系图:**
 
