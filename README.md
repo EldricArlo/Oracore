@@ -226,7 +226,7 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
 
 ## 6. 😶 技术架构深度解析
 
-本项目的核心是**混合加密（Hybrid Encryption）**模型，它结合了非对称加密和对称加密的优点，实现了既安全又高效的数据传输。
+本项目的核心是混合加密（Hybrid Encryption）模型，它结合了非对称加密和对称加密的优点，实现了既安全又高效的数据传输。
 
 **数据流与密钥关系图:**
 
@@ -253,10 +253,10 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
 [封装后的会话密钥]                 [加密数据]
            |                          |
            v                          |
-(非对称解封装) 使用: Bob私钥, Alice公钥 |
+(非对称解封装) 使用: Bob私钥, Alice公钥    |
            |                          |
            v                          |
-      [恢复的会话密钥] <---------------' (对称解密)
+      [恢复的会话密钥] <------------$----' (对称解密)
            |
            v
       [ 原始数据 ]
@@ -354,5 +354,3 @@ export HSC_ARGON2_MEMLIMIT=536870912
 适用于任何闭源的商业应用程序、产品或服务。如果您不希望受到AGPLv3开源条款的约束，您必须获得一份商业许可。
 
 **如需获取商业许可，请联系: `eldric520lol@gmail.com`**
-
-
