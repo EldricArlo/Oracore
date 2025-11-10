@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h> // For SIZE_MAX
 
 // [新增] 内部使用的常量
 #define OCSP_HTTP_CONNECT_TIMEOUT_SECONDS 5L
@@ -139,6 +140,14 @@ struct memory_chunk {
 };
 
 static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+    // [安全修复 P0] 防止整数溢出
+    // 如果 nmemb > 0 且 size 大于 SIZE_MAX / nmemb,
+    // 那么 size * nmemb 的结果将会溢出，导致后续 realloc 分配过小的内存，
+    // 进而引发 memcpy 时的堆缓冲区溢出。
+    if (nmemb > 0 && size > SIZE_MAX / nmemb) {
+        fprintf(stderr, "OCSP Error: Potential integer overflow detected in HTTP callback. Aborting.\n");
+        return 0; // 返回 0 会使 libcurl 中止传输，这是一个安全的失败模式。
+    }
     size_t realsize = size * nmemb;
     struct memory_chunk* mem = (struct memory_chunk*)userp;
 

@@ -125,9 +125,18 @@ unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
 
 bool write_file_bytes(const char* filename, const void* data, size_t len) {
     FILE* f = fopen(filename, "wb");
-    if (!f) { return false; }
+    if (!f) { 
+        // [安全修复 P1] 增加明确的错误信息
+        fprintf(stderr, "错误: 无法打开文件 '%s' 进行写入: %s\n", filename, strerror(errno));
+        return false; 
+    }
     bool ok = (fwrite(data, 1, len, f) == len);
-    fclose(f); return ok;
+    if (!ok) {
+        // [安全修复 P1] 增加明确的错误信息
+        fprintf(stderr, "错误: 写入文件 '%s' 时失败。可能磁盘已满或权限不足。\n", filename);
+    }
+    fclose(f); 
+    return ok;
 }
 bool create_output_path(char* out_buf, size_t out_buf_size, const char* in_path, const char* new_ext) {
     const char* dot = strrchr(in_path, '.');
@@ -138,6 +147,8 @@ bool create_output_path(char* out_buf, size_t out_buf_size, const char* in_path,
     #endif
     size_t base_len = (dot && (!slash || dot > slash)) ? (size_t)(dot - in_path) : strlen(in_path);
     int written = snprintf(out_buf, out_buf_size, "%.*s%s", (int)base_len, in_path, new_ext);
+    
+    // [安全修复 P1] snprintf 的返回值检查已经是健壮的，这里保持不变但要意识到其重要性
     return !(written < 0 || (size_t)written >= out_buf_size);
 }
 
@@ -147,14 +158,31 @@ int handle_gen_keypair(int argc, char* argv[]) {
     if (argc != 3) { print_usage(argv[0]); return 1; }
     const char* basename = argv[2];
     char pub_path[FILENAME_MAX], priv_path[FILENAME_MAX];
-    snprintf(pub_path, sizeof(pub_path), "%s.pub", basename);
-    snprintf(priv_path, sizeof(priv_path), "%s.key", basename);
+    
+    // [安全修复 P1] 增加 snprintf 的返回值检查
+    int written_pub = snprintf(pub_path, sizeof(pub_path), "%s.pub", basename);
+    if (written_pub < 0 || (size_t)written_pub >= sizeof(pub_path)) {
+        fprintf(stderr, "错误: 生成的公钥文件名过长: %s.pub\n", basename);
+        return 1;
+    }
+    int written_priv = snprintf(priv_path, sizeof(priv_path), "%s.key", basename);
+    if (written_priv < 0 || (size_t)written_priv >= sizeof(priv_path)) {
+        fprintf(stderr, "错误: 生成的私钥文件名过长: %s.key\n", basename);
+        return 1;
+    }
     
     int ret = 1;
     hsc_master_key_pair* kp = hsc_generate_master_key_pair();
-    if (kp && hsc_save_master_key_pair(kp, pub_path, priv_path) == 0) {
-        printf("✅ 成功生成密钥对:\n  公钥 -> %s\n  私钥 -> %s\n", pub_path, priv_path);
-        ret = 0;
+    if (kp) {
+        if (hsc_save_master_key_pair(kp, pub_path, priv_path) == 0) {
+            printf("✅ 成功生成密钥对:\n  公钥 -> %s\n  私钥 -> %s\n", pub_path, priv_path);
+            ret = 0;
+        } else {
+            // [安全修复 P1] 增加明确的错误信息
+            fprintf(stderr, "错误: 保存密钥对到文件失败。请检查目录权限和磁盘空间。\n");
+        }
+    } else {
+        fprintf(stderr, "错误: 生成密钥对时发生内部错误。\n");
     }
     hsc_free_master_key_pair(&kp);
     return ret;
@@ -164,14 +192,29 @@ int handle_gen_csr(int argc, char* argv[]) {
     if (argc != 4) { print_usage(argv[0]); return 1; }
     const char* priv_path = argv[2]; const char* user_cn = argv[3];
     char csr_path[FILENAME_MAX];
-    if (!create_output_path(csr_path, sizeof(csr_path), priv_path, ".csr")) return 1;
+    
+    // [安全修复 P1] 增加明确的错误信息
+    if (!create_output_path(csr_path, sizeof(csr_path), priv_path, ".csr")) {
+        fprintf(stderr, "错误: 生成的 CSR 文件名过长。\n");
+        return 1;
+    }
     
     int ret = 1;
     hsc_master_key_pair* kp = NULL; char* csr_pem = NULL;
     kp = hsc_load_master_key_pair_from_private_key(priv_path);
-    if (!kp) { goto cleanup; }
-    if (hsc_generate_csr(kp, user_cn, &csr_pem) != 0) { goto cleanup; }
-    if (!write_file_bytes(csr_path, csr_pem, strlen(csr_pem))) goto cleanup;
+    if (!kp) {
+        fprintf(stderr, "错误: 无法从 '%s' 加载私钥。\n", priv_path);
+        goto cleanup;
+    }
+    if (hsc_generate_csr(kp, user_cn, &csr_pem) != 0) {
+        fprintf(stderr, "错误: 生成 CSR 失败。\n");
+        goto cleanup;
+    }
+    // [安全修复 P1] write_file_bytes 现在内部会打印错误，这里只需检查返回值
+    if (!write_file_bytes(csr_path, csr_pem, strlen(csr_pem))) {
+        // 错误信息已由 write_file_bytes 打印
+        goto cleanup;
+    }
     printf("✅ 成功为用户 '%s' 生成 CSR -> %s\n", user_cn, csr_path);
     ret = 0;
 cleanup:
@@ -281,7 +324,11 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     }
 
     char out_file[FILENAME_MAX];
-    if (!create_output_path(out_file, sizeof(out_file), in_file, ".hsc")) return 1;
+    // [安全修复 P1] 增加明确的错误信息
+    if (!create_output_path(out_file, sizeof(out_file), in_file, ".hsc")) {
+        fprintf(stderr, "错误: 生成的输出文件名过长。\n");
+        return 1;
+    }
     
     int ret = 1;
     FILE *f_in = NULL, *f_out = NULL;
@@ -398,7 +445,11 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     }
 
     char out_file[FILENAME_MAX];
-    if (!create_output_path(out_file, sizeof(out_file), in_file, ".decrypted")) return 1;
+    // [安全修复 P1] 增加明确的错误信息
+    if (!create_output_path(out_file, sizeof(out_file), in_file, ".decrypted")) {
+        fprintf(stderr, "错误: 生成的输出文件名过长。\n");
+        return 1;
+    }
 
     int ret = 1;
     FILE *f_in = NULL, *f_out = NULL;
