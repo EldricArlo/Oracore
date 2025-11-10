@@ -6,7 +6,11 @@
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <sodium.h> 
+
 #include "hsc_kernel.h"
+
+// #define X509_VERSION_3 2L
+#define SECONDS_IN_A_YEAR 31536000L // 365 * 24 * 60 * 60
 
 // --- 用于演示的辅助函数 ---
 void print_hex(const char* label, const unsigned char* data, size_t len);
@@ -93,7 +97,7 @@ int main() {
     
     // 2. 安全获取并验证接收者证书
     printf("2. 验证接收者 ('Alice') 的证书...\n");
-    if (hsc_verify_user_certificate(alice_cert_pem, ca_cert_pem, alice_username) != 0) {
+    if (hsc_verify_user_certificate(alice_cert_pem, ca_cert_pem, alice_username) != HSC_VERIFY_SUCCESS) {
         fprintf(stderr, "严重错误: 接收者证书验证失败！中止共享。\n");
         goto cleanup;
     }
@@ -210,7 +214,7 @@ cleanup:
 }
 
 
-// --- 辅助函数的实现 (这些函数是演示的一部分，保持不变) ---
+// --- 辅助函数的实现 (这些函数是演示的一部分) ---
 
 void print_hex(const char* label, const unsigned char* data, size_t len) {
     printf("%s: ", label);
@@ -241,7 +245,7 @@ int generate_test_ca(char** ca_key_pem, char** ca_cert_pem) {
     *ca_key_pem = NULL;
     *ca_cert_pem = NULL;
 
-    unsigned char ca_sk_seed[32];
+    unsigned char ca_sk_seed[crypto_sign_SEEDBYTES];
     memset(ca_sk_seed, 0xCA, sizeof(ca_sk_seed));
 
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, ca_sk_seed, sizeof(ca_sk_seed));
@@ -250,10 +254,10 @@ int generate_test_ca(char** ca_key_pem, char** ca_cert_pem) {
     cert = X509_new();
     if (!cert) goto cleanup;
 
-    X509_set_version(cert, 2L);
+    X509_set_version(cert, X509_VERSION_3);
     ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
     X509_gmtime_adj(X509_getm_notBefore(cert), 0);
-    X509_gmtime_adj(X509_getm_notAfter(cert), 31536000L);
+    X509_gmtime_adj(X509_getm_notAfter(cert), SECONDS_IN_A_YEAR);
     X509_set_pubkey(cert, pkey);
 
     X509_NAME* name = X509_get_subject_name(cert);
@@ -321,18 +325,17 @@ int sign_csr_with_ca(char** user_cert_pem, const char* csr_pem, const char* ca_k
     user_cert = X509_new();
     if(!user_cert) goto cleanup;
 
-    X509_set_version(user_cert, 2L);
+    X509_set_version(user_cert, X509_VERSION_3);
     ASN1_INTEGER_set(X509_get_serialNumber(user_cert), 2);
     X509_set_issuer_name(user_cert, X509_get_subject_name(ca_cert));
     X509_gmtime_adj(X509_getm_notBefore(user_cert), 0);
-    X509_gmtime_adj(X509_getm_notAfter(user_cert), 31536000L);
+    X509_gmtime_adj(X509_getm_notAfter(user_cert), SECONDS_IN_A_YEAR);
     
     req_pubkey = X509_REQ_get_pubkey(req);
     if (!req_pubkey) goto cleanup;
     X509_set_subject_name(user_cert, X509_REQ_get_subject_name(req));
     X509_set_pubkey(user_cert, req_pubkey);
     
-    // Changed OCSP URI to use HTTPS to prevent metadata leakage.
     add_ext(user_cert, NID_info_access, "OCSP;URI:https://ocsp.example.com");
 
     if (X509_sign(user_cert, ca_key, NULL) <= 0) goto cleanup;

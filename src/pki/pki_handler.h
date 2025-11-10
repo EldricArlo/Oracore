@@ -2,11 +2,15 @@
 #define PKI_HANDLER_H
 
 #include "../core_crypto/crypto_client.h" // 需要用到 master_key_pair 结构
+#include "../../include/hsc_kernel.h"      // 引入公共定义以保持一致
+
+// [新增] 从证书主题中提取的通用名称（Common Name）的最大长度
+#define CERT_COMMON_NAME_MAX_LEN 256
 
 /**
  * @brief 初始化 PKI 子系统。必须在使用任何 PKI 功能前调用。
- *        主要作用是为 OpenSSL 3+ 加载算法提供者 (provider)。
- * @return 成功返回 0，失败返回 -1。
+ *        主要作用是为 OpenSSL 3+ 加载算法提供者 (provider) 并初始化 libcurl。
+ * @return 成功返回 0, 失败返回 -1。
  */
 int pki_init();
 
@@ -38,16 +42,16 @@ void free_csr_pem(char* csr_pem);
  *        i.   签名链是否由受信任的 CA 签署。
  *        ii.  证书是否在有效期内。
  *        iii. 证书的 'Subject' 是否与预期用户匹配。
- *        iv.  (模拟) 证书的实时吊销状态。
+ *        iv.  证书的实时吊销状态 (通过 OCSP)。
  *
  * @param user_cert_pem  要验证的用户证书 (PEM 格式)。
  * @param trusted_ca_cert_pem 客户端预置的、受信任的系统根 CA 证书 (PEM 格式)。
  * @param expected_username 期望从证书主体中找到的用户名 (Common Name)。
- * @return 0 如果所有验证步骤全部成功。
- *         -1 如果发生一般性错误 (如内存分配、PEM 解析失败)。
- *         -2 如果证书签名链或有效期验证失败。
- *         -3 如果证书主体 (Username) 不匹配。
- *         -4 如果证书已被吊销 (OCSP 检查失败)。
+ * @return HSC_VERIFY_SUCCESS 如果所有验证步骤全部成功。
+ *         HSC_VERIFY_ERROR_GENERAL 如果发生一般性错误 (如内存分配、PEM 解析失败)。
+ *         HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY 如果证书签名链或有效期验证失败。
+ *         HSC_VERIFY_ERROR_SUBJECT_MISMATCH 如果证书主体 (Username) 不匹配。
+ *         HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED 如果证书已被吊销或 OCSP 检查失败。
  */
 int verify_user_certificate(const char* user_cert_pem,
                             const char* trusted_ca_cert_pem,

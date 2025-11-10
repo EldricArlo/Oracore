@@ -46,7 +46,7 @@ void print_usage(const char* prog_name) {
 // Refactored to support streams (e.g., pipes) and handle empty files correctly.
 // This new implementation reads in chunks, is not vulnerable to issues with ftell on non-regular files,
 // and treats a filename of "-" as stdin.
-#define READ_CHUNK_SIZE 4096
+// [修改] 已移除本地宏定义，将使用 hsc_kernel.h 中的 HSC_FILE_IO_CHUNK_SIZE
 unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
     FILE* f;
     bool is_stdin = (strcmp(filename, "-") == 0);
@@ -66,9 +66,9 @@ unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
     size_t capacity = 0;
     
     while (true) {
-        if (capacity < total_read + READ_CHUNK_SIZE) {
+        if (capacity < total_read + HSC_FILE_IO_CHUNK_SIZE) {
             // Use geometric growth for efficiency
-            size_t new_capacity = (capacity == 0) ? READ_CHUNK_SIZE : capacity * 2;
+            size_t new_capacity = (capacity == 0) ? HSC_FILE_IO_CHUNK_SIZE : capacity * 2;
             unsigned char* new_buffer = realloc(buffer, new_capacity);
             if (!new_buffer) {
                 fprintf(stderr, "错误: 读取文件时内存分配失败。\n");
@@ -222,12 +222,24 @@ int handle_verify_cert(int argc, char* argv[]) {
     
     printf("开始验证证书 %s ...\n", cert_path);
     int result = hsc_verify_user_certificate((const char*)user_cert_pem, (const char*)ca_cert_pem, user_cn);
+    // [修改] 使用定义的常量进行 switch
     switch(result) {
-        case 0:  printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); ret = 0; break;
-        case -2: fprintf(stderr, "\033[31m[失败]\033[0m 证书签名链或有效期验证失败。\n"); break;
-        case -3: fprintf(stderr, "\033[31m[失败]\033[0m 证书主体不匹配。\n"); break;
-        case -4: fprintf(stderr, "\033[31m[失败]\033[0m 证书吊销状态检查失败 (OCSP)！\n"); break;
-        default: fprintf(stderr, "\033[31m[失败]\033[0m 未知验证错误 (代码: %d)。\n", result); break;
+        case HSC_VERIFY_SUCCESS:  
+            printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); 
+            ret = 0; 
+            break;
+        case HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书签名链或有效期验证失败。\n"); 
+            break;
+        case HSC_VERIFY_ERROR_SUBJECT_MISMATCH: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书主体不匹配。\n"); 
+            break;
+        case HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书吊销状态检查失败 (OCSP)！\n"); 
+            break;
+        default: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 未知验证错误 (代码: %d)。\n", result); 
+            break;
     }
 cleanup:
     free(user_cert_pem); free(ca_cert_pem); return ret;
@@ -315,9 +327,9 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
         goto cleanup;
     }
     
-    #define CHUNK_SIZE 4096
-    unsigned char buf_in[CHUNK_SIZE];
-    unsigned char buf_out[CHUNK_SIZE + HSC_STREAM_CHUNK_OVERHEAD];
+    // [修改] 使用定义的常量
+    unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE];
+    unsigned char buf_out[HSC_FILE_IO_CHUNK_SIZE + HSC_STREAM_CHUNK_OVERHEAD];
     size_t bytes_read;
     unsigned long long out_len;
     uint8_t tag;
@@ -436,9 +448,9 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     st = hsc_crypto_stream_state_new_pull(stream_header, dec_session_key);
     if (st == NULL) { fprintf(stderr, "错误: 无效的流加密头部。可能是会话密钥错误。\n"); goto cleanup; }
     
-    #define DECRYPT_CHUNK_SIZE (4096 + HSC_STREAM_CHUNK_OVERHEAD)
-    unsigned char buf_in[DECRYPT_CHUNK_SIZE];
-    unsigned char buf_out[4096];
+    // [修改] 使用定义的常量
+    unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE + HSC_STREAM_CHUNK_OVERHEAD];
+    unsigned char buf_out[HSC_FILE_IO_CHUNK_SIZE];
     size_t bytes_read;
     unsigned long long out_len;
     unsigned char tag;

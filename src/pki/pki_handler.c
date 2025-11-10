@@ -10,11 +10,19 @@
 
 #include "pki_handler.h"
 #include "../common/secure_memory.h"
+#include "../../include/hsc_kernel.h" // 引入公共头文件以使用常量
 
 #include <sodium.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// [新增] 内部使用的常量
+#define OCSP_HTTP_CONNECT_TIMEOUT_SECONDS 5L
+#define OCSP_HTTP_TOTAL_TIMEOUT_SECONDS 10L
+#define OCSP_RESPONSE_VALIDITY_SLACK_SECONDS 300L // 5分钟的宽限期
+#define INITIAL_HTTP_CHUNK_CAPACITY 1024
+
 
 // ======================= 错误报告宏 =======================
 #ifdef DEBUG_MODE
@@ -87,7 +95,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     req = X509_REQ_new();
     if (!req) { LOG_PKI_ERROR("X509_REQ_new failed."); goto cleanup; }
     
-    X509_REQ_set_version(req, 0L);
+    if (X509_REQ_set_version(req, 0L) <= 0) { LOG_PKI_ERROR("X509_REQ_set_version failed."); goto cleanup; }
 
     subject = X509_REQ_get_subject_name(req);
     if (!subject) { LOG_PKI_ERROR("X509_REQ_get_subject_name failed."); goto cleanup; }
@@ -135,7 +143,7 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
     struct memory_chunk* mem = (struct memory_chunk*)userp;
 
     if (mem->size + realsize + 1 > mem->capacity) {
-        size_t new_capacity = (mem->capacity > 0) ? mem->capacity * 2 : 1024;
+        size_t new_capacity = (mem->capacity > 0) ? mem->capacity * 2 : INITIAL_HTTP_CHUNK_CAPACITY;
         if (new_capacity < mem->size + realsize + 1) new_capacity = mem->size + realsize + 1;
 
         char* ptr = realloc(mem->memory, new_capacity);
@@ -164,9 +172,9 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "Content-Type: application/ocsp-request");
 
-        // 添加网络超时以增强健壮性
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L); // 5秒连接超时
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);      // 10秒总操作超时
+        // [修改] 使用定义的常量设置网络超时
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, OCSP_HTTP_CONNECT_TIMEOUT_SECONDS);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, OCSP_HTTP_TOTAL_TIMEOUT_SECONDS);
 
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -180,7 +188,6 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
             fprintf(stderr, "OCSP Error: HTTP request failed: %s\n", curl_easy_strerror(res));
-            // 修复内存泄漏：当网络请求失败时，释放已经分配的内存。
             free(chunk.memory);
             chunk.memory = NULL;
             chunk.size = 0;
@@ -209,7 +216,8 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     ocsp_uris = X509_get1_ocsp(user_cert);
     if (!ocsp_uris || sk_OPENSSL_STRING_num(ocsp_uris) <= 0) {
         fprintf(stderr, "         > FAILED: No OCSP URI found in certificate. Cannot verify revocation status.\n");
-        ret = -4;
+        // [修改] 使用公共定义的错误码
+        ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
         goto cleanup;
     }
     const char* ocsp_uri = sk_OPENSSL_STRING_value(ocsp_uris, 0);
@@ -231,7 +239,8 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     if (response_chunk.memory == NULL || response_chunk.size == 0) {
         fprintf(stderr, "         > FAILED: Could not retrieve a response from the OCSP server.\n");
         if(response_chunk.memory) free(response_chunk.memory);
-        ret = -4;
+        // [修改] 使用公共定义的错误码
+        ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
         goto cleanup;
     }
     
@@ -263,7 +272,8 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
         goto cleanup;
     }
 
-    if (OCSP_check_validity(this_update, next_update, 300L, -1L) <= 0) {
+    // [修改] 使用定义的常量
+    if (OCSP_check_validity(this_update, next_update, OCSP_RESPONSE_VALIDITY_SLACK_SECONDS, -1L) <= 0) {
         LOG_PKI_ERROR("OCSP response is not within its validity period (stale response).");
         goto cleanup;
     }
@@ -275,11 +285,13 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
             break;
         case V_OCSP_CERTSTATUS_REVOKED:
             fprintf(stderr, "         > FAILED: OCSP status is 'Revoked'. Certificate has been revoked!\n");
-            ret = -4;
+            // [修改] 使用公共定义的错误码
+            ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
             break;
         case V_OCSP_CERTSTATUS_UNKNOWN:
             fprintf(stderr, "         > FAILED: OCSP status is 'Unknown'. The certificate's status is unknown.\n");
-            ret = -4;
+            // [修改] 使用公共定义的错误码
+            ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
             break;
         default:
              LOG_PKI_ERROR("Unknown OCSP certificate status code encountered.");
@@ -304,7 +316,8 @@ int verify_user_certificate(const char* user_cert_pem,
         return -1;
     }
 
-    int ret_code = -1;
+    // [修改] 使用公共定义的错误码
+    int ret_code = HSC_VERIFY_ERROR_GENERAL;
 
     BIO* user_bio = BIO_new_mem_buf(user_cert_pem, -1);
     BIO* ca_bio = BIO_new_mem_buf(trusted_ca_cert_pem, -1);
@@ -333,26 +346,31 @@ int verify_user_certificate(const char* user_cert_pem,
     if (X509_verify_cert(ctx) != 1) {
         long err = X509_STORE_CTX_get_error(ctx);
         fprintf(stderr, "      > FAILED: %s\n", X509_verify_cert_error_string(err));
-        ret_code = -2;
+        // [修改] 使用公共定义的错误码
+        ret_code = HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY;
         goto cleanup;
     }
     printf("      > SUCCESS: Certificate is signed by a trusted CA and is within its validity period.\n");
 
     printf("    Step iii (Subject Verification):\n");
     subject_name = X509_get_subject_name(user_cert);
-    if (!subject_name) { LOG_PKI_ERROR("Could not get subject name from certificate."); ret_code = -3; goto cleanup; }
+    // [修改] 使用公共定义的错误码
+    if (!subject_name) { LOG_PKI_ERROR("Could not get subject name from certificate."); ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH; goto cleanup; }
 
-    char cn[256] = {0};
+    // [修改] 使用定义的常量
+    char cn[CERT_COMMON_NAME_MAX_LEN] = {0};
     int cn_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName, cn, sizeof(cn) - 1);
     if (cn_len < 0) {
         LOG_PKI_ERROR("Could not extract Common Name from certificate.");
-        ret_code = -3;
+        // [修改] 使用公共定义的错误码
+        ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH;
         goto cleanup;
     }
 
     if (strcmp(expected_username, cn) != 0) {
         fprintf(stderr, "      > FAILED: Certificate subject mismatch! Expected '%s', but got '%s'.\n", expected_username, cn);
-        ret_code = -3;
+        // [修改] 使用公共定义的错误码
+        ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH;
         goto cleanup;
     }
     printf("      > SUCCESS: Certificate subject matches the expected user '%s'.\n", expected_username);
@@ -363,7 +381,8 @@ int verify_user_certificate(const char* user_cert_pem,
         goto cleanup;
     }
 
-    ret_code = 0;
+    // [修改] 使用公共定义的成功码
+    ret_code = HSC_VERIFY_SUCCESS;
 
 cleanup:
     if (ctx) X509_STORE_CTX_free(ctx);

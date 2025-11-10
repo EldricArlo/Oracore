@@ -13,7 +13,6 @@
 // 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
 #define HSC_STREAM_TAG_BYTES      16 // The size of the authentication tag
-// 将 Hsc_... 修改为 HSC_...
 #define HSC_STREAM_CHUNK_OVERHEAD (HSC_STREAM_TAG_BYTES)
 
 // 为单次 AEAD 加密提供的开销常量
@@ -28,6 +27,16 @@
 
 // 为解封装的会话密钥长度提供一个安全、合理的上限
 #define HSC_MAX_ENCAPSULATED_KEY_SIZE (HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES + 16)
+
+// [新增] 为文件流式处理定义的标准块大小
+#define HSC_FILE_IO_CHUNK_SIZE 4096
+
+// [新增] 证书验证函数 hsc_verify_user_certificate 的公共返回码
+#define HSC_VERIFY_SUCCESS 0
+#define HSC_VERIFY_ERROR_GENERAL -1
+#define HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY -2
+#define HSC_VERIFY_ERROR_SUBJECT_MISMATCH -3
+#define HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED -4
 
 
 // 流式加密中用于标记最后一个数据块的特殊标签
