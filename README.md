@@ -1,8 +1,14 @@
-# Oracipher Core High-Security Hybrid Encryption Kernel Library
+<div align="center">
+  <img src="./src/media/icon-256.png" alt="Oracipher Icon" width="128">
+  <h1 style="border-bottom: none;">Oracipher Core</h1>
+
+# High-Security Hybrid Encryption Kernel Library
 
 | Build | License | Language | Dependencies |
-| :---: | :---: | :---: | :--- |
+| :---: | :---: | :---: | :---: |
 | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen) | ![License](https://img.shields.io/badge/license-Dual--Licensed-blue) | ![Language](https://img.shields.io/badge/language-C11-purple) | ![Libsodium](https://img.shields.io/badge/libsodium-v1.0.18+-brightgreen) ![OpenSSL](https://img.shields.io/badge/OpenSSL-v3.0+-0075A8) ![Libcurl](https://img.shields.io/badge/libcurl-v7.68+-E5522D) |
+
+</div>
 
 ## 1. 😎 项目愿景与核心原则
 
