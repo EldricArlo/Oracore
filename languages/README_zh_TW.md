@@ -287,7 +287,8 @@ export HSC_ARGON2_OPSLIMIT=10
 export HSC_ARGON2_MEMLIMIT=536870912
 
 # 在設定了環境變數的 Shell 中執行程式，它將自動使用這些更強的參數。
-./bin/hsc_cli gen-keypair my_strong_key```
+./bin/hsc_cli gen-keypair my_strong_key
+```
 
 ## 8. 😀 API 核心參考 (`include/hsc_kernel.h`)
 
@@ -357,5 +358,6 @@ export HSC_ARGON2_MEMLIMIT=536870912
 
 ### 2. 商業授權 (Commercial License)
 適用於任何閉源的商業應用程式、產品或服務。如果您不希望受到 AGPLv3 開源條款的約束，您必須取得一份商業授權。
+
 
 **如需取得商業授權，請聯繫: `eldric520lol@gmail.com`**
