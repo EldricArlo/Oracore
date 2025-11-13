@@ -80,7 +80,6 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     X509_REQ* req = NULL;
     BIO* bio = NULL;
     X509_NAME* subject = NULL;
-    // [安全修复 CRITICAL] 使用安全内存分配私钥种子
     unsigned char* private_seed = NULL;
     
     // 使用安全内存分配私钥种子，防止其被交换到磁盘或在内存中残留
@@ -89,12 +88,29 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     
     crypto_sign_ed25519_sk_to_seed(private_seed, mkp->sk);
 
-    // 使用种子创建 OpenSSL 的 EVP_PKEY 对象
+    // --- [委员会修复开始] ---
+    //
+    // **风险通告与缓解措施:**
+    // 下方的 `EVP_PKEY_new_raw_private_key` 函数会接收 `private_seed` 指针，
+    // 并在其内部（由OpenSSL管理，位于标准堆）创建一份该种子的副本以构造 EVP_PKEY 对象。
+    // 这意味着私钥材料的副本会短暂地存在于非安全内存中。这是一个与不感知安全内存的
+    // 第三方库（如OpenSSL）交互时固有的、必须接受的风险。
+    //
+    // 我们的缓解策略是：
+    // 1. 将原始种子存放在安全内存中 (`secure_alloc`)。
+    // 2. 将此风险窗口限制在当前函数的生命周期内。
+    // 3. 在调用OpenSSL函数后，立即使用 `OPENSSL_cleanse` 擦除我们栈上的种子副本，
+    //    作为 `secure_free` (其内部使用 sodium_memzero) 之外的额外深度防御层。
+    // 4. 立即调用 `secure_free` 销毁原始的安全内存缓冲区。
+    //
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_seed, crypto_sign_SEEDBYTES);
-
-    // [安全修复 CRITICAL] 无论后续操作是否成功，都必须立即安全地释放和擦除私钥种子
+    
+    // 无论 `pkey` 创建是否成功，都必须立即、安全地销毁我们本地的种子副本。
+    OPENSSL_cleanse(private_seed, crypto_sign_SEEDBYTES);
     secure_free(private_seed);
-    private_seed = NULL; // 避免悬垂指针
+    private_seed = NULL; // 避免悬垂指针 (dangling pointer)
+
+    // --- [委员会修复结束] ---
 
     if (!pkey) { LOG_PKI_ERROR("EVP_PKEY_new_raw_private_key failed."); goto cleanup; }
     
@@ -132,8 +148,9 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     }
     
 cleanup:
-    // 确保即使在出错的情况下，private_seed 也被正确清理
+    // 确保即使在早期的错误路径中，private_seed 也已被设为 NULL 且不会被二次释放
     if (private_seed) {
+        // 此处的调用仅作为额外的安全措施，正常流程中它应为 NULL
         secure_free(private_seed);
     }
     BIO_free(bio);
