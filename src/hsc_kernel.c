@@ -49,9 +49,9 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 // --- API 实现：初始化与清理 ---
 
 int hsc_init() {
-    if (crypto_client_init() != 0) return -1;
-    if (pki_init() != 0) return -1;
-    return 0;
+    if (crypto_client_init() != 0) return HSC_ERROR_CRYPTO_OPERATION;
+    if (pki_init() != 0) return HSC_ERROR_PKI_OPERATION;
+    return HSC_OK;
 }
 
 void hsc_cleanup() {
@@ -75,26 +75,35 @@ hsc_master_key_pair* hsc_generate_master_key_pair() {
 }
 
 hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_key_path) {
+    if (priv_key_path == NULL) return NULL;
+
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
     if (!kp) return NULL;
+    
     kp->internal_kp.sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
     if (!kp->internal_kp.sk) {
         free(kp); return NULL;
     }
+    
     if (!read_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
-        secure_free(kp->internal_kp.sk); free(kp); return NULL;
+        secure_free(kp->internal_kp.sk); 
+        free(kp); 
+        return NULL;
     }
+    
     crypto_sign_ed25519_sk_to_pk(kp->internal_kp.pk, kp->internal_kp.sk);
     return kp;
 }
 
 int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_path, const char* priv_key_path) {
-    if (kp == NULL || kp->internal_kp.sk == NULL) return -1;
+    if (kp == NULL || kp->internal_kp.sk == NULL || pub_key_path == NULL || priv_key_path == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
     if (!write_key_file(pub_key_path, kp->internal_kp.pk, HSC_MASTER_PUBLIC_KEY_BYTES) ||
         !write_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
-        return -1;
+        return HSC_ERROR_FILE_IO;
     }
-    return 0;
+    return HSC_OK;
 }
 
 void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
@@ -106,8 +115,9 @@ void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
 // --- API 实现：PKI与证书管理 ---
 
 int hsc_generate_csr(const hsc_master_key_pair* mkp, const char* username, char** out_csr_pem) {
-    if (mkp == NULL) return -1;
+    if (mkp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
     // This is a wrapper call to the actual implementation in pki_handler.c
+    // It now directly returns the detailed error codes from the PKI module.
     return generate_csr(&mkp->internal_kp, username, out_csr_pem);
 }
 
@@ -118,24 +128,28 @@ void hsc_free_pem_string(char* pem_string) {
 
 int hsc_verify_user_certificate(const char* user_cert_pem, const char* trusted_ca_cert_pem, const char* expected_username) {
     // This is a wrapper call to the actual implementation in pki_handler.c
+    // It now directly returns the detailed error codes from the PKI module.
     return verify_user_certificate(user_cert_pem, trusted_ca_cert_pem, expected_username);
 }
 
 int hsc_extract_public_key_from_cert(const char* user_cert_pem, unsigned char* public_key_out) {
     // This is a wrapper call to the actual implementation in pki_handler.c
+    // It now directly returns the detailed error codes from the PKI module.
     return extract_public_key_from_cert(user_cert_pem, public_key_out);
 }
 
 // --- API 实现：非对称加密 (密钥封装) ---
 
 int hsc_encapsulate_session_key(unsigned char* encrypted_output, size_t* encrypted_output_len, const unsigned char* session_key, size_t session_key_len, const unsigned char* recipient_pk, const hsc_master_key_pair* my_kp) {
-    if (my_kp == NULL) return -1;
-    return encapsulate_session_key(encrypted_output, encrypted_output_len, session_key, session_key_len, recipient_pk, my_kp->internal_kp.sk);
+    if (my_kp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
+    int result = encapsulate_session_key(encrypted_output, encrypted_output_len, session_key, session_key_len, recipient_pk, my_kp->internal_kp.sk);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 int hsc_decapsulate_session_key(unsigned char* decrypted_output, const unsigned char* encrypted_input, size_t encrypted_input_len, const unsigned char* sender_pk, const hsc_master_key_pair* my_kp) {
-    if (my_kp == NULL) return -1;
-    return decapsulate_session_key(decrypted_output, encrypted_input, encrypted_input_len, sender_pk, my_kp->internal_kp.sk);
+    if (my_kp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
+    int result = decapsulate_session_key(decrypted_output, encrypted_input, encrypted_input_len, sender_pk, my_kp->internal_kp.sk);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 // --- API 实现：单次对称加解密 ---
@@ -143,13 +157,15 @@ int hsc_decapsulate_session_key(unsigned char* decrypted_output, const unsigned 
 int hsc_aead_encrypt(unsigned char* ciphertext, unsigned long long* ciphertext_len,
                      const unsigned char* message, size_t message_len,
                      const unsigned char* key) {
-    return encrypt_symmetric_aead(ciphertext, ciphertext_len, message, message_len, key);
+    int result = encrypt_symmetric_aead(ciphertext, ciphertext_len, message, message_len, key);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 int hsc_aead_decrypt(unsigned char* decrypted_message, unsigned long long* decrypted_message_len,
                      const unsigned char* ciphertext, size_t ciphertext_len,
                      const unsigned char* key) {
-    return decrypt_symmetric_aead(decrypted_message, decrypted_message_len, ciphertext, ciphertext_len, key);
+    int result = decrypt_symmetric_aead(decrypted_message, decrypted_message_len, ciphertext, ciphertext_len, key);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 // --- API 实现：流式加解密 ---
@@ -184,13 +200,15 @@ void hsc_crypto_stream_state_free(hsc_crypto_stream_state** state) {
 }
 
 int hsc_crypto_stream_push(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, const unsigned char* in, size_t in_len, uint8_t tag) {
-    if (state == NULL) return -1;
-    return crypto_secretstream_xchacha20poly1305_push(&state->internal_state, out, out_len, in, in_len, NULL, 0, tag);
+    if (state == NULL) return HSC_ERROR_INVALID_ARGUMENT;
+    int result = crypto_secretstream_xchacha20poly1305_push(&state->internal_state, out, out_len, in, in_len, NULL, 0, tag);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, unsigned char* tag, const unsigned char* in, size_t in_len) {
-    if (state == NULL) return -1;
-    return crypto_secretstream_xchacha20poly1305_pull(&state->internal_state, out, out_len, tag, in, in_len, NULL, 0);
+    if (state == NULL) return HSC_ERROR_INVALID_ARGUMENT;
+    int result = crypto_secretstream_xchacha20poly1305_pull(&state->internal_state, out, out_len, tag, in, in_len, NULL, 0);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 // --- API 实现：安全内存管理 ---

@@ -11,7 +11,7 @@
 
 #include "pki_handler.h"
 #include "../common/secure_memory.h"
-#include "../../include/hsc_kernel.h" // 引入公共头文件以使用常量
+#include "../../include/hsc_kernel.h" // 引入公共头文件以使用常量和错误码
 
 #include <sodium.h>
 #include <stdio.h>
@@ -48,18 +48,18 @@
 int pki_init() {
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         LOG_PKI_ERROR("Failed to initialize libcurl.");
-        return -1;
+        return HSC_ERROR_PKI_OPERATION;
     }
     if (OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS | OPENSSL_INIT_LOAD_CONFIG, NULL) == 0) {
         LOG_PKI_ERROR("Failed to initialize OpenSSL crypto library.");
-        return -1;
+        return HSC_ERROR_PKI_OPERATION;
     }
     OSSL_PROVIDER* provider = OSSL_PROVIDER_load(NULL, "default");
     if (provider == NULL) {
         LOG_PKI_ERROR("Failed to load OpenSSL default provider.");
-        return -1;
+        return HSC_ERROR_PKI_OPERATION;
     }
-    return 0;
+    return HSC_OK;
 }
 
 
@@ -71,11 +71,11 @@ void free_csr_pem(char* csr_pem) {
 
 int generate_csr(const master_key_pair* mkp, const char* username, char** out_csr_pem) {
     if (mkp == NULL || mkp->sk == NULL || username == NULL || out_csr_pem == NULL) {
-        return -1;
+        return HSC_ERROR_INVALID_ARGUMENT;
     }
     *out_csr_pem = NULL;
 
-    int ret = -1;
+    int ret = HSC_ERROR_PKI_OPERATION; // [修改] 默认返回 PKI 操作失败
     EVP_PKEY* pkey = NULL;
     X509_REQ* req = NULL;
     BIO* bio = NULL;
@@ -84,7 +84,11 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     
     // 使用安全内存分配私钥种子，防止其被交换到磁盘或在内存中残留
     private_seed = secure_alloc(crypto_sign_SEEDBYTES);
-    if (!private_seed) { LOG_PKI_ERROR("secure_alloc failed for private seed."); goto cleanup; }
+    if (!private_seed) { 
+        LOG_PKI_ERROR("secure_alloc failed for private seed."); 
+        ret = HSC_ERROR_ALLOCATION_FAILED;
+        goto cleanup; 
+    }
     
     crypto_sign_ed25519_sk_to_seed(private_seed, mkp->sk);
 
@@ -141,9 +145,10 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
         if (*out_csr_pem) {
             memcpy(*out_csr_pem, mem->data, mem->length);
             (*out_csr_pem)[mem->length] = '\0';
-            ret = 0;
+            ret = HSC_OK; // [修改] 成功
         } else {
              LOG_PKI_ERROR("malloc failed for CSR PEM string.");
+             ret = HSC_ERROR_ALLOCATION_FAILED;
         }
     }
     
@@ -362,7 +367,7 @@ cleanup:
 
 static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
     printf("      iv. [Checking Revocation Status (OCSP)]:\n");
-    int ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED; // Default to failure, per "Fail-Closed"
+    int ret = HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED; // [修改] Default to failure, per "Fail-Closed"
 
     OCSP_REQUEST* ocsp_req = _create_ocsp_request(user_cert, issuer_cert);
     if (!ocsp_req) {
@@ -381,7 +386,7 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     switch (status) {
         case V_OCSP_CERTSTATUS_GOOD:
             printf("         > SUCCESS: OCSP status is 'Good'. Certificate has not been revoked.\n");
-            ret = HSC_VERIFY_SUCCESS;
+            ret = HSC_OK; // [修改] 成功
             break;
         case V_OCSP_CERTSTATUS_REVOKED:
             fprintf(stderr, "         > FAILED: OCSP status is 'Revoked'. Certificate has been revoked!\n");
@@ -403,34 +408,47 @@ int verify_user_certificate(const char* user_cert_pem,
                             const char* trusted_ca_cert_pem,
                             const char* expected_username) {
     if (user_cert_pem == NULL || trusted_ca_cert_pem == NULL || expected_username == NULL) {
-        return HSC_VERIFY_ERROR_GENERAL;
+        return HSC_ERROR_INVALID_ARGUMENT;
     }
 
-    int ret_code = HSC_VERIFY_ERROR_GENERAL;
-    BIO* user_bio = BIO_new_mem_buf(user_cert_pem, -1);
-    BIO* ca_bio = BIO_new_mem_buf(trusted_ca_cert_pem, -1);
+    int ret_code = HSC_ERROR_GENERAL;
+    BIO* user_bio = NULL;
+    BIO* ca_bio = NULL;
     X509* user_cert = NULL;
     X509* ca_cert = NULL;
     X509_STORE* store = NULL;
     X509_STORE_CTX* ctx = NULL;
 
-    if (!user_bio || !ca_bio) { LOG_PKI_ERROR("Failed to create BIO for certificates."); goto cleanup; }
+    user_bio = BIO_new_mem_buf(user_cert_pem, -1);
+    ca_bio = BIO_new_mem_buf(trusted_ca_cert_pem, -1);
+    if (!user_bio || !ca_bio) { 
+        LOG_PKI_ERROR("Failed to create BIO for certificates."); 
+        ret_code = HSC_ERROR_PKI_OPERATION;
+        goto cleanup; 
+    }
+    
     user_cert = PEM_read_bio_X509(user_bio, NULL, NULL, NULL);
     ca_cert = PEM_read_bio_X509(ca_bio, NULL, NULL, NULL);
-    if (!user_cert || !ca_cert) { LOG_PKI_ERROR("Failed to parse PEM certificates."); goto cleanup; }
+    if (!user_cert || !ca_cert) { 
+        LOG_PKI_ERROR("Failed to parse PEM certificates."); 
+        ret_code = HSC_ERROR_INVALID_FORMAT;
+        goto cleanup; 
+    }
 
     // 步骤 i & ii: 信任链与有效期
     printf("    Step i & ii (Chain & Validity Period):\n");
     store = X509_STORE_new();
-    if (!store) { LOG_PKI_ERROR("Failed to create X509_STORE."); goto cleanup; }
-    if (X509_STORE_add_cert(store, ca_cert) != 1) { LOG_PKI_ERROR("Failed to add CA cert to store."); goto cleanup; }
+    if (!store) { LOG_PKI_ERROR("Failed to create X509_STORE."); ret_code = HSC_ERROR_PKI_OPERATION; goto cleanup; }
+    if (X509_STORE_add_cert(store, ca_cert) != 1) { LOG_PKI_ERROR("Failed to add CA cert to store."); ret_code = HSC_ERROR_PKI_OPERATION; goto cleanup; }
+    
     ctx = X509_STORE_CTX_new();
-    if (!ctx) { LOG_PKI_ERROR("Failed to create X509_STORE_CTX."); goto cleanup; }
-    if (X509_STORE_CTX_init(ctx, store, user_cert, NULL) != 1) { LOG_PKI_ERROR("Failed to initialize verification context."); goto cleanup; }
+    if (!ctx) { LOG_PKI_ERROR("Failed to create X509_STORE_CTX."); ret_code = HSC_ERROR_PKI_OPERATION; goto cleanup; }
+    if (X509_STORE_CTX_init(ctx, store, user_cert, NULL) != 1) { LOG_PKI_ERROR("Failed to initialize verification context."); ret_code = HSC_ERROR_PKI_OPERATION; goto cleanup; }
+    
     if (X509_verify_cert(ctx) != 1) {
         long err = X509_STORE_CTX_get_error(ctx);
         fprintf(stderr, "      > FAILED: %s\n", X509_verify_cert_error_string(err));
-        ret_code = HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY;
+        ret_code = HSC_ERROR_CERT_CHAIN_OR_VALIDITY;
         goto cleanup;
     }
     printf("      > SUCCESS: Certificate is signed by a trusted CA and is within its validity period.\n");
@@ -438,29 +456,29 @@ int verify_user_certificate(const char* user_cert_pem,
     // 步骤 iii: 主体匹配
     printf("    Step iii (Subject Verification):\n");
     X509_NAME* subject_name = X509_get_subject_name(user_cert);
-    if (!subject_name) { LOG_PKI_ERROR("Could not get subject name from certificate."); ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH; goto cleanup; }
+    if (!subject_name) { LOG_PKI_ERROR("Could not get subject name from certificate."); ret_code = HSC_ERROR_CERT_SUBJECT_MISMATCH; goto cleanup; }
     char cn[CERT_COMMON_NAME_MAX_LEN] = {0};
     int cn_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName, cn, sizeof(cn) - 1);
     if (cn_len < 0) {
         LOG_PKI_ERROR("Could not extract Common Name from certificate.");
-        ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH;
+        ret_code = HSC_ERROR_CERT_SUBJECT_MISMATCH;
         goto cleanup;
     }
     if (strcmp(expected_username, cn) != 0) {
         fprintf(stderr, "      > FAILED: Certificate subject mismatch! Expected '%s', but got '%s'.\n", expected_username, cn);
-        ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH;
+        ret_code = HSC_ERROR_CERT_SUBJECT_MISMATCH;
         goto cleanup;
     }
     printf("      > SUCCESS: Certificate subject matches the expected user '%s'.\n", expected_username);
 
     // 步骤 iv: 强制OCSP吊销检查
     int ocsp_res = check_ocsp_status(user_cert, ca_cert, store);
-    if (ocsp_res != HSC_VERIFY_SUCCESS) {
+    if (ocsp_res != HSC_OK) { // [修改] 检查是否成功
         ret_code = ocsp_res; // ocsp_res already holds the correct error code
         goto cleanup;
     }
 
-    ret_code = HSC_VERIFY_SUCCESS;
+    ret_code = HSC_OK; // [修改] 所有检查通过
 
 cleanup:
     if (ctx) X509_STORE_CTX_free(ctx);
@@ -476,22 +494,27 @@ cleanup:
 int extract_public_key_from_cert(const char* user_cert_pem,
                                  unsigned char* public_key_out) {
     if (user_cert_pem == NULL || public_key_out == NULL) {
-        return -1;
+        return HSC_ERROR_INVALID_ARGUMENT;
     }
-    int ret = -1;
+    int ret = HSC_ERROR_PKI_OPERATION; // [修改] 默认返回 PKI 操作失败
     BIO* cert_bio = BIO_new_mem_buf(user_cert_pem, -1);
     X509* cert = NULL;
     EVP_PKEY* pkey = NULL;
 
-    if (!cert_bio) goto cleanup;
+    if (!cert_bio) { goto cleanup; }
     cert = PEM_read_bio_X509(cert_bio, NULL, NULL, NULL);
-    if (!cert) { LOG_PKI_ERROR("Failed to parse certificate PEM for public key extraction."); goto cleanup; }
+    if (!cert) { 
+        LOG_PKI_ERROR("Failed to parse certificate PEM for public key extraction."); 
+        ret = HSC_ERROR_INVALID_FORMAT;
+        goto cleanup; 
+    }
 
     pkey = X509_get_pubkey(cert);
     if (!pkey) { LOG_PKI_ERROR("Failed to get public key from certificate."); goto cleanup; }
     
     if (EVP_PKEY_id(pkey) != EVP_PKEY_ED25519) {
         LOG_PKI_ERROR("Public key in certificate is not of the expected type (Ed25519).");
+        ret = HSC_ERROR_INVALID_FORMAT;
         goto cleanup;
     }
     size_t pub_key_len = MASTER_PUBLIC_KEY_BYTES;
@@ -499,7 +522,7 @@ int extract_public_key_from_cert(const char* user_cert_pem,
         LOG_PKI_ERROR("Failed to get raw public key bytes from certificate.");
         goto cleanup;
     }
-    ret = 0;
+    ret = HSC_OK; // [修改] 成功
 cleanup:
     if (pkey) EVP_PKEY_free(pkey);
     if (cert) X509_free(cert);

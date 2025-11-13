@@ -134,7 +134,7 @@ int handle_gen_keypair(int argc, char* argv[]) {
     int ret = 1;
     hsc_master_key_pair* kp = hsc_generate_master_key_pair();
     if (kp) {
-        if (hsc_save_master_key_pair(kp, pub_path, priv_path) == 0) {
+        if (hsc_save_master_key_pair(kp, pub_path, priv_path) == HSC_OK) { // [修改]
             printf("✅ 成功生成密钥对:\n  公钥 -> %s\n  私钥 -> %s\n", pub_path, priv_path);
             ret = 0;
         } else {
@@ -164,7 +164,7 @@ int handle_gen_csr(int argc, char* argv[]) {
         fprintf(stderr, "错误: 无法从 '%s' 加载私钥。\n", priv_path);
         goto cleanup;
     }
-    if (hsc_generate_csr(kp, user_cn, &csr_pem) != 0) {
+    if (hsc_generate_csr(kp, user_cn, &csr_pem) != HSC_OK) { // [修改]
         fprintf(stderr, "错误: 生成 CSR 失败。\n");
         goto cleanup;
     }
@@ -211,17 +211,28 @@ int handle_verify_cert(int argc, char* argv[]) {
     
     printf("开始验证证书 %s ...\n", cert_path);
     int result = hsc_verify_user_certificate((const char*)user_cert_pem, (const char*)ca_cert_pem, user_cn);
+    
+    // [修改] 实现精细化的错误报告
     switch(result) {
-        case HSC_VERIFY_SUCCESS:  
-            printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); ret = 0; break;
-        case HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY: 
-            fprintf(stderr, "\033[31m[失败]\033[0m 证书签名链或有效期验证失败。\n"); break;
-        case HSC_VERIFY_ERROR_SUBJECT_MISMATCH: 
-            fprintf(stderr, "\033[31m[失败]\033[0m 证书主体不匹配。\n"); break;
-        case HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED: 
-            fprintf(stderr, "\033[31m[失败]\033[0m 证书吊销状态检查失败 (OCSP)！\n"); break;
+        case HSC_OK:  
+            printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); 
+            ret = 0; 
+            break;
+        case HSC_ERROR_CERT_CHAIN_OR_VALIDITY: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书签名链或有效期验证失败。\n"); 
+            break;
+        case HSC_ERROR_CERT_SUBJECT_MISMATCH: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书主体(CN)与预期用户不匹配。\n"); 
+            break;
+        case HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书吊销状态检查失败 (OCSP)！\n"); 
+            break;
+        case HSC_ERROR_INVALID_FORMAT:
+            fprintf(stderr, "\033[31m[失败]\033[0m 无法解析证书文件，请检查是否为有效的PEM格式。\n"); 
+            break;
         default: 
-            fprintf(stderr, "\033[31m[失败]\033[0m 未知验证错误 (代码: %d)。\n", result); break;
+            fprintf(stderr, "\033[31m[失败]\033[0m 发生未知验证错误 (代码: %d)。\n", result); 
+            break;
     }
 cleanup:
     free(user_cert_pem); free(ca_cert_pem); return ret;
@@ -248,7 +259,7 @@ static bool _perform_stream_encryption(FILE* f_in, FILE* f_out, hsc_crypto_strea
             return false;
         }
         tag = feof(f_in) ? HSC_STREAM_TAG_FINAL : 0;
-        if (hsc_crypto_stream_push(st, buf_out, &out_len, buf_in, bytes_read, tag) != 0) {
+        if (hsc_crypto_stream_push(st, buf_out, &out_len, buf_in, bytes_read, tag) != HSC_OK) { // [修改]
             fprintf(stderr, "错误: 加密文件块失败。\n");
             return false;
         }
@@ -282,7 +293,7 @@ static bool _perform_stream_decryption(FILE* f_in, FILE* f_out, hsc_crypto_strea
         }
         if (bytes_read == 0 && feof(f_in)) break;
 
-        if (hsc_crypto_stream_pull(st, buf_out, &out_len, &tag, buf_in, bytes_read) != 0) {
+        if (hsc_crypto_stream_pull(st, buf_out, &out_len, &tag, buf_in, bytes_read) != HSC_OK) { // [修改]
             fprintf(stderr, "错误: 解密文件块失败！数据可能被篡改。\n");
             return false;
         }
@@ -346,7 +357,7 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     if (!recipient_cert_pem) { goto cleanup; }
     
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert((const char*)recipient_cert_pem, recipient_pk) != 0) {
+    if (hsc_extract_public_key_from_cert((const char*)recipient_cert_pem, recipient_pk) != HSC_OK) { // [修改]
         fprintf(stderr, "错误: 无法从接收者证书 '%s' 中提取公钥。\n", recipient_cert_file);
         goto cleanup;
     }
@@ -359,7 +370,7 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     
     unsigned char encapsulated_key[HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES];
     size_t actual_encapsulated_len;
-    if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_kp) != 0) {
+    if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_kp) != HSC_OK) { // [修改]
         fprintf(stderr, "错误: 封装会话密钥失败。\n");
         goto cleanup;
     }
@@ -466,7 +477,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     sender_cert_pem = read_small_file(sender_cert_file, &cert_len);
     if (!sender_cert_pem) goto cleanup;
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert((const char*)sender_cert_pem, sender_pk) != 0) {
+    if (hsc_extract_public_key_from_cert((const char*)sender_cert_pem, sender_pk) != HSC_OK) { // [修改]
         fprintf(stderr, "错误: 无法从发送者证书 '%s' 中提取公钥。\n", sender_cert_file);
         goto cleanup;
     }
@@ -476,7 +487,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         fprintf(stderr, "错误: 无法从 '%s' 加载接收者私钥。\n", recipient_priv_file);
         goto cleanup;
     }
-    if (hsc_decapsulate_session_key(dec_session_key, enc_key, enc_key_len, sender_pk, recipient_kp) != 0) {
+    if (hsc_decapsulate_session_key(dec_session_key, enc_key, enc_key_len, sender_pk, recipient_kp) != HSC_OK) { // [修改]
         fprintf(stderr, "错误: 解封装会话密钥失败！可能是密钥错误或数据被篡改。\n"); goto cleanup;
     }
     
@@ -518,7 +529,7 @@ cleanup:
 // --- Main 函数 ---
 int main(int argc, char* argv[]) {
     if (argc < 2) { print_usage(argv[0]); return 1; }
-    if (hsc_init() != 0) {
+    if (hsc_init() != HSC_OK) { // [修改]
         fprintf(stderr, "严重错误: 高安全内核库初始化失败！\n"); return 1;
     }
     const char* command = argv[1];

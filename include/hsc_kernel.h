@@ -5,6 +5,30 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// --- [委员会修复] 全局API返回码体系 ---
+#define HSC_OK                                     0 // 操作成功
+#define HSC_ERROR_GENERAL                         -1 // 未指定的常规错误
+#define HSC_ERROR_ALLOCATION_FAILED               -2 // 内存分配失败 (包括安全内存)
+#define HSC_ERROR_INVALID_ARGUMENT                -3 // 提供给函数的参数无效
+#define HSC_ERROR_FILE_IO                         -4 // 文件读写操作失败
+#define HSC_ERROR_CRYPTO_OPERATION                -5 // 底层密码学操作失败 (Libsodium)
+#define HSC_ERROR_PKI_OPERATION                   -6 // 底层PKI操作失败 (OpenSSL/Libcurl)
+#define HSC_ERROR_INVALID_FORMAT                  -7 // 输入数据格式无效 (例如，无效的PEM证书)
+
+// -- 证书验证专用错误码 --
+#define HSC_ERROR_CERT_CHAIN_OR_VALIDITY         -10 // 证书链验证失败或证书已过期/尚未生效
+#define HSC_ERROR_CERT_SUBJECT_MISMATCH          -11 // 证书的主体(Common Name)与预期不符
+#define HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED    -12 // 证书已被吊销，或OCSP检查失败 (遵循"故障关闭"原则)
+
+
+// --- [DEPRECATED] 旧版证书验证返回码 (为保持向后兼容性) ---
+#define HSC_VERIFY_SUCCESS HSC_OK
+#define HSC_VERIFY_ERROR_GENERAL HSC_ERROR_GENERAL
+#define HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY HSC_ERROR_CERT_CHAIN_OR_VALIDITY
+#define HSC_VERIFY_ERROR_SUBJECT_MISMATCH HSC_ERROR_CERT_SUBJECT_MISMATCH
+#define HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED
+
+
 // --- 公共常量 ---
 #define HSC_MASTER_PUBLIC_KEY_BYTES 32
 #define HSC_MASTER_SECRET_KEY_BYTES 64
@@ -28,16 +52,8 @@
 // 为解封装的会话密钥长度提供一个安全、合理的上限
 #define HSC_MAX_ENCAPSULATED_KEY_SIZE (HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES + 16)
 
-// [新增] 为文件流式处理定义的标准块大小
+// 为文件流式处理定义的标准块大小
 #define HSC_FILE_IO_CHUNK_SIZE 4096
-
-// [新增] 证书验证函数 hsc_verify_user_certificate 的公共返回码
-#define HSC_VERIFY_SUCCESS 0
-#define HSC_VERIFY_ERROR_GENERAL -1
-#define HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY -2
-#define HSC_VERIFY_ERROR_SUBJECT_MISMATCH -3
-#define HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED -4
-
 
 // 流式加密中用于标记最后一个数据块的特殊标签
 extern const uint8_t HSC_STREAM_TAG_FINAL;
