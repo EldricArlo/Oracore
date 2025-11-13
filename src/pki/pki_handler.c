@@ -1,3 +1,4 @@
+// --- pki_handler.c (REFACTORED) ---
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -133,6 +134,9 @@ cleanup:
     return ret;
 }
 
+
+// ======================= OCSP 检查的静态辅助函数 (REFACTORED) =======================
+
 struct memory_chunk {
     char* memory;
     size_t size;
@@ -141,9 +145,6 @@ struct memory_chunk {
 
 static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
     // [安全修复 P0] 防止整数溢出
-    // 如果 nmemb > 0 且 size 大于 SIZE_MAX / nmemb,
-    // 那么 size * nmemb 的结果将会溢出，导致后续 realloc 分配过小的内存，
-    // 进而引发 memcpy 时的堆缓冲区溢出。
     if (nmemb > 0 && size > SIZE_MAX / nmemb) {
         fprintf(stderr, "OCSP Error: Potential integer overflow detected in HTTP callback. Aborting.\n");
         return 0; // 返回 0 会使 libcurl 中止传输，这是一个安全的失败模式。
@@ -181,10 +182,8 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         struct curl_slist* headers = NULL;
         headers = curl_slist_append(headers, "Content-Type: application/ocsp-request");
 
-        // [修改] 使用定义的常量设置网络超时
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, OCSP_HTTP_CONNECT_TIMEOUT_SECONDS);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, OCSP_HTTP_TOTAL_TIMEOUT_SECONDS);
-
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -200,7 +199,6 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
             free(chunk.memory);
             chunk.memory = NULL;
             chunk.size = 0;
-            chunk.capacity = 0;
         }
         
         curl_easy_cleanup(curl);
@@ -209,55 +207,86 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
     return chunk;
 }
 
-static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
-    int ret = -1;
-    OCSP_REQUEST* ocsp_req = NULL;
-    OCSP_CERTID* cid = NULL;
+/**
+ * @brief [重构] 辅助函数1: 创建 OCSP 请求对象
+ */
+static OCSP_REQUEST* _create_ocsp_request(X509* user_cert, X509* issuer_cert) {
+    OCSP_REQUEST* ocsp_req = OCSP_REQUEST_new();
+    if (!ocsp_req) {
+        LOG_PKI_ERROR("Failed to create OCSP_REQUEST object.");
+        return NULL;
+    }
+
+    OCSP_CERTID* cid = OCSP_cert_to_id(NULL, user_cert, issuer_cert);
+    if (!cid) {
+        LOG_PKI_ERROR("Failed to create OCSP_CERTID.");
+        OCSP_REQUEST_free(ocsp_req);
+        return NULL;
+    }
+
+    // OCSP_request_add0_id 会取得 cid 的所有权，所以我们不需要再手动释放它
+    if (!OCSP_request_add0_id(ocsp_req, cid)) {
+        LOG_PKI_ERROR("Failed to add certificate ID to OCSP request.");
+        OCSP_CERTID_free(cid); // 在失败的情况下，需要我们自己释放
+        OCSP_REQUEST_free(ocsp_req);
+        return NULL;
+    }
+
+    return ocsp_req;
+}
+
+/**
+ * @brief [重构] 辅助函数2: 发送 OCSP 请求并解析响应
+ */
+static OCSP_RESPONSE* _send_and_parse_ocsp_request(X509* user_cert, OCSP_REQUEST* ocsp_req) {
     OCSP_RESPONSE* ocsp_resp = NULL;
-    OCSP_BASICRESP* bresp = NULL;
     BIO* req_bio = NULL;
-    unsigned char* req_data = NULL;
-    long req_len;
-    STACK_OF(OPENSSL_STRING)* ocsp_uris = NULL;
+    STACK_OF(OPENSSL_STRING)* ocsp_uris = X509_get1_ocsp(user_cert);
 
-    printf("      iv. [Checking Revocation Status (OCSP)]:\n");
-
-    ocsp_uris = X509_get1_ocsp(user_cert);
     if (!ocsp_uris || sk_OPENSSL_STRING_num(ocsp_uris) <= 0) {
         fprintf(stderr, "         > FAILED: No OCSP URI found in certificate. Cannot verify revocation status.\n");
-        // [修改] 使用公共定义的错误码
-        ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
         goto cleanup;
     }
     const char* ocsp_uri = sk_OPENSSL_STRING_value(ocsp_uris, 0);
     printf("         > OCSP Server: %s\n", ocsp_uri);
 
-    ocsp_req = OCSP_REQUEST_new();
-    if (!ocsp_req) goto cleanup;
-    
-    cid = OCSP_cert_to_id(NULL, user_cert, issuer_cert);
-    if (!cid) goto cleanup;
-    if (!OCSP_request_add0_id(ocsp_req, cid)) { OCSP_CERTID_free(cid); cid = NULL; goto cleanup; }
-    cid = NULL;
-
     req_bio = BIO_new(BIO_s_mem());
-    if (!req_bio || !i2d_OCSP_REQUEST_bio(req_bio, ocsp_req)) goto cleanup;
-    
-    req_len = BIO_get_mem_data(req_bio, &req_data);
+    if (!req_bio || !i2d_OCSP_REQUEST_bio(req_bio, ocsp_req)) {
+        LOG_PKI_ERROR("Failed to serialize OCSP request.");
+        goto cleanup;
+    }
+
+    unsigned char* req_data = NULL;
+    long req_len = BIO_get_mem_data(req_bio, &req_data);
     struct memory_chunk response_chunk = perform_http_post(ocsp_uri, req_data, req_len);
+
     if (response_chunk.memory == NULL || response_chunk.size == 0) {
         fprintf(stderr, "         > FAILED: Could not retrieve a response from the OCSP server.\n");
         if(response_chunk.memory) free(response_chunk.memory);
-        // [修改] 使用公共定义的错误码
-        ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
         goto cleanup;
     }
-    
+
     const unsigned char* p = (const unsigned char*)response_chunk.memory;
     ocsp_resp = d2i_OCSP_RESPONSE(NULL, &p, response_chunk.size);
     free(response_chunk.memory);
-    if (!ocsp_resp) { LOG_PKI_ERROR("Failed to parse OCSP response."); goto cleanup; }
+    if (!ocsp_resp) {
+        LOG_PKI_ERROR("Failed to parse OCSP response.");
+    }
+    
+cleanup:
+    BIO_free(req_bio);
+    if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris);
+    return ocsp_resp;
+}
 
+/**
+ * @brief [重构] 辅助函数3: 验证响应签名并检查证书状态
+ */
+static int _verify_and_check_status(OCSP_RESPONSE* ocsp_resp, X509_STORE* store, X509* user_cert, X509* issuer_cert) {
+    int final_status = -1; // Default to a generic error
+    OCSP_BASICRESP* bresp = NULL;
+    OCSP_CERTID* cid = NULL;
+    
     if (OCSP_response_status(ocsp_resp) != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
         LOG_PKI_ERROR_FMT("OCSP response status was not successful: %s", OCSP_response_status_str(OCSP_response_status(ocsp_resp)));
         goto cleanup;
@@ -270,127 +299,131 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
         LOG_PKI_ERROR("OCSP response signature verification failed.");
         goto cleanup;
     }
-
+    
     int status, reason;
     ASN1_GENERALIZEDTIME* rev_time = NULL, *this_update = NULL, *next_update = NULL;
     cid = OCSP_cert_to_id(NULL, user_cert, issuer_cert);
-    if (!cid) goto cleanup;
+    if (!cid) { LOG_PKI_ERROR("Failed to create OCSP_CERTID for status check."); goto cleanup; }
 
     if (!OCSP_resp_find_status(bresp, cid, &status, &reason, &rev_time, &this_update, &next_update)) {
         fprintf(stderr, "         > FAILED: Status for this certificate not found in the OCSP response.\n");
         goto cleanup;
     }
 
-    // [修改] 使用定义的常量
     if (OCSP_check_validity(this_update, next_update, OCSP_RESPONSE_VALIDITY_SLACK_SECONDS, -1L) <= 0) {
         LOG_PKI_ERROR("OCSP response is not within its validity period (stale response).");
         goto cleanup;
     }
 
-    switch (status) {
-        case V_OCSP_CERTSTATUS_GOOD:
-            printf("         > SUCCESS: OCSP status is 'Good'. Certificate has not been revoked.\n");
-            ret = 0;
-            break;
-        case V_OCSP_CERTSTATUS_REVOKED:
-            fprintf(stderr, "         > FAILED: OCSP status is 'Revoked'. Certificate has been revoked!\n");
-            // [修改] 使用公共定义的错误码
-            ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
-            break;
-        case V_OCSP_CERTSTATUS_UNKNOWN:
-            fprintf(stderr, "         > FAILED: OCSP status is 'Unknown'. The certificate's status is unknown.\n");
-            // [修改] 使用公共定义的错误码
-            ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED;
-            break;
-        default:
-             LOG_PKI_ERROR("Unknown OCSP certificate status code encountered.");
-             ret = -1;
-             break;
-    }
+    final_status = status; // V_OCSP_CERTSTATUS_GOOD, V_OCSP_CERTSTATUS_REVOKED, etc.
 
 cleanup:
     OCSP_CERTID_free(cid);
-    OCSP_REQUEST_free(ocsp_req);
-    OCSP_RESPONSE_free(ocsp_resp);
     OCSP_BASICRESP_free(bresp);
-    BIO_free(req_bio);
-    if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris);
+    return final_status;
+}
+
+
+static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
+    printf("      iv. [Checking Revocation Status (OCSP)]:\n");
+    int ret = HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED; // Default to failure, per "Fail-Closed"
+
+    OCSP_REQUEST* ocsp_req = _create_ocsp_request(user_cert, issuer_cert);
+    if (!ocsp_req) {
+        return ret;
+    }
+
+    OCSP_RESPONSE* ocsp_resp = _send_and_parse_ocsp_request(user_cert, ocsp_req);
+    OCSP_REQUEST_free(ocsp_req); // Request is no longer needed
+    if (!ocsp_resp) {
+        return ret;
+    }
+
+    int status = _verify_and_check_status(ocsp_resp, store, user_cert, issuer_cert);
+    OCSP_RESPONSE_free(ocsp_resp); // Response is no longer needed
+
+    switch (status) {
+        case V_OCSP_CERTSTATUS_GOOD:
+            printf("         > SUCCESS: OCSP status is 'Good'. Certificate has not been revoked.\n");
+            ret = HSC_VERIFY_SUCCESS;
+            break;
+        case V_OCSP_CERTSTATUS_REVOKED:
+            fprintf(stderr, "         > FAILED: OCSP status is 'Revoked'. Certificate has been revoked!\n");
+            break;
+        case V_OCSP_CERTSTATUS_UNKNOWN:
+            fprintf(stderr, "         > FAILED: OCSP status is 'Unknown'. The certificate's status is unknown.\n");
+            break;
+        default:
+             LOG_PKI_ERROR("Unknown or failed OCSP certificate status check.");
+             break;
+    }
+
     return ret;
 }
+
+// ======================= 主验证函数 =======================
 
 int verify_user_certificate(const char* user_cert_pem,
                             const char* trusted_ca_cert_pem,
                             const char* expected_username) {
     if (user_cert_pem == NULL || trusted_ca_cert_pem == NULL || expected_username == NULL) {
-        return -1;
+        return HSC_VERIFY_ERROR_GENERAL;
     }
 
-    // [修改] 使用公共定义的错误码
     int ret_code = HSC_VERIFY_ERROR_GENERAL;
-
     BIO* user_bio = BIO_new_mem_buf(user_cert_pem, -1);
     BIO* ca_bio = BIO_new_mem_buf(trusted_ca_cert_pem, -1);
     X509* user_cert = NULL;
     X509* ca_cert = NULL;
     X509_STORE* store = NULL;
     X509_STORE_CTX* ctx = NULL;
-    X509_NAME* subject_name = NULL;
 
     if (!user_bio || !ca_bio) { LOG_PKI_ERROR("Failed to create BIO for certificates."); goto cleanup; }
     user_cert = PEM_read_bio_X509(user_bio, NULL, NULL, NULL);
     ca_cert = PEM_read_bio_X509(ca_bio, NULL, NULL, NULL);
     if (!user_cert || !ca_cert) { LOG_PKI_ERROR("Failed to parse PEM certificates."); goto cleanup; }
 
+    // 步骤 i & ii: 信任链与有效期
     printf("    Step i & ii (Chain & Validity Period):\n");
     store = X509_STORE_new();
-    if (!store) goto cleanup;
-    
+    if (!store) { LOG_PKI_ERROR("Failed to create X509_STORE."); goto cleanup; }
     if (X509_STORE_add_cert(store, ca_cert) != 1) { LOG_PKI_ERROR("Failed to add CA cert to store."); goto cleanup; }
-    
     ctx = X509_STORE_CTX_new();
-    if (!ctx) goto cleanup;
-
+    if (!ctx) { LOG_PKI_ERROR("Failed to create X509_STORE_CTX."); goto cleanup; }
     if (X509_STORE_CTX_init(ctx, store, user_cert, NULL) != 1) { LOG_PKI_ERROR("Failed to initialize verification context."); goto cleanup; }
-    
     if (X509_verify_cert(ctx) != 1) {
         long err = X509_STORE_CTX_get_error(ctx);
         fprintf(stderr, "      > FAILED: %s\n", X509_verify_cert_error_string(err));
-        // [修改] 使用公共定义的错误码
         ret_code = HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY;
         goto cleanup;
     }
     printf("      > SUCCESS: Certificate is signed by a trusted CA and is within its validity period.\n");
 
+    // 步骤 iii: 主体匹配
     printf("    Step iii (Subject Verification):\n");
-    subject_name = X509_get_subject_name(user_cert);
-    // [修改] 使用公共定义的错误码
+    X509_NAME* subject_name = X509_get_subject_name(user_cert);
     if (!subject_name) { LOG_PKI_ERROR("Could not get subject name from certificate."); ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH; goto cleanup; }
-
-    // [修改] 使用定义的常量
     char cn[CERT_COMMON_NAME_MAX_LEN] = {0};
     int cn_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName, cn, sizeof(cn) - 1);
     if (cn_len < 0) {
         LOG_PKI_ERROR("Could not extract Common Name from certificate.");
-        // [修改] 使用公共定义的错误码
         ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH;
         goto cleanup;
     }
-
     if (strcmp(expected_username, cn) != 0) {
         fprintf(stderr, "      > FAILED: Certificate subject mismatch! Expected '%s', but got '%s'.\n", expected_username, cn);
-        // [修改] 使用公共定义的错误码
         ret_code = HSC_VERIFY_ERROR_SUBJECT_MISMATCH;
         goto cleanup;
     }
     printf("      > SUCCESS: Certificate subject matches the expected user '%s'.\n", expected_username);
 
+    // 步骤 iv: 强制OCSP吊销检查
     int ocsp_res = check_ocsp_status(user_cert, ca_cert, store);
-    if (ocsp_res != 0) {
-        ret_code = ocsp_res;
+    if (ocsp_res != HSC_VERIFY_SUCCESS) {
+        ret_code = ocsp_res; // ocsp_res already holds the correct error code
         goto cleanup;
     }
 
-    // [修改] 使用公共定义的成功码
     ret_code = HSC_VERIFY_SUCCESS;
 
 cleanup:
