@@ -1,3 +1,4 @@
+// --- crypto_client.c (REVISED BY COMMITTEE) ---
 #include "crypto_client.h"
 #include "../common/secure_memory.h"
 
@@ -155,38 +156,49 @@ int derive_key_from_password(
         return -1;
     }
 
+    int ret = -1; // 默认返回失败
+    // [安全修复 CRITICAL] 使用安全内存分配中间哈希值
+    unsigned char* hashed_input = NULL;
+
     // 规范 4 - 阶段二 - 3.b: 【安全验证点】
     // 在执行任何 KDF 操作之前，必须先验证从服务器获取的参数。
     if (!validate_argon2id_params(opslimit, memlimit)) {
-        return -1; // 参数验证失败
+        goto cleanup; // 参数验证失败
     }
     
     // 为了安全地将 pepper 融入 Argon2id，我们先计算 H(pepper || password)，
     // 然后将这个哈希值作为 Argon2id 的输入"密码"。这是一种健壮的模式。
     // 我们使用 BLAKE2b (libsodium的crypto_generichash) 来实现 H。
-    unsigned char hashed_input[crypto_generichash_BYTES];
-    crypto_generichash_state state;
+    hashed_input = secure_alloc(crypto_generichash_BYTES);
+    if (!hashed_input) { goto cleanup; }
 
-    crypto_generichash_init(&state, NULL, 0, sizeof(hashed_input));
+    crypto_generichash_state state;
+    crypto_generichash_init(&state, NULL, 0, crypto_generichash_BYTES);
     crypto_generichash_update(&state, global_pepper, pepper_len);
     crypto_generichash_update(&state, (const unsigned char*)password, strlen(password));
-    crypto_generichash_final(&state, hashed_input, sizeof(hashed_input));
+    crypto_generichash_final(&state, hashed_input, crypto_generichash_BYTES);
 
     // 调用 libsodium 的 Argon2id 实现。
     // 它是恒定时间的，符合规范 3.2 的要求。
     if (crypto_pwhash(derived_key, derived_key_len,
-                       (const char*)hashed_input, sizeof(hashed_input),
+                       (const char*)hashed_input, crypto_generichash_BYTES,
                        salt, opslimit, memlimit,
                        crypto_pwhash_ALG_DEFAULT) != 0) {
-        secure_zero_memory(hashed_input, sizeof(hashed_input)); // 确保中间产物被清除
-        return -1; // 密钥派生失败
+        goto cleanup; // 密钥派生失败
     }
 
+    ret = 0; // 所有操作成功
+
+cleanup:
     // 规范 3.3: 安全内存管理
     // 立即清除内存中的中间哈希值。
-    secure_zero_memory(hashed_input, sizeof(hashed_input));
+    // secure_free 会自动擦除内存。
+    if (hashed_input) {
+        secure_free(hashed_input);
+        hashed_input = NULL;
+    }
 
-    return 0;
+    return ret;
 }
 
 int encrypt_symmetric_aead(

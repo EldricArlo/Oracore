@@ -1,4 +1,4 @@
-// --- pki_handler.c (REFACTORED) ---
+// --- pki_handler.c (REVISED BY COMMITTEE) ---
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -80,17 +80,21 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     X509_REQ* req = NULL;
     BIO* bio = NULL;
     X509_NAME* subject = NULL;
+    // [安全修复 CRITICAL] 使用安全内存分配私钥种子
+    unsigned char* private_seed = NULL;
     
-    // 从 Ed25519 私钥中提取出 32 字节的核心种子
-    unsigned char private_seed[crypto_sign_SEEDBYTES];
+    // 使用安全内存分配私钥种子，防止其被交换到磁盘或在内存中残留
+    private_seed = secure_alloc(crypto_sign_SEEDBYTES);
+    if (!private_seed) { LOG_PKI_ERROR("secure_alloc failed for private seed."); goto cleanup; }
+    
     crypto_sign_ed25519_sk_to_seed(private_seed, mkp->sk);
 
     // 使用种子创建 OpenSSL 的 EVP_PKEY 对象
-    pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_seed, sizeof(private_seed));
+    pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_seed, crypto_sign_SEEDBYTES);
 
-    // 无论 pkey 创建是否成功，都必须立即擦除栈上的私钥种子副本，
-    // 以最大限度地减少其在内存中的暴露时间。
-    secure_zero_memory(private_seed, sizeof(private_seed));
+    // [安全修复 CRITICAL] 无论后续操作是否成功，都必须立即安全地释放和擦除私钥种子
+    secure_free(private_seed);
+    private_seed = NULL; // 避免悬垂指针
 
     if (!pkey) { LOG_PKI_ERROR("EVP_PKEY_new_raw_private_key failed."); goto cleanup; }
     
@@ -128,6 +132,10 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     }
     
 cleanup:
+    // 确保即使在出错的情况下，private_seed 也被正确清理
+    if (private_seed) {
+        secure_free(private_seed);
+    }
     BIO_free(bio);
     X509_REQ_free(req);
     EVP_PKEY_free(pkey);
@@ -192,15 +200,16 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
 
-        // --- [安全修复] ---
+        // --- [安全修复 HIGH] ---
         // 强制验证对端服务器证书的有效性
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
         // 强制验证证书中的主机名是否与我们连接的主机名匹配
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-        // 显式指定一个可信的CA证书包路径，避免依赖可能不安全的系统默认值。
-        // 注意: 这个路径在Debian/Ubuntu上很常见。生产级应用应考虑使用更可移植的
-        // 方案，例如随软件分发一个ca-bundle.crt文件。
-        curl_easy_setopt(curl, CURLOPT_CAINFO, "/etc/ssl/certs/ca-certificates.crt");
+        
+        // [安全修复 HIGH] 移除了硬编码的 CA 路径。
+        // 现在 libcurl 将使用其内置的、平台感知的默认 CA 证书搜索路径，
+        // 极大地提高了跨平台兼容性。
+        // curl_easy_setopt(curl, CURLOPT_CAINFO, "/etc/ssl/certs/ca-certificates.crt");
         // --- [修复结束] ---
 
         res = curl_easy_perform(curl);

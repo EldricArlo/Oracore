@@ -41,7 +41,7 @@ Our design adheres to the following core security principles:
 
 *   **Rock-Solid Memory Safety:**
     *   Exposes `libsodium`'s secure memory functions through the public API, allowing clients to safely handle sensitive data (like session keys).
-    *   All internal private keys are stored in locked memory, **preventing them from being swapped to disk by the OS**, and are securely wiped before being freed.
+    *   All internal private keys **and other critical secrets (like key seeds and intermediate hashes)** are stored in locked memory, **preventing them from being swapped to disk by the OS**, and are securely wiped before being freed.
 
 *   **High-Quality Engineering Practices:**
     *   **Clean API Boundary:** Provides a single public header `hsc_kernel.h` that encapsulates all internal implementation details using opaque pointers, achieving high cohesion and low coupling.
@@ -98,6 +98,8 @@ The project uses a clean, layered directory structure to achieve separation of c
     ```
 
 ### 4.2. Compilation and Testing
+
+The project is designed to be highly portable and avoids platform-specific hardcoded paths, ensuring it builds and runs correctly across all supported systems.
 
 1.  **Compile all targets (library, demo, CLI, tests):**
     ```bash
