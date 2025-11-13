@@ -191,7 +191,17 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)data_len);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
+
+        // --- [安全修复] ---
+        // 强制验证对端服务器证书的有效性
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        // 强制验证证书中的主机名是否与我们连接的主机名匹配
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        // 显式指定一个可信的CA证书包路径，避免依赖可能不安全的系统默认值。
+        // 注意: 这个路径在Debian/Ubuntu上很常见。生产级应用应考虑使用更可移植的
+        // 方案，例如随软件分发一个ca-bundle.crt文件。
+        curl_easy_setopt(curl, CURLOPT_CAINFO, "/etc/ssl/certs/ca-certificates.crt");
+        // --- [修复结束] ---
 
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {

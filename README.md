@@ -12,43 +12,43 @@
 
 English | [简体中文](./languages/README_zh_CN.md) | [繁體中文](./languages/README_zh_TW.md) | [Português](./languages/README_pt_BR.md) | [Español](./languages/README_es_ES.md) | [日本語](./languages/README_ja_JP.md) | [Русский](./languages/README_ru_RU.md) | [العربية](./languages/README_ar_AR.md) | [Türkçe](./languages/README_tr_TR.md) |
 
-## 1. 😎 Project Vision & Core Principles
+## 1. Project Vision & Core Principles
 
 This project is a security-focused, high-level hybrid encryption kernel library implemented using the C11 standard. It aims to provide a battle-tested blueprint demonstrating how to combine industry-leading cryptographic libraries (**libsodium**, **OpenSSL**, **libcurl**) into a robust, reliable, and easy-to-use end-to-end encryption solution.
 
 Our design adheres to the following core security principles:
 
-*   🥸 **Choose Vetted, Modern Cryptography:** Never implement cryptographic algorithms from scratch. Exclusively use modern, side-channel resistant cryptographic primitives that are widely recognized by the community.
-*   🤠 **Defense-in-Depth:** Security does not rely on any single layer. We implement multiple layers of protection, from memory management and API design to protocol flows.
-*   🙃 **Secure Defaults & "Fail-Closed" Policy:** The system's default behavior must be secure. When faced with an uncertain state (e.g., inability to verify certificate revocation status), the system must choose to fail and terminate the operation (Fail-Closed) rather than proceeding.
-*   🫥 **Minimize Sensitive Data Exposure:** The lifecycle, scope, and memory-residency time of critical data, such as private keys, must be strictly controlled to the absolute minimum necessary.
+*   **Choose Vetted, Modern Cryptography:** Never implement cryptographic algorithms from scratch. Exclusively use modern, side-channel resistant cryptographic primitives that are widely recognized by the community.
+*   **Defense-in-Depth:** Security does not rely on any single layer. We implement multiple layers of protection, from memory management and API design to protocol flows.
+*   **Secure Defaults & "Fail-Closed" Policy:** The system's default behavior must be secure. When faced with an uncertain state (e.g., inability to verify certificate revocation status), the system must choose to fail and terminate the operation (Fail-Closed) rather than proceeding.
+*   **Minimize Sensitive Data Exposure:** The lifecycle, scope, and memory-residency time of critical data, such as private keys, must be strictly controlled to the absolute minimum necessary.
 
-## 2. 🥲 Core Features
+## 2. Core Features
 
-*   😮 **Robust Hybrid Encryption Model:**
+*   **Robust Hybrid Encryption Model:**
     *   **Symmetric Encryption:** Provides AEAD stream encryption based on **XChaCha20-Poly1305** for large data chunks and one-shot AEAD encryption for smaller data blocks.
-    *   **Asymmetric Encryption:** Uses **X25519** (based on Curve25519) for key encapsulation of the symmetric session key, ensuring only the intended recipient can decrypt it.
+    *   **Asymmetric Encryption:** Uses **X25519** (based on Curve2519) for key encapsulation of the symmetric session key, ensuring only the intended recipient can decrypt it.
 
-*   🫨 **Modern Cryptographic Primitive Stack:**
+*   **Modern Cryptographic Primitive Stack:**
     *   **Key Derivation:** Employs **Argon2id**, the winner of the Password Hashing Competition, to effectively resist GPU and ASIC cracking attempts.
     *   **Digital Signature:** Utilizes **Ed25519** to provide high-speed, high-security digital signature capabilities.
     *   **Key Unification:** Cleverly leverages the property that Ed25519 keys can be safely converted to X25519 keys, allowing a single master key pair to satisfy both signing and encryption needs.
 
-*   😏 **Comprehensive Public Key Infrastructure (PKI) Support:**
+*   **Comprehensive Public Key Infrastructure (PKI) Support:**
     *   **Certificate Lifecycle:** Supports the generation of X.509 v3 compliant Certificate Signing Requests (CSRs).
     *   **Strict Certificate Validation:** Provides a standardized certificate validation process, including trust chain, validity period, and subject matching.
     *   **Mandatory Revocation Check (OCSP):** Features a built-in, strict Online Certificate Status Protocol (OCSP) check with a "Fail-Closed" policy, immediately aborting operations if the certificate's good standing cannot be confirmed.
 
-*   🧐 **Rock-Solid Memory Safety:**
+*   **Rock-Solid Memory Safety:**
     *   Exposes `libsodium`'s secure memory functions through the public API, allowing clients to safely handle sensitive data (like session keys).
     *   All internal private keys are stored in locked memory, **preventing them from being swapped to disk by the OS**, and are securely wiped before being freed.
 
-*   😵‍💫 **High-Quality Engineering Practices:**
+*   **High-Quality Engineering Practices:**
     *   **Clean API Boundary:** Provides a single public header `hsc_kernel.h` that encapsulates all internal implementation details using opaque pointers, achieving high cohesion and low coupling.
     *   **Unit Tested:** Includes a suite of unit tests covering core cryptographic and PKI functions to ensure code correctness and reliability.
     *   **Thorough Documentation & Examples:** Offers a detailed `README.md` along with a ready-to-run demo program and a command-line utility.
 
-## 3. 🤓 Project Structure
+## 3. Project Structure
 
 The project uses a clean, layered directory structure to achieve separation of concerns.
 
@@ -63,28 +63,39 @@ The project uses a clean, layered directory structure to achieve separation of c
 │   ├── hsc_kernel.c      # [CORE] Implementation of the public API
 │   ├── main.c            # API usage example: end-to-end demo program
 │   └── cli.c             # API usage example: powerful command-line tool
-├── tests/                # Unit tests
+├── tests/                # Unit tests and test utilities
 │   ├── test_*.c          # Unit tests for various modules
-│   └── test_helpers.h/.c # Test helper functions
+│   ├── test_helpers.h/.c # Test helper functions (CA generation, signing)
+│   └── test_ca_util.c    # Source for the standalone test CA utility
 ├── Makefile              # Build and task management script
 └── README.md             # This project's documentation
 ```
 
-## 4. 🤥 Quick Start
+## 4. Quick Start
 
 ### 4.1. Dependencies
 
 *   **Build Tools:** `make`
-*   **C Compiler:** `gcc` or `clang` (with C11 support)
+*   **C Compiler:** `gcc` or `clang` (with C11 and `-Werror` support)
 *   **libsodium:** (`libsodium-dev`)
 *   **OpenSSL:** **v3.0** or later is recommended (`libssl-dev`)
 *   **libcurl:** (`libcurl4-openssl-dev`)
 
-**One-Command Installation on Debian/Ubuntu:**
-```bash
-sudo apt-get update
-sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-dev
-```
+**Installation on Popular Systems:**
+
+*   **Debian/Ubuntu:**
+    ```bash
+    sudo apt-get update
+    sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-dev
+    ```
+*   **Fedora/RHEL/CentOS:**
+    ```bash
+    sudo dnf install gcc make libsodium-devel openssl-devel libcurl-devel
+    ```
+*   **macOS (using Homebrew):**
+    ```bash
+    brew install libsodium openssl@3 curl
+    ```
 
 ### 4.2. Compilation and Testing
 
@@ -97,18 +108,18 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     ```bash
     make run-tests
     ```
-    > 😝 **Note on Expected OCSP Test Behavior**
+    > **Note on Expected OCSP Test Behavior**
     >
-    > One test case in `test_pki_verification` intentionally validates a certificate pointing to an invalid OCSP server. As the network request will inevitably fail, the `hsc_verify_user_certificate` function **must** return `-4` to indicate the revocation status check failed. The test code asserts that the return value is indeed `-4`, thereby proving that our "Fail-Closed" security mechanism is working correctly.
+    > One test case in `test_pki_verification` intentionally validates a certificate pointing to a non-existent local OCSP server (`http://127.0.0.1:8888`). The network request will fail, and the `hsc_verify_user_certificate` function **must** return `-4` (the error code for `HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED`). The test asserts this specific return value. This "failure" is the desired outcome, as it proves that our "Fail-Closed" security policy is correctly implemented: if revocation status cannot be confirmed for any reason, the certificate is treated as invalid.
 
 3.  **Run the demo program:**
     ```bash
     ./bin/hsc_demo
     ```
 
-4.  **Run the command-line tool:**
+4.  **Explore the command-line tool:**
     ```bash
-    ./bin/hsc_cli --help
+    ./bin/hsc_cli
     ```
 
 5.  **Clean up build files:**
@@ -116,44 +127,61 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     make clean
     ```
 
-## 5. ☺️ Usage Guide
+## 5. Usage Guide
 
-### 5.1. As a Command-Line Tool (`hsc_cli`)
+### 5.1. As a Command-Line Tool (`hsc_cli` & `test_ca_util`)
 
-`hsc_cli` is a full-featured command-line tool that **supports a flexible argument order** for performing all core cryptographic and PKI operations.
+This section provides a complete, self-contained workflow for secure file exchange between two users, Alice and Bob, using the provided command-line tools.
 
 **Complete Workflow Example: Alice encrypts a file and sends it securely to Bob**
 
-1.  **😒 (Both parties) Generate master key pairs:**
+1.  **(Setup) Create a Test Certificate Authority (CA):**
+    *We use `test_ca_util` to generate a root CA key and a self-signed certificate.*
+    ```bash
+    ./bin/test_ca_util gen-ca ca.key ca.pem
+    ```
+
+2.  **(Alice & Bob) Generate their master key pairs:**
     ```bash
     ./bin/hsc_cli gen-keypair alice
     ./bin/hsc_cli gen-keypair bob
     ```
+    *This creates `alice.key`, `alice.pub`, `bob.key`, and `bob.pub`.*
 
-2.  **☺️ (Both parties) Generate CSRs and obtain certificates:** (Assuming a CA has issued `alice.pem` and `bob.pem`)
+3.  **(Alice & Bob) Generate Certificate Signing Requests (CSRs):**
     ```bash
     ./bin/hsc_cli gen-csr alice.key "alice@example.com"
-    # (Send alice.csr to a CA to get alice.pem)
+    ./bin/hsc_cli gen-csr bob.key "bob@example.com"
     ```
+    *This creates `alice.csr` and `bob.csr`.*
 
-3.  **🤨 (Alice) Verify Bob's certificate:** (Assuming `ca.pem` is the trusted root CA certificate)
+4.  **(CA) Sign the CSRs to issue certificates:**
+    *The CA uses its private key (`ca.key`) and certificate (`ca.pem`) to sign the CSRs.*
+    ```bash
+    ./bin/test_ca_util sign alice.csr ca.key ca.pem alice.pem
+    ./bin/test_ca_util sign bob.csr ca.key ca.pem bob.pem
+    ```
+    *Now Alice and Bob have their official certificates, `alice.pem` and `bob.pem`.*
+
+5.  **(Alice) Verify Bob's certificate before sending:**
+    *Alice uses the trusted CA certificate (`ca.pem`) to verify Bob's identity.*
     ```bash
     ./bin/hsc_cli verify-cert bob.pem --ca ca.pem --user "bob@example.com"
     ```
-    > **Tip:** Options with values (like `--ca` and `--user`) can now be listed in any order.
 
-4.  **😑 (Alice) Encrypt a file for Bob:**
+6.  **(Alice) Encrypt a file for Bob:**
+    *Alice encrypts `secret.txt` using her private key (`alice.key`) and Bob's public key (extracted from `bob.pem`).*
     ```bash
     echo "This is top secret information." > secret.txt
     ./bin/hsc_cli encrypt secret.txt --to bob.pem --from alice.key
     ```
-    Now Alice can send `secret.hsc` and her own certificate `alice.pem` to Bob.
+    *This creates `secret.txt.hsc`. Alice can now send `secret.txt.hsc` and her certificate `alice.pem` to Bob.*
 
-5.  **😉 (Bob) Decrypt the file upon receipt:**
+7.  **(Bob) Decrypt the file upon receipt:**
+    *Bob uses his private key (`bob.key`) and Alice's public key (from `alice.pem`) to decrypt the file.*
     ```bash
-    # Bob can also swap the order of --from and --to
-    ./bin/hsc_cli decrypt secret.hsc --to bob.key --from alice.pem
-    cat secret.decrypted
+    ./bin/hsc_cli decrypt secret.txt.hsc --to bob.key --from alice.pem
+    cat secret.txt.decrypted
     ```
 
 ### 5.2. As a Library in Your Project
@@ -178,33 +206,47 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     ```c
     // 1. Generate a one-time session key
     unsigned char session_key[HSC_SESSION_KEY_BYTES];
-    randombytes_buf(session_key, sizeof(session_key));
+    hsc_random_bytes(session_key, sizeof(session_key));
 
     // 2. Encrypt data with the session key using AEAD (for small data)
     const char* message = "Secret message";
-    size_t enc_buf_size = strlen(message) + HSC_AEAD_NONCE_BYTES + HSC_AEAD_TAG_BYTES;
+    size_t message_len = strlen(message);
+    size_t enc_buf_size = message_len + HSC_AEAD_OVERHEAD_BYTES;
     unsigned char* encrypted_data = malloc(enc_buf_size);
     unsigned long long encrypted_data_len;
-    hsc_aead_encrypt(encrypted_data, &encrypted_data_len, 
-                     (const unsigned char*)message, strlen(message), session_key);
+    if (hsc_aead_encrypt(encrypted_data, &encrypted_data_len, 
+                     (const unsigned char*)message, message_len, session_key) != 0) {
+        // Handle encryption error
+    }
 
     // 3. Verify the recipient's (Bob's) certificate
-    if (hsc_verify_user_certificate(bob_cert_pem, ca_pem, "bob@example.com") != 0) {
+    if (hsc_verify_user_certificate(bob_cert_pem, ca_pem, "bob@example.com") != HSC_VERIFY_SUCCESS) {
         // Certificate is invalid, abort!
     }
 
     // 4. Extract Bob's public key from his certificate
     unsigned char bob_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_extract_public_key_from_cert(bob_cert_pem, bob_pk);
+    if (hsc_extract_public_key_from_cert(bob_cert_pem, bob_pk) != 0) {
+        // Handle extraction error
+    }
 
     // 5. Encapsulate the session key using Bob's public key and Alice's private key
     // (Assuming alice_kp is a loaded hsc_master_key_pair*)
-    unsigned char encapsulated_key[...]; size_t encapsulated_key_len;
-    hsc_encapsulate_session_key(encapsulated_key, &encapsulated_key_len, 
+    size_t enc_key_buf_size = HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES;
+    unsigned char* encapsulated_key = malloc(enc_key_buf_size);
+    size_t encapsulated_key_len;
+    if (hsc_encapsulate_session_key(encapsulated_key, &encapsulated_key_len, 
                                 session_key, sizeof(session_key),
-                                bob_pk, alice_kp);
+                                bob_pk, alice_kp) != 0) {
+        // Handle encapsulation error
+    }
     
     // 6. Send encrypted_data and encapsulated_key to Bob
+    // ...
+    
+    // 7. Cleanup
+    free(encrypted_data);
+    free(encapsulated_key);
     ```
 
 3.  **Recipient (Bob) Decrypts Data:**
@@ -218,11 +260,12 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     unsigned char* dec_session_key = hsc_secure_alloc(HSC_SESSION_KEY_BYTES);
     if (hsc_decapsulate_session_key(dec_session_key, encapsulated_key, enc_key_len,
                                     alice_pk, bob_kp) != 0) {
-        // Decapsulation failed!
+        // Decapsulation failed! Key/data mismatch or tampered.
     }
 
     // 3. Use the recovered session key to decrypt the data
-    unsigned char final_message[...]; unsigned long long final_len;
+    unsigned char* final_message = malloc(encrypted_data_len);
+    unsigned long long final_len;
     if (hsc_aead_decrypt(final_message, &final_len,
                          encrypted_data, encrypted_data_len, dec_session_key) != 0) {
         // Decryption failed! Data may have been tampered with.
@@ -230,9 +273,10 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
 
     // 4. Securely free the session key after use
     hsc_secure_free(dec_session_key);
+    free(final_message);
     ```
 
-## 6. 😶 Deep Dive: Technical Architecture
+## 6. Deep Dive: Technical Architecture
 
 The core of this project is a Hybrid Encryption model, which combines the advantages of asymmetric and symmetric cryptography to achieve both secure and efficient data transmission.
 
@@ -241,9 +285,9 @@ The core of this project is a Hybrid Encryption model, which combines the advant
 ```
 SENDER (ALICE)                                           RECIPIENT (BOB)
 ========================================================================
-[ Plaintext ] -> Generates [ Session Key ]
-                    |             |
-(Symmetric Encrypt) <---'             '-> (Asymmetric Encapsulate) using: Bob's Pubkey, Alice's Privkey
+[ Plaintext ] ------> Generates [ Session Key ]
+                          |             |
+(Symmetric Encrypt) <-----'             '-> (Asymmetric Encapsulate) using: Bob's Pubkey, Alice's Privkey
      |                                          |
 [ Encrypted Data ]                         [ Encapsulated Session Key ]
      |                                          |
@@ -267,9 +311,10 @@ SENDER (ALICE)                                           RECIPIENT (BOB)
       [ Recovered Session Key ] <--------$----' (Symmetric Decrypt)
            |
            v
-      [ Plaintext ]```
+      [ Plaintext ]
+```
 
-## 7. 😄 Advanced Configuration: Enhancing Security via Environment Variables
+## 7. Advanced Configuration: Enhancing Security via Environment Variables
 
 To adapt to future hardware and security requirements without modifying the code, this project supports **increasing** the computational cost of the key derivation function (Argon2id) via environment variables.
 
@@ -278,7 +323,7 @@ To adapt to future hardware and security requirements without modifying the code
 
 **Important Security Note:** This feature can **only be used to increase security parameters**. If the values set in the environment variables are lower than the minimum security baseline built into the project, the program will automatically ignore these insecure values and enforce the built-in minimums.
 
-**New Usage Example:**
+**Usage Example:**
 
 ```bash
 # Example: Increase the operations limit to 10 and the memory limit to 512MB.
@@ -287,11 +332,11 @@ To adapt to future hardware and security requirements without modifying the code
 export HSC_ARGON2_OPSLIMIT=10
 export HSC_ARGON2_MEMLIMIT=536870912
 
-# Running the program in a shell with these variables set will automatically use these stronger parameters.
+# Running any program in a shell with these variables set will automatically use these stronger parameters.
 ./bin/hsc_cli gen-keypair my_strong_key
 ```
 
-## 8. 😀 Core API Reference (`include/hsc_kernel.h`)
+## 8. Core API Reference (`include/hsc_kernel.h`)
 
 ### Initialization & Cleanup
 | Function | Description |
@@ -341,15 +386,15 @@ export HSC_ARGON2_MEMLIMIT=536870912
 | `void* hsc_secure_alloc(size_t size)` | Allocates a protected, non-swappable block of memory. |
 | `void hsc_secure_free(void* ptr)` | Securely wipes and frees a protected block of memory. |
 
-## 9. 🥳 Contributing
+## 9. Contributing
 
 We welcome contributions of all forms! If you find a bug, have a feature suggestion, or want to improve the documentation, please feel free to submit a Pull Request or create an Issue.
 
-## 10. 🥺 Certificate Description
+## 10. Certificate Description
 
 This project uses the **X.509 v3** certificate system to bind a public key to a user identity (e.g., `alice@example.com`), thereby establishing trust. The certificate validation process includes **signature chain verification**, **validity period check**, **subject identity verification**, and **revocation status check (OCSP)**, all under a strict "Fail-Closed" policy.
 
-## 11. 🥸 License - Dual-License Model
+## 11. License - Dual-License Model
 
 This project is distributed under a **Dual-License** model:
 
