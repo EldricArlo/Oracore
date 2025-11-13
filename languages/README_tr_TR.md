@@ -144,7 +144,8 @@ sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-d
     ```bash
     echo "This is top secret information." > secret.txt
     ./bin/hsc_cli encrypt secret.txt --to bob.pem --from alice.key
-    ```    Artık Alice `secret.hsc` dosyasını ve kendi sertifikası olan `alice.pem`'i Bob'a gönderebilir.
+    ```
+   Artık Alice `secret.hsc` dosyasını ve kendi sertifikası olan `alice.pem`'i Bob'a gönderebilir.
 
 5.  **😉 (Bob) Dosyayı aldıktan sonra şifresini çözer:**
     ```bash
@@ -358,5 +359,6 @@ Açık kaynaklı projeler, akademik araştırmalar ve kişisel öğrenim için u
 
 ### 2. Ticari Lisans
 Herhangi bir kapalı kaynaklı ticari uygulama, ürün veya hizmet için uygundur. AGPLv3'ün açık kaynak şartlarına bağlı kalmak istemiyorsanız, bir ticari lisans almanız gerekir.
+
 
 **Ticari bir lisans almak için lütfen iletişime geçin: `eldric520lol@gmail.com`**
