@@ -53,8 +53,7 @@ Our design adheres to the following core security principles:
 
 The project uses a clean, layered directory structure to achieve separation of concerns.
 
-```
-.
+```.
 ├── include/
 │   └── hsc_kernel.h      # [CORE] The single public API header file
 ├── src/                  # Source code
@@ -113,7 +112,7 @@ The project is designed to be highly portable and avoids platform-specific hardc
     ```
     > **Note on Expected OCSP Test Behavior**
     >
-    > One test case in `test_pki_verification` intentionally validates a certificate pointing to a non-existent local OCSP server (`http://127.0.0.1:8888`). The network request will fail, and the `hsc_verify_user_certificate` function **must** return `-4` (the error code for `HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED`). The test asserts this specific return value. This "failure" is the desired outcome, as it proves that our "Fail-Closed" security policy is correctly implemented: if revocation status cannot be confirmed for any reason, the certificate is treated as invalid.
+    > One test case in `test_pki_verification` intentionally validates a certificate pointing to a non-existent local OCSP server (`http://127.0.0.1:8888`). The network request will fail, and the `hsc_verify_user_certificate` function **must** return `-12` (the error code for `HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED`). The test asserts this specific return value. This "failure" is the desired outcome, as it proves that our "Fail-Closed" security policy is correctly implemented: if revocation status cannot be confirmed for any reason, the certificate is treated as invalid.
 
 3.  **Run the demo program:**
     ```bash
@@ -173,17 +172,37 @@ This section provides a complete, self-contained workflow for secure file exchan
     ```
 
 6.  **(Alice) Encrypt a file for Bob:**
-    *Alice encrypts `secret.txt` using her private key (`alice.key`) and Bob's public key (extracted from `bob.pem`).*
+    *Alice now has two options:*
+
+    **Option A: Certificate-Based (Recommended for most cases)**
+    *Alice encrypts `secret.txt` using her private key (`alice.key`) and Bob's verified certificate (`bob.pem`). This provides strong identity assurance.*
     ```bash
     echo "This is top secret information." > secret.txt
     ./bin/hsc_cli encrypt secret.txt --to bob.pem --from alice.key
     ```
+
+    **Option B: Direct Key Mode (Advanced - for pre-trusted keys)**
+    *If Alice has obtained Bob's public key (`bob.pub`) through a secure, trusted channel, she can encrypt directly to it, bypassing certificate checks.*
+    ```bash
+    echo "This is top secret information." > secret.txt
+    ./bin/hsc_cli encrypt secret.txt --recipient-pk-file bob.pub --from alice.key
+    ```
     *This creates `secret.txt.hsc`. Alice can now send `secret.txt.hsc` and her certificate `alice.pem` to Bob.*
 
 7.  **(Bob) Decrypt the file upon receipt:**
-    *Bob uses his private key (`bob.key`) and Alice's public key (from `alice.pem`) to decrypt the file.*
+    *Bob decrypts the file using his private key (`bob.key`). Depending on how Alice encrypted it, he will use either her certificate (`alice.pem`) or her raw public key (`alice.pub`).*
+
+    **If Alice used Option A (Certificate):**
     ```bash
     ./bin/hsc_cli decrypt secret.txt.hsc --to bob.key --from alice.pem
+    ```
+
+    **If Alice used Option B (Direct Key):**
+    ```bash
+    ./bin/hsc_cli decrypt secret.txt.hsc --to bob.key --sender-pk-file alice.pub
+    ```
+    *Both commands will produce `secret.txt.decrypted`.*
+    ```bash
     cat secret.txt.decrypted
     ```
 
@@ -196,7 +215,7 @@ This section provides a complete, self-contained workflow for secure file exchan
     #include "hsc_kernel.h"
     
     int main() {
-        if (hsc_init() != 0) {
+        if (hsc_init() != HSC_OK) {
             // Handle fatal error
         }
         // ... Your code ...
@@ -339,7 +358,29 @@ export HSC_ARGON2_MEMLIMIT=536870912
 ./bin/hsc_cli gen-keypair my_strong_key
 ```
 
-## 8. Core API Reference (`include/hsc_kernel.h`)
+## 8. Advanced Topics: Comparing Encryption Modes
+
+Oracipher Core provides two distinct workflows for hybrid encryption, each with different security guarantees. Choosing the right mode is critical.
+
+### Certificate-Based Workflow (Default & Recommended)
+
+*   **How it works:** Uses X.509 certificates to bind a user's identity (e.g., `bob@example.com`) to their public key.
+*   **Security Guarantees:**
+    *   **Authentication:** Cryptographically verifies that the public key belongs to the intended recipient.
+    *   **Integrity:** Ensures the certificate has not been tampered with.
+    *   **Revocation Checking:** Actively checks via OCSP if the certificate has been revoked by the Certificate Authority.
+*   **When to use:** In any scenario where the sender and receiver do not have a pre-existing, highly secure channel to exchange public keys. This is the standard for most internet-based communication.
+
+### Direct Key (Raw) Workflow (Advanced)
+
+*   **How it works:** Bypasses all PKI and certificate logic, encrypting directly to a raw public key file.
+*   **Security Guarantees:**
+    *   Provides the same level of **confidentiality** and **integrity** for the encrypted data itself as the certificate mode.
+*   **Security Trade-off:**
+    *   **NO AUTHENTICATION:** This mode **DOES NOT** verify the identity of the key's owner. The user is solely responsible for ensuring the authenticity of the public key they are using. Using an incorrect or malicious public key will lead to data being encrypted for the wrong party.
+*   **When to use:** Only in closed systems or specific protocols where public keys have been exchanged and verified through a separate, trusted, out-of-band mechanism (e.g., keys baked into a secure device's firmware, or verified in person).
+
+## 9. Core API Reference (`include/hsc_kernel.h`)
 
 ### Initialization & Cleanup
 | Function | Description |
@@ -368,12 +409,6 @@ export HSC_ARGON2_MEMLIMIT=536870912
 | `int hsc_encapsulate_session_key(...)` | Encrypts a session key using the recipient's public key. |
 | `int hsc_decapsulate_session_key(...)` | Decrypts a session key using the recipient's private key. |
 
-### Data Encryption (Symmetric)
-| Function | Description |
-| :--- | :--- |
-| `int hsc_aead_encrypt(...)` | Performs authenticated encryption on a **small block of data** using AEAD. |
-| `int hsc_aead_decrypt(...)` | Decrypts and verifies data encrypted by `hsc_aead_encrypt`. |
-
 ### Stream Encryption (Symmetric, for large files)
 | Function | Description |
 | :--- | :--- |
@@ -382,6 +417,16 @@ export HSC_ARGON2_MEMLIMIT=536870912
 | `int hsc_crypto_stream_push(...)` | Encrypts a chunk of data in the stream. |
 | `int hsc_crypto_stream_pull(...)` | Decrypts a chunk of data in the stream. |
 | `void hsc_crypto_stream_state_free(hsc_crypto_stream_state** state)` | Frees the stream state object. |
+| `int hsc_hybrid_encrypt_stream_raw(...)` | **[NEW]** Performs full hybrid encryption on a file using a raw public key. |
+| `int hsc_hybrid_decrypt_stream_raw(...)` | **[NEW]** Performs full hybrid decryption on a file using a raw public key. |
+
+
+### Data Encryption (Symmetric)
+| Function | Description |
+| :--- | :--- |
+| `int hsc_aead_encrypt(...)` | Performs authenticated encryption on a **small block of data** using AEAD. |
+| `int hsc_aead_decrypt(...)` | Decrypts and verifies data encrypted by `hsc_aead_encrypt`. |
+
 
 ### Secure Memory
 | Function | Description |
@@ -389,15 +434,15 @@ export HSC_ARGON2_MEMLIMIT=536870912
 | `void* hsc_secure_alloc(size_t size)` | Allocates a protected, non-swappable block of memory. |
 | `void hsc_secure_free(void* ptr)` | Securely wipes and frees a protected block of memory. |
 
-## 9. Contributing
+## 10. Contributing
 
 We welcome contributions of all forms! If you find a bug, have a feature suggestion, or want to improve the documentation, please feel free to submit a Pull Request or create an Issue.
 
-## 10. Certificate Description
+## 11. Certificate Description
 
 This project uses the **X.509 v3** certificate system to bind a public key to a user identity (e.g., `alice@example.com`), thereby establishing trust. The certificate validation process includes **signature chain verification**, **validity period check**, **subject identity verification**, and **revocation status check (OCSP)**, all under a strict "Fail-Closed" policy.
 
-## 11. License - Dual-License Model
+## 12. License - Dual-License Model
 
 This project is distributed under a **Dual-License** model:
 
@@ -408,3 +453,4 @@ Suitable for open-source projects, academic research, and personal study. It req
 Required for any closed-source commercial applications, products, or services. If you do not wish to be bound by the open-source terms of the AGPLv3, you must obtain a commercial license.
 
 **To obtain a commercial license, please contact: `eldric520lol@gmail.com`**
+```

@@ -100,6 +100,35 @@ void hsc_crypto_stream_state_free(hsc_crypto_stream_state** state);
 int hsc_crypto_stream_push(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, const unsigned char* in, size_t in_len, uint8_t tag);
 int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, unsigned char* tag, const unsigned char* in, size_t in_len);
 
+// --- [新增] 核心API函数：高级混合加解密 (原始密钥模式) ---
+// 警告：这些函数不提供身份验证，调用者必须自行确保密钥的真实性。
+
+/**
+ * @brief [原始模式] 使用接收者的原始公钥和发送者的原始密钥对，对一个文件进行流式混合加密。
+ * @param output_path 加密后输出文件的路径。
+ * @param input_path  要加密的源文件路径。
+ * @param recipient_pk 指向接收者原始公钥的指针 (HSC_MASTER_PUBLIC_KEY_BYTES)。
+ * @param sender_kp    指向发送者主密钥对的指针。
+ * @return 成功返回 HSC_OK，失败返回相应的错误码。
+ */
+int hsc_hybrid_encrypt_stream_raw(const char* output_path,
+                                    const char* input_path,
+                                    const unsigned char* recipient_pk,
+                                    const hsc_master_key_pair* sender_kp);
+
+/**
+ * @brief [原始模式] 使用接收者的原始密钥对和发送者的原始公钥，对一个文件进行流式混合解密。
+ * @param output_path 解密后输出文件的路径。
+ * @param input_path  要解密的源文件路径。
+ * @param sender_pk   指向发送者原始公key的指针 (HSC_MASTER_PUBLIC_KEY_BYTES)。
+ * @param recipient_kp 指向接收者主密钥对的指针。
+ * @return 成功返回 HSC_OK，失败返回相应的错误码。
+ */
+int hsc_hybrid_decrypt_stream_raw(const char* output_path,
+                                    const char* input_path,
+                                    const unsigned char* sender_pk,
+                                    const hsc_master_key_pair* recipient_kp);
+
 
 // --- 核心API函数：单次对称加解密 (适用于小数据) ---
 int hsc_aead_encrypt(unsigned char* ciphertext, unsigned long long* ciphertext_len,
