@@ -44,7 +44,8 @@ void print_usage(const char* prog_name) {
     fprintf(stderr, "  decrypt <file.hsc> --from <sender-cert> --to <recipient-priv-key>\n");
 }
 
-unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
+// [修改] read_variable_size_file 仅用于读取密钥和证书等小文件
+unsigned char* read_small_file(const char* filename, size_t* out_len) {
     FILE* f;
     bool is_stdin = (strcmp(filename, "-") == 0);
 
@@ -57,62 +58,40 @@ unsigned char* read_variable_size_file(const char* filename, size_t* out_len) {
             return NULL;
         }
     }
-
-    unsigned char* buffer = NULL;
-    size_t total_read = 0;
-    size_t capacity = 0;
     
-    while (true) {
-        if (capacity < total_read + HSC_FILE_IO_CHUNK_SIZE) {
-            size_t new_capacity = (capacity == 0) ? HSC_FILE_IO_CHUNK_SIZE : capacity * 2;
-            unsigned char* new_buffer = realloc(buffer, new_capacity);
-            if (!new_buffer) {
-                fprintf(stderr, "错误: 读取文件时内存分配失败。\n");
-                free(buffer);
-                if (!is_stdin) fclose(f);
-                return NULL;
-            }
-            buffer = new_buffer;
-            capacity = new_capacity;
-        }
+    // 对于小文件，我们先获取大小
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
 
-        size_t bytes_to_read = capacity - total_read;
-        size_t bytes_read = fread(buffer + total_read, 1, bytes_to_read, f);
-        total_read += bytes_read;
+    if (file_size < 0 || file_size > 1024 * 1024) { // 设置1MB的上限
+        fprintf(stderr, "错误: 文件过大或无法读取大小: %s\n", filename);
+        if(!is_stdin) fclose(f);
+        return NULL;
+    }
 
-        if (bytes_read < bytes_to_read) {
-            if (ferror(f)) {
-                perror("读取文件时发生错误");
-                free(buffer);
-                if (!is_stdin) fclose(f);
-                return NULL;
-            }
-            break;
-        }
+    unsigned char* buffer = malloc(file_size + 1);
+    if (!buffer) {
+        fprintf(stderr, "错误: 内存分配失败\n");
+        if(!is_stdin) fclose(f);
+        return NULL;
+    }
+
+    size_t bytes_read = fread(buffer, 1, file_size, f);
+    if (bytes_read != (size_t)file_size) {
+        fprintf(stderr, "错误: 读取文件失败: %s\n", filename);
+        free(buffer);
+        if(!is_stdin) fclose(f);
+        return NULL;
     }
     
     if (!is_stdin) {
         fclose(f);
     }
 
-    unsigned char* final_buffer = realloc(buffer, total_read + 1);
-    if (!final_buffer && total_read > 0) {
-        buffer[total_read] = '\0';
-        *out_len = total_read;
-        return buffer;
-    }
-    
-    if (!final_buffer) {
-        final_buffer = malloc(1);
-        if (!final_buffer) {
-            fprintf(stderr, "错误: 为空内容分配缓冲区失败。\n");
-            return NULL;
-        }
-    }
-    
-    final_buffer[total_read] = '\0';
-    *out_len = total_read;
-    return final_buffer;
+    buffer[bytes_read] = '\0';
+    *out_len = bytes_read;
+    return buffer;
 }
 
 bool write_file_bytes(const char* filename, const void* data, size_t len) {
@@ -149,16 +128,8 @@ int handle_gen_keypair(int argc, char* argv[]) {
     const char* basename = argv[2];
     char pub_path[FILENAME_MAX], priv_path[FILENAME_MAX];
     
-    int written_pub = snprintf(pub_path, sizeof(pub_path), "%s.pub", basename);
-    if (written_pub < 0 || (size_t)written_pub >= sizeof(pub_path)) {
-        fprintf(stderr, "错误: 生成的公钥文件名过长: %s.pub\n", basename);
-        return 1;
-    }
-    int written_priv = snprintf(priv_path, sizeof(priv_path), "%s.key", basename);
-    if (written_priv < 0 || (size_t)written_priv >= sizeof(priv_path)) {
-        fprintf(stderr, "错误: 生成的私钥文件名过长: %s.key\n", basename);
-        return 1;
-    }
+    snprintf(pub_path, sizeof(pub_path), "%s.pub", basename);
+    snprintf(priv_path, sizeof(priv_path), "%s.key", basename);
     
     int ret = 1;
     hsc_master_key_pair* kp = hsc_generate_master_key_pair();
@@ -234,8 +205,8 @@ int handle_verify_cert(int argc, char* argv[]) {
 
     int ret = 1;
     unsigned char* user_cert_pem = NULL, *ca_cert_pem = NULL; size_t cert_len, ca_len;
-    user_cert_pem = read_variable_size_file(cert_path, &cert_len);
-    ca_cert_pem = read_variable_size_file(ca_path, &ca_len);
+    user_cert_pem = read_small_file(cert_path, &cert_len);
+    ca_cert_pem = read_small_file(ca_path, &ca_len);
     if (!user_cert_pem || !ca_cert_pem) { goto cleanup; }
     
     printf("开始验证证书 %s ...\n", cert_path);
@@ -257,10 +228,10 @@ cleanup:
 }
 
 
-// --- 加解密函数的重构辅助函数 ---
+// --- [新增] 加解密流式处理辅助函数 ---
 
 /**
- * @brief [重构] 封装了加密过程中的文件I/O和流式加密循环。
+ * @brief 封装了加密过程中的文件I/O和流式加密循环。
  * @return 成功返回 true, 失败返回 false。
  */
 static bool _perform_stream_encryption(FILE* f_in, FILE* f_out, hsc_crypto_stream_state* st) {
@@ -289,6 +260,46 @@ static bool _perform_stream_encryption(FILE* f_in, FILE* f_out, hsc_crypto_strea
     
     return true;
 }
+
+/**
+ * @brief 封装了解密过程中的文件I/O和流式解密循环。
+ * @param stream_finished_flag (输出) 一个指向布尔值的指针，用于指示流是否被正确终止。
+ * @return 成功返回 true, 失败返回 false。
+ */
+static bool _perform_stream_decryption(FILE* f_in, FILE* f_out, hsc_crypto_stream_state* st, bool* stream_finished_flag) {
+    unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE + HSC_STREAM_CHUNK_OVERHEAD];
+    unsigned char buf_out[HSC_FILE_IO_CHUNK_SIZE];
+    size_t bytes_read;
+    unsigned long long out_len;
+    unsigned char tag;
+    *stream_finished_flag = false;
+    
+    do {
+        bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
+        if (ferror(f_in)) {
+            perror("读取输入文件时发生错误");
+            return false;
+        }
+        if (bytes_read == 0 && feof(f_in)) break;
+
+        if (hsc_crypto_stream_pull(st, buf_out, &out_len, &tag, buf_in, bytes_read) != 0) {
+            fprintf(stderr, "错误: 解密文件块失败！数据可能被篡改。\n");
+            return false;
+        }
+        if (tag == HSC_STREAM_TAG_FINAL) {
+            *stream_finished_flag = true;
+        }
+        if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
+            fprintf(stderr, "错误: 写入解密数据块失败。可能磁盘已满。\n");
+            return false;
+        }
+    } while (!feof(f_in));
+    
+    return true;
+}
+
+
+// --- [重构] 加密与解密主函数 ---
 
 int handle_hybrid_encrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
@@ -331,22 +342,32 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     hsc_random_bytes(session_key, sizeof(session_key));
 
     size_t cert_len;
-    recipient_cert_pem = read_variable_size_file(recipient_cert_file, &cert_len);
+    recipient_cert_pem = read_small_file(recipient_cert_file, &cert_len);
     if (!recipient_cert_pem) { goto cleanup; }
     
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert((const char*)recipient_cert_pem, recipient_pk) != 0) goto cleanup;
+    if (hsc_extract_public_key_from_cert((const char*)recipient_cert_pem, recipient_pk) != 0) {
+        fprintf(stderr, "错误: 无法从接收者证书 '%s' 中提取公钥。\n", recipient_cert_file);
+        goto cleanup;
+    }
     
     sender_kp = hsc_load_master_key_pair_from_private_key(sender_priv_file);
-    if (!sender_kp) goto cleanup;
+    if (!sender_kp) {
+        fprintf(stderr, "错误: 无法从 '%s' 加载发送者私钥。\n", sender_priv_file);
+        goto cleanup;
+    }
     
     unsigned char encapsulated_key[HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES];
     size_t actual_encapsulated_len;
-    if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_kp) != 0) goto cleanup;
+    if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len, session_key, sizeof(session_key), recipient_pk, sender_kp) != 0) {
+        fprintf(stderr, "错误: 封装会话密钥失败。\n");
+        goto cleanup;
+    }
 
     f_in = fopen(in_file, "rb"); if (!f_in) { perror("无法打开输入文件"); goto cleanup; }
     f_out = fopen(out_file, "wb"); if (!f_out) { perror("无法创建输出文件"); goto cleanup; }
     
+    // 写入文件头: [封装的密钥长度 (8字节) | 封装的密钥 | 流加密头]
     unsigned char key_len_buf[8]; store64_le(key_len_buf, actual_encapsulated_len);
     if (fwrite(key_len_buf, 1, sizeof(key_len_buf), f_out) != sizeof(key_len_buf) ||
         fwrite(encapsulated_key, 1, actual_encapsulated_len, f_out) != actual_encapsulated_len) {
@@ -355,18 +376,23 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     
     unsigned char stream_header[HSC_STREAM_HEADER_BYTES];
     st = hsc_crypto_stream_state_new_push(stream_header, session_key);
-    if (st == NULL) goto cleanup;
+    if (st == NULL) {
+        fprintf(stderr, "错误: 初始化流加密状态失败。\n");
+        goto cleanup;
+    }
     
     if (fwrite(stream_header, 1, sizeof(stream_header), f_out) != sizeof(stream_header)) {
         fprintf(stderr, "错误: 写入流加密头失败。可能磁盘已满。\n"); goto cleanup;
     }
     
+    // [核心修复] 调用流式处理函数
     if (!_perform_stream_encryption(f_in, f_out, st)) {
         goto cleanup;
     }
     
     printf("✅ 混合加密完成！\n  输出文件 -> %s\n", out_file);
     ret = 0;
+
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
@@ -378,42 +404,6 @@ cleanup:
     return ret;
 }
 
-/**
- * @brief [重构] 封装了解密过程中的文件I/O和流式解密循环。
- * @param stream_finished_flag (输出) 一个指向布尔值的指针，用于指示流是否被正确终止。
- * @return 成功返回 true, 失败返回 false。
- */
-static bool _perform_stream_decryption(FILE* f_in, FILE* f_out, hsc_crypto_stream_state* st, bool* stream_finished_flag) {
-    unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE + HSC_STREAM_CHUNK_OVERHEAD];
-    unsigned char buf_out[HSC_FILE_IO_CHUNK_SIZE];
-    size_t bytes_read;
-    unsigned long long out_len;
-    unsigned char tag;
-    *stream_finished_flag = false;
-    
-    do {
-        bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in);
-        if (ferror(f_in)) {
-            perror("读取输入文件时发生错误");
-            return false;
-        }
-        if (bytes_read == 0 && feof(f_in)) break;
-
-        if (hsc_crypto_stream_pull(st, buf_out, &out_len, &tag, buf_in, bytes_read) != 0) {
-            fprintf(stderr, "错误: 解密文件块失败！数据可能被篡改。\n");
-            return false;
-        }
-        if (tag == HSC_STREAM_TAG_FINAL) {
-            *stream_finished_flag = true;
-        }
-        if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
-            fprintf(stderr, "错误: 写入解密数据块失败。可能磁盘已满。\n");
-            return false;
-        }
-    } while (!feof(f_in));
-    
-    return true;
-}
 
 int handle_hybrid_decrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
@@ -456,6 +446,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     unsigned char dec_session_key[HSC_SESSION_KEY_BYTES];
     f_in = fopen(in_file, "rb"); if (!f_in) { perror("无法打开输入文件"); goto cleanup; }
     
+    // 读取文件头
     unsigned char key_len_buf[8];
     if (fread(key_len_buf, 1, sizeof(key_len_buf), f_in) != sizeof(key_len_buf)) {
         fprintf(stderr, "错误: 读取文件失败，文件可能已损坏或不是有效的 .hsc 文件。\n"); goto cleanup;
@@ -472,13 +463,19 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     }
     
     size_t cert_len;
-    sender_cert_pem = read_variable_size_file(sender_cert_file, &cert_len);
+    sender_cert_pem = read_small_file(sender_cert_file, &cert_len);
     if (!sender_cert_pem) goto cleanup;
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert((const char*)sender_cert_pem, sender_pk) != 0) goto cleanup;
+    if (hsc_extract_public_key_from_cert((const char*)sender_cert_pem, sender_pk) != 0) {
+        fprintf(stderr, "错误: 无法从发送者证书 '%s' 中提取公钥。\n", sender_cert_file);
+        goto cleanup;
+    }
     
     recipient_kp = hsc_load_master_key_pair_from_private_key(recipient_priv_file);
-    if (!recipient_kp) goto cleanup;
+    if (!recipient_kp) {
+        fprintf(stderr, "错误: 无法从 '%s' 加载接收者私钥。\n", recipient_priv_file);
+        goto cleanup;
+    }
     if (hsc_decapsulate_session_key(dec_session_key, enc_key, enc_key_len, sender_pk, recipient_kp) != 0) {
         fprintf(stderr, "错误: 解封装会话密钥失败！可能是密钥错误或数据被篡改。\n"); goto cleanup;
     }
@@ -492,6 +489,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     st = hsc_crypto_stream_state_new_pull(stream_header, dec_session_key);
     if (st == NULL) { fprintf(stderr, "错误: 无效的流加密头部。可能是会话密钥错误。\n"); goto cleanup; }
     
+    // [核心修复] 调用流式处理函数
     bool stream_finished = false;
     if (!_perform_stream_decryption(f_in, f_out, st, &stream_finished)) {
         goto cleanup;
@@ -504,6 +502,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
 
     printf("✅ 混合解密完成！\n  解密文件 -> %s\n", out_file);
     ret = 0;
+
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
