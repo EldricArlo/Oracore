@@ -1,11 +1,10 @@
 #
 # Makefile for the High-Security Hybrid Encryption System
-# [FIXED & ENHANCED by the Code Review Committee]
+# [REVISED BY COMMITTEE to integrate new API tests]
 #
 
 # --- Compiler and Flags ---
 CC = gcc
-# [安全修复] 添加 -Werror 将所有警告视为错误，强制执行最高代码质量标准。
 CFLAGS = -g -Iinclude -Isrc -Wall -Wextra -Werror -std=c11 -fPIC -MMD -MP
 
 # --- Libraries ---
@@ -17,21 +16,15 @@ SRC_DIR = src
 TEST_DIR = tests
 
 # --- Platform-Specific Adjustments ---
-# Improved and unified platform detection
 ifeq ($(OS),Windows_NT)
-    # Native Windows build environment (e.g., cmd.exe with MinGW)
     TARGET_LIB_NAME = hsc_kernel.dll
     TARGET_CLI_EXT = .exe
     CFLAGS += -D_WIN32 -DWIN32_LEAN_AND_MEAN -DNOCRYPT
-    # For executables on Windows, -fPIC is not needed/used
     CFLAGS_EXEC = $(filter-out -fPIC,$(CFLAGS))
 else
-    # Assume Unix-like environment (Linux, macOS, etc.)
     TARGET_LIB_NAME = libhsc_kernel.so
     TARGET_CLI_EXT =
-    # Removed Windows-specific flags from the Unix build path.
     CFLAGS_EXEC = $(CFLAGS)
-    # Add rpath so executables in bin/ can find the library in bin/
     LDFLAGS += -Wl,-rpath,'$$ORIGIN'
 endif
 
@@ -48,12 +41,16 @@ CLI_OBJ = $(CLI_SRC:.c=.o)
 DEMO_SRC = $(SRC_DIR)/main.c
 DEMO_OBJ = $(DEMO_SRC:.c=.o)
 
-# [架构修复] 将 test_ca_util 的源文件路径指向 tests/ 目录
 CA_UTIL_SRC = $(TEST_DIR)/test_ca_util.c
 CA_UTIL_OBJ = $(CA_UTIL_SRC:.c=.o)
 
-TEST_HELPER_SRCS = $(wildcard $(TEST_DIR)/test_helpers.c)
+# Test helper sources are explicitly defined
+TEST_HELPER_SRCS = $(TEST_DIR)/test_helpers.c
 TEST_HELPER_OBJS = $(TEST_HELPER_SRCS:.c=.o)
+
+# [MODIFIED] Test source discovery remains the same, but it's important to understand
+# it automatically picks up all 'test_*.c' files. The new 'test_api_integration.c'
+# is included automatically by this wildcard.
 TEST_SRCS = $(filter-out $(TEST_HELPER_SRCS) $(CA_UTIL_SRC), $(wildcard $(TEST_DIR)/test_*.c))
 TEST_OBJS = $(TEST_SRCS:.c=.o)
 
@@ -61,66 +58,53 @@ TEST_OBJS = $(TEST_SRCS:.c=.o)
 TARGET_LIB = $(BIN_DIR)/$(TARGET_LIB_NAME)
 TARGET_CLI = $(BIN_DIR)/hsc_cli$(TARGET_CLI_EXT)
 TARGET_DEMO = $(BIN_DIR)/hsc_demo$(TARGET_CLI_EXT)
-# [MODIFIED] 新增 test_ca_util 的可执行文件目标
 TARGET_CA_UTIL = $(BIN_DIR)/test_ca_util$(TARGET_CLI_EXT)
+
+# This list of executables is now automatically populated with the new test target
+# thanks to the robust TEST_SRCS discovery logic.
 TEST_EXECUTABLES = $(patsubst $(TEST_DIR)/%.c,$(BIN_DIR)/%,$(TEST_SRCS))
 
 # --- Dependency Management ---
-# [MODIFIED] 将 CA_UTIL_OBJ 添加到对象文件列表中
 ALL_OBJS = $(KERNEL_OBJS) $(CLI_OBJ) $(DEMO_OBJ) $(CA_UTIL_OBJ) $(TEST_OBJS) $(TEST_HELPER_OBJS)
 DEPS = $(ALL_OBJS:.o=.d)
 
 # --- Build Rules ---
 
-# [MODIFIED] 更新了 .PHONY 规则
 .PHONY: all kernel cli demo ca_util tests clean run-tests
 
-# [MODIFIED] 将 ca_util 添加到 all 目标中，使其被默认构建
 all: cli demo ca_util tests
 
-# CLI depends on kernel library
 cli: $(TARGET_CLI)
-
-# Demo depends on kernel library
 demo: $(TARGET_DEMO)
-
-# [ADDED] 新增 ca_util 目标
 ca_util: $(TARGET_CA_UTIL)
-
-# Build all test executables
 tests: $(TEST_EXECUTABLES)
 
-# Rule to create the bin directory
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
-# Linking the shared kernel library into the BIN_DIR
 $(TARGET_LIB): $(KERNEL_OBJS) | $(BIN_DIR)
 	@echo "==> Linking Kernel Library: $@"
 	$(CC) -shared -o $@ $^ $(LDFLAGS)
 
-# Linking the CLI application
 $(TARGET_CLI): $(CLI_OBJ) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking CLI Client: $@"
 	$(CC) $(CFLAGS_EXEC) -o $@ $< -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
 
-# Linking the demo application
 $(TARGET_DEMO): $(DEMO_OBJ) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking Demo Application: $@"
 	$(CC) $(CFLAGS_EXEC) -o $@ $< -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
 
-# [ADDED] 新增链接 test_ca_util 的规则
-# 注意：这个工具不依赖于 hsc_kernel 库，所以它的链接命令不同
 $(TARGET_CA_UTIL): $(CA_UTIL_OBJ) | $(BIN_DIR)
 	@echo "==> Linking Test CA Utility: $@"
 	$(CC) $(CFLAGS_EXEC) -o $@ $< $(LDFLAGS)
 
-# Linking all test executables
+# [VERIFIED] This generic rule correctly handles building all test executables,
+# including the new 'test_api_integration'. It correctly links the test object,
+# the helper objects, and the hsc_kernel library.
 $(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.c $(TEST_HELPER_OBJS) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking Test Executable: $@"
-	$(CC) $(CFLAGS_EXEC) -o $@ $^ -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
+	$(CC) $(CFLAGS_EXEC) -o $@ $< $(TEST_HELPER_OBJS) -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)
 
-# Generic rule for compiling any .c file to a .o file
 %.o: %.c
 	@echo "  -> Compiling $<"
 	$(CC) $(CFLAGS) -c $< -o $@

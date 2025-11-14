@@ -1,4 +1,4 @@
-// --- cli.c (REFACTORED) ---
+// --- cli.c (FINAL VERSION, FIXED BY COMMITTEE) ---
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,70 +18,125 @@ extern int optind;
 
 #include "hsc_kernel.h"
 
+// --- [COMMITTEE FIX START] 日志回调实现 ---
+
+/**
+ * @brief 命令行工具的日志处理函数。
+ *        此函数将作为回调被注册到 hsc_kernel 库中。
+ *        它负责根据日志级别格式化并打印所有来自库内部的日志消息。
+ * @param level 日志级别 (0: INFO, 1: WARN, 2: ERROR)。
+ * @param message 库传递过来的日志消息。
+ */
+static void cli_logger(int level, const char* message) {
+    switch (level) {
+        case 0: // INFO
+            fprintf(stdout, "%s\n", message);
+            break;
+        case 1: // WARNING
+            fprintf(stderr, "\033[33m[警告]\033[0m %s\n", message);
+            break;
+        case 2: // ERROR
+            fprintf(stderr, "\033[31m[错误]\033[0m %s\n", message);
+            break;
+        default:
+            fprintf(stderr, "[未知级别] %s\n", message);
+            break;
+    }
+}
+// --- [COMMITTEE FIX END] ---
+
+
 // --- [移除] 字节序处理辅助函数 store64_le / load64_le 已移至 hsc_kernel.c ---
 
 // --- 辅助函数 ---
 void print_usage(const char* prog_name) {
-    fprintf(stderr, "高安全性混合加密系统 v4.2 (流式处理版 CLI)\n\n");
+    fprintf(stderr, "高安全性混合加密系统 v4.3 (日志回调版 CLI)\n\n");
     fprintf(stderr, "用法: %s <命令> [参数...]\n\n", prog_name);
     fprintf(stderr, "命令列表:\n");
     fprintf(stderr, "  gen-keypair <basename>\n");
     fprintf(stderr, "  gen-csr <private-key-file> <username>\n");
     fprintf(stderr, "  verify-cert <cert-to-verify> --ca <ca-cert> --user <expected-user>\n");
-    fprintf(stderr, "  encrypt <file> --to <recipient-cert.pem> --from <sender.key>\n");
-    fprintf(stderr, "      (原始密钥模式) --recipient-pk-file <recipient.pub> --from <sender.key>\n");
+    fprintf(stderr, "  encrypt <file> --to <recipient-cert.pem> --from <sender.key> --ca <ca.pem> --user <user-cn>\n");
+    fprintf(stderr, "               [--no-verify] (危险: 跳过对接收者证书的验证)\n");
+    fprintf(stderr, "  (原始密钥模式) encrypt <file> --recipient-pk-file <recipient.pub> --from <sender.key>\n");
     fprintf(stderr, "  decrypt <file.hsc> --to <recipient.key> --from <sender-cert.pem>\n");
-    fprintf(stderr, "      (原始密钥模式) --to <recipient.key> --sender-pk-file <sender.pub>\n");
+    fprintf(stderr, "  (原始密钥模式) decrypt <file.hsc> --to <recipient.key> --sender-pk-file <sender.pub>\n");
 }
 
-// [修改] read_variable_size_file 仅用于读取密钥和证书等小文件
 unsigned char* read_small_file(const char* filename, size_t* out_len) {
     FILE* f;
     bool is_stdin = (strcmp(filename, "-") == 0);
 
     if (is_stdin) {
         f = stdin;
+        size_t capacity = 4096;
+        size_t size = 0;
+        unsigned char* buffer = malloc(capacity);
+        if (!buffer) {
+            fprintf(stderr, "错误: 内存分配失败\n");
+            return NULL;
+        }
+
+        size_t bytes_read;
+        while ((bytes_read = fread(buffer + size, 1, capacity - size, f)) > 0) {
+            size += bytes_read;
+            if (size == capacity) {
+                if (capacity > SIZE_MAX / 2) {
+                    fprintf(stderr, "错误: 输入文件过大\n");
+                    free(buffer);
+                    return NULL;
+                }
+                capacity *= 2;
+                unsigned char* new_buffer = realloc(buffer, capacity);
+                if (!new_buffer) {
+                    fprintf(stderr, "错误: 内存重分配失败\n");
+                    free(buffer);
+                    return NULL;
+                }
+                buffer = new_buffer;
+            }
+        }
+        buffer[size] = '\0';
+        *out_len = size;
+        return buffer;
+
     } else {
         f = fopen(filename, "rb");
         if (!f) {
             perror("无法打开文件");
             return NULL;
         }
-    }
-    
-    // 对于小文件，我们先获取大小
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
+        
+        fseek(f, 0, SEEK_END);
+        long file_size = ftell(f);
+        fseek(f, 0, SEEK_SET);
 
-    if (file_size < 0 || file_size > 1024 * 1024) { // 设置1MB的上限
-        fprintf(stderr, "错误: 文件过大或无法读取大小: %s\n", filename);
-        if(!is_stdin) fclose(f);
-        return NULL;
-    }
+        if (file_size < 0 || file_size > 1024 * 1024) { 
+            fprintf(stderr, "错误: 文件过大或无法读取大小: %s\n", filename);
+            fclose(f);
+            return NULL;
+        }
 
-    unsigned char* buffer = malloc(file_size + 1);
-    if (!buffer) {
-        fprintf(stderr, "错误: 内存分配失败\n");
-        if(!is_stdin) fclose(f);
-        return NULL;
-    }
+        unsigned char* buffer = malloc(file_size + 1);
+        if (!buffer) {
+            fprintf(stderr, "错误: 内存分配失败\n");
+            fclose(f);
+            return NULL;
+        }
 
-    size_t bytes_read = fread(buffer, 1, file_size, f);
-    if (bytes_read != (size_t)file_size) {
-        fprintf(stderr, "错误: 读取文件失败: %s\n", filename);
-        free(buffer);
-        if(!is_stdin) fclose(f);
-        return NULL;
-    }
-    
-    if (!is_stdin) {
+        size_t bytes_read = fread(buffer, 1, file_size, f);
+        if (bytes_read != (size_t)file_size) {
+            fprintf(stderr, "错误: 读取文件失败: %s\n", filename);
+            free(buffer);
+            fclose(f);
+            return NULL;
+        }
+        
         fclose(f);
+        buffer[bytes_read] = '\0';
+        *out_len = bytes_read;
+        return buffer;
     }
-
-    buffer[bytes_read] = '\0';
-    *out_len = bytes_read;
-    return buffer;
 }
 
 bool write_file_bytes(const char* filename, const void* data, size_t len) {
@@ -124,7 +179,7 @@ int handle_gen_keypair(int argc, char* argv[]) {
     int ret = 1;
     hsc_master_key_pair* kp = hsc_generate_master_key_pair();
     if (kp) {
-        if (hsc_save_master_key_pair(kp, pub_path, priv_path) == HSC_OK) { // [修改]
+        if (hsc_save_master_key_pair(kp, pub_path, priv_path) == HSC_OK) {
             printf("✅ 成功生成密钥对:\n  公钥 -> %s\n  私钥 -> %s\n", pub_path, priv_path);
             ret = 0;
         } else {
@@ -154,7 +209,7 @@ int handle_gen_csr(int argc, char* argv[]) {
         fprintf(stderr, "错误: 无法从 '%s' 加载私钥。\n", priv_path);
         goto cleanup;
     }
-    if (hsc_generate_csr(kp, user_cn, &csr_pem) != HSC_OK) { // [修改]
+    if (hsc_generate_csr(kp, user_cn, &csr_pem) != HSC_OK) {
         fprintf(stderr, "错误: 生成 CSR 失败。\n");
         goto cleanup;
     }
@@ -202,7 +257,6 @@ int handle_verify_cert(int argc, char* argv[]) {
     printf("开始验证证书 %s ...\n", cert_path);
     int result = hsc_verify_user_certificate((const char*)user_cert_pem, (const char*)ca_cert_pem, user_cn);
     
-    // [修改] 实现精细化的错误报告
     switch(result) {
         case HSC_OK:  
             printf("\033[32m[成功]\033[0m 证书所有验证项均通过。\n"); 
@@ -228,12 +282,6 @@ cleanup:
     free(user_cert_pem); free(ca_cert_pem); return ret;
 }
 
-
-// --- [移除] 加解密流式处理辅助函数已移至 hsc_kernel.c ---
-
-
-// --- [重构] 加密与解密主函数 ---
-
 int handle_hybrid_encrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
 
@@ -241,21 +289,30 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     const char* recipient_cert_file = NULL;
     const char* recipient_pk_file = NULL;
     const char* sender_priv_file = NULL;
+    const char* ca_path = NULL;
+    const char* user_cn = NULL;
+    bool no_verify_flag = false;
 
     static struct option long_options[] = {
         {"to",                required_argument, 0, 't'},
         {"from",              required_argument, 0, 'f'},
         {"recipient-pk-file", required_argument, 0, 'r'},
+        {"ca",                required_argument, 0, 'c'},
+        {"user",              required_argument, 0, 'u'},
+        {"no-verify",         no_argument,       0, 'n'},
         {0, 0, 0, 0}
     };
     
     int opt;
     optind = 3;
-    while ((opt = getopt_long(argc, argv, "t:f:r:", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "t:f:r:c:u:n", long_options, NULL)) != -1) {
         switch (opt) {
             case 't': recipient_cert_file = optarg; break;
             case 'f': sender_priv_file = optarg; break;
             case 'r': recipient_pk_file = optarg; break;
+            case 'c': ca_path = optarg; break;
+            case 'u': user_cn = optarg; break;
+            case 'n': no_verify_flag = true; break;
             default: print_usage(argv[0]); return 1;
         }
     }
@@ -276,11 +333,10 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     int ret = 1;
     hsc_master_key_pair* sender_kp = NULL;
     unsigned char* recipient_cert_pem = NULL;
+    unsigned char* ca_cert_pem = NULL;
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     
-    // 步骤 1: 确定接收者的公钥 (无论是从证书还是原始文件)
     if (recipient_pk_file) {
-        // --- 原始密钥模式 ---
         fprintf(stdout, "\n\033[33m[警告] 您正在使用原始公钥模式进行加密。\n       系统不会验证接收者身份，请确保您信任此公钥的来源。\033[0m\n\n");
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(recipient_pk_file, &pk_len);
@@ -292,27 +348,43 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
         memcpy(recipient_pk, pk_buf, HSC_MASTER_PUBLIC_KEY_BYTES);
         free(pk_buf);
     } else {
-        // --- 证书模式 ---
         size_t cert_len;
         recipient_cert_pem = read_small_file(recipient_cert_file, &cert_len);
         if (!recipient_cert_pem) { goto cleanup; }
-        
-        // 注意：在实际应用中，这里应该调用 hsc_verify_user_certificate
-        // 但为了工具的灵活性，我们仅提取公钥。验证步骤由用户通过 verify-cert 命令独立完成。
+
+        if (no_verify_flag) {
+            fprintf(stdout, "\n\033[31m[危险警告] 您已选择 --no-verify 选项。\n           系统将不会验证接收者证书的真实性、有效性或吊销状态。\n           请仅在完全信任此证书来源的情况下使用此选项。\033[0m\n\n");
+        } else {
+            if (!ca_path || !user_cn) {
+                fprintf(stderr, "错误: 使用证书加密时，必须提供 --ca 和 --user 参数进行验证。\n");
+                fprintf(stderr, "      如果您确认要跳过验证，请添加 --no-verify 标志。\n");
+                goto cleanup;
+            }
+            size_t ca_len;
+            ca_cert_pem = read_small_file(ca_path, &ca_len);
+            if (!ca_cert_pem) { goto cleanup; }
+
+            printf("正在验证接收者证书 '%s' ...\n", recipient_cert_file);
+            int verify_result = hsc_verify_user_certificate((const char*)recipient_cert_pem, (const char*)ca_cert_pem, user_cn);
+            if (verify_result != HSC_OK) {
+                fprintf(stderr, "错误: 接收者证书验证失败 (代码: %d)。加密操作已中止。\n", verify_result);
+                goto cleanup;
+            }
+            printf("✅ 接收者证书验证成功。\n");
+        }
+
         if (hsc_extract_public_key_from_cert((const char*)recipient_cert_pem, recipient_pk) != HSC_OK) {
             fprintf(stderr, "错误: 无法从接收者证书 '%s' 中提取公钥。\n", recipient_cert_file);
             goto cleanup;
         }
     }
     
-    // 步骤 2: 加载发送者私钥
     sender_kp = hsc_load_master_key_pair_from_private_key(sender_priv_file);
     if (!sender_kp) {
         fprintf(stderr, "错误: 无法从 '%s' 加载发送者私钥。\n", sender_priv_file);
         goto cleanup;
     }
     
-    // 步骤 3: 调用高级内核API执行完整的混合加密流程
     printf("正在加密 %s -> %s ...\n", in_file, out_file);
     int result = hsc_hybrid_encrypt_stream_raw(out_file, in_file, recipient_pk, sender_kp);
 
@@ -325,10 +397,10 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
 
 cleanup:
     free(recipient_cert_pem);
+    free(ca_cert_pem);
     hsc_free_master_key_pair(&sender_kp);
     return ret;
 }
-
 
 int handle_hybrid_decrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
@@ -374,9 +446,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     hsc_master_key_pair* recipient_kp = NULL;
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
 
-    // 步骤 1: 确定发送者的公钥
     if (sender_pk_file) {
-        // --- 原始密钥模式 ---
         fprintf(stdout, "\n\033[33m[警告] 您正在使用原始公钥模式进行解密。\n       系统不会验证发送者身份，请确保您信任此公钥的来源。\033[0m\n\n");
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(sender_pk_file, &pk_len);
@@ -388,7 +458,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         memcpy(sender_pk, pk_buf, HSC_MASTER_PUBLIC_KEY_BYTES);
         free(pk_buf);
     } else {
-        // --- 证书模式 ---
         size_t cert_len;
         sender_cert_pem = read_small_file(sender_cert_file, &cert_len);
         if (!sender_cert_pem) goto cleanup;
@@ -399,14 +468,12 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         }
     }
 
-    // 步骤 2: 加载接收者私钥
     recipient_kp = hsc_load_master_key_pair_from_private_key(recipient_priv_file);
     if (!recipient_kp) {
         fprintf(stderr, "错误: 无法从 '%s' 加载接收者私钥。\n", recipient_priv_file);
         goto cleanup;
     }
     
-    // 步骤 3: 调用高级内核API执行完整的混合解密流程
     printf("正在解密 %s -> %s ...\n", in_file, out_file);
     int result = hsc_hybrid_decrypt_stream_raw(out_file, in_file, sender_pk, recipient_kp);
 
@@ -431,9 +498,13 @@ cleanup:
 // --- Main 函数 ---
 int main(int argc, char* argv[]) {
     if (argc < 2) { print_usage(argv[0]); return 1; }
-    if (hsc_init() != HSC_OK) { // [修改]
+    if (hsc_init() != HSC_OK) {
         fprintf(stderr, "严重错误: 高安全内核库初始化失败！\n"); return 1;
     }
+    
+    // [COMMITTEE FIX] 在 hsc_init() 之后立即注册日志回调
+    hsc_set_log_callback(cli_logger);
+
     const char* command = argv[1];
     int ret = 1;
     if (strcmp(command, "gen-keypair") == 0) {

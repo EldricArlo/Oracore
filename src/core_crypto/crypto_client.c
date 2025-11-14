@@ -1,6 +1,7 @@
-// --- crypto_client.c (REVISED BY COMMITTEE) ---
+// --- crypto_client.c (REVISED BY COMMITTEE FOR LOGGING CALLBACK) ---
 #include "crypto_client.h"
 #include "../common/secure_memory.h"
+#include "../common/internal_logger.h" // [COMMITTEE FIX] 引入内部日志头文件
 
 #include <sodium.h>
 #include <string.h>
@@ -19,10 +20,10 @@ size_t g_argon2_memlimit = BASELINE_ARGON2ID_MEMLIMIT;
  * @brief 从环境变量加载并验证密码学参数。
  *        此函数会读取 HSC_ARGON2_OPSLIMIT 和 HSC_ARGON2_MEMLIMIT 环境变量。
  *        如果环境变量被设置、解析成功，并且其值不低于内置的安全基线，
- *        则程序将使用这些更高强度的值。否则，将打印警告并保持安全的默认基线值。
+ *        则程序将使用这些更高强度的值。否则，将通过日志系统打印警告并保持安全的默认基线值。
  */
 void crypto_config_load_from_env() {
-    printf("Loading cryptographic parameters...\n");
+    _hsc_log(HSC_LOG_LEVEL_INFO, "Loading cryptographic parameters...");
 
     // --- 加载 Ops Limit ---
     const char* opslimit_env = getenv("HSC_ARGON2_OPSLIMIT");
@@ -33,12 +34,12 @@ void crypto_config_load_from_env() {
 
         // 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
         if (errno == ERANGE) {
-            fprintf(stderr, "  > WARNING: HSC_ARGON2_OPSLIMIT value is out of range. Using default.\n");
+            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_OPSLIMIT value is out of range. Using default.");
         } else if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT) {
             g_argon2_opslimit = ops_from_env;
-            printf("  > Argon2id OpsLimit overridden by environment: %llu\n", g_argon2_opslimit);
+            _hsc_log(HSC_LOG_LEVEL_INFO, "  > Argon2id OpsLimit overridden by environment: %llu", g_argon2_opslimit);
         } else {
-            fprintf(stderr, "  > WARNING: Invalid or below-baseline HSC_ARGON2_OPSLIMIT ignored. Using default.\n");
+            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: Invalid or below-baseline HSC_ARGON2_OPSLIMIT ignored. Using default.");
         }
     }
 
@@ -51,16 +52,16 @@ void crypto_config_load_from_env() {
         
         // 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
         if (errno == ERANGE) {
-            fprintf(stderr, "  > WARNING: HSC_ARGON2_MEMLIMIT value is out of range. Using default.\n");
+            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_MEMLIMIT value is out of range. Using default.");
         } else if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT) {
             g_argon2_memlimit = (size_t)mem_from_env;
-            printf("  > Argon2id MemLimit overridden by environment: %zu bytes\n", g_argon2_memlimit);
+            _hsc_log(HSC_LOG_LEVEL_INFO, "  > Argon2id MemLimit overridden by environment: %zu bytes", g_argon2_memlimit);
         } else {
-            fprintf(stderr, "  > WARNING: Invalid or below-baseline HSC_ARGON2_MEMLIMIT ignored. Using default.\n");
+            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: Invalid or below-baseline HSC_ARGON2_MEMLIMIT ignored. Using default.");
         }
     }
     
-    printf("  > Final effective Argon2id parameters: OpsLimit=%llu, MemLimit=%zu MB\n",
+    _hsc_log(HSC_LOG_LEVEL_INFO, "  > Final effective Argon2id parameters: OpsLimit=%llu, MemLimit=%zu MB",
            g_argon2_opslimit, g_argon2_memlimit / (1024 * 1024));
 }
 

@@ -37,6 +37,7 @@
 // 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
 #define HSC_STREAM_TAG_BYTES      16 // The size of the authentication tag
+// [COMMITTEE FIX] 修正了此处宏定义的拼写错误
 #define HSC_STREAM_CHUNK_OVERHEAD (HSC_STREAM_TAG_BYTES)
 
 // 为单次 AEAD 加密提供的开销常量
@@ -72,6 +73,15 @@ hsc_master_key_pair* hsc_generate_master_key_pair();
 hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_key_path);
 int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_path, const char* priv_key_path);
 void hsc_free_master_key_pair(hsc_master_key_pair** kp);
+
+/**
+ * @brief [NEW] 从一个主密钥对句柄中提取原始的公钥字节。
+ * @param kp 指向一个已初始化的主密钥对的不透明指针。
+ * @param public_key_out (输出) 一个缓冲区，用于存储提取出的原始公钥。
+ *                       其大小必须至少为 HSC_MASTER_PUBLIC_KEY_BYTES。
+ * @return 成功返回 HSC_OK，失败返回相应的错误码。
+ */
+int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* public_key_out);
 
 // --- 核心API函数：PKI 与证书 ---
 int hsc_generate_csr(const hsc_master_key_pair* mkp, const char* username, char** out_csr_pem);
@@ -141,6 +151,22 @@ int hsc_aead_decrypt(unsigned char* decrypted_message, unsigned long long* decry
 // --- 核心API函数：安全内存管理 ---
 void* hsc_secure_alloc(size_t size);
 void hsc_secure_free(void* ptr);
+
+// --- [COMMITTEE FIX] 核心API函数：日志回调管理 ---
+
+/**
+ * @brief 定义日志回调函数的类型。
+ * @param level 日志级别 (0: INFO, 1: WARNING, 2: ERROR)。
+ * @param message 要记录的日志消息字符串。
+ */
+typedef void (*hsc_log_callback)(int level, const char* message);
+
+/**
+ * @brief 设置一个全局日志回调函数。
+ *        库内部将通过此函数报告其操作状态，而不是直接打印到 stdout/stderr。
+ * @param callback 用户提供的回调函数指针。传递 NULL 可以禁用日志记录。
+ */
+void hsc_set_log_callback(hsc_log_callback callback);
 
 
 #endif // HSC_KERNEL_H

@@ -9,8 +9,9 @@
 #include <curl/curl.h>
 #include <sodium.h>
 #include <stdlib.h>
-#include <stdio.h>  // [新增] 用于文件操作
+#include <stdio.h>  // [新增] 用于文件操作, 以及 vsnprintf
 #include <stdint.h> // [新增] 用于固定宽度的整数类型
+#include <stdarg.h> // [COMMITTEE FIX] 为可变参数日志函数引入
 
 // --- 不透明结构体的内部定义 ---
 
@@ -194,6 +195,15 @@ void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
     if (kp == NULL || *kp == NULL) return;
     free_master_key_pair(&(*kp)->internal_kp);
     free(*kp); *kp = NULL;
+}
+
+int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* public_key_out) {
+    if (kp == NULL || public_key_out == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    // 合法地在库内部访问不透明结构体的成员
+    memcpy(public_key_out, kp->internal_kp.pk, HSC_MASTER_PUBLIC_KEY_BYTES);
+    return HSC_OK;
 }
 
 // --- API 实现：PKI与证书管理 ---
@@ -460,4 +470,34 @@ void* hsc_secure_alloc(size_t size) {
 
 void hsc_secure_free(void* ptr) {
     secure_free(ptr);
+}
+
+// --- [COMMITTEE FIX] API 实现：日志回调管理 ---
+
+// 定义一个静态全局变量来存储用户提供的回调函数指针
+static hsc_log_callback g_log_callback = NULL;
+
+// 实现公共 API 函数以设置回调
+void hsc_set_log_callback(hsc_log_callback callback) {
+    g_log_callback = callback;
+}
+
+// 实现供库内部模块使用的日志记录函数
+void _hsc_log(int level, const char* format, ...) {
+    // 如果没有注册回调，则直接返回，不执行任何操作
+    if (g_log_callback == NULL) {
+        return;
+    }
+
+    char buffer[1024]; // 为日志消息分配一个合理的缓冲区
+    va_list args;
+    va_start(args, format);
+    
+    // 使用 vsnprintf 安全地格式化消息，防止缓冲区溢出
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    
+    va_end(args);
+
+    // 调用用户注册的回调函数
+    g_log_callback(level, buffer);
 }
