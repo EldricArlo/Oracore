@@ -1,6 +1,6 @@
 #
 # Makefile for the High-Security Hybrid Encryption System
-# [REVISED BY COMMITTEE to integrate all test suites]
+# [REVISED BY COMMITTEE to integrate all test suites and add dependency checks]
 #
 
 # --- Compiler and Flags ---
@@ -9,6 +9,9 @@ CFLAGS = -g -Iinclude -Isrc -Wall -Wextra -Werror -std=c11 -fPIC -MMD -MP
 
 # --- Libraries ---
 LDFLAGS = -lsodium -lssl -lcrypto -lcurl
+
+# --- Dependency Version Management ---
+MIN_OPENSSL_VERSION = 3.0.0
 
 # --- Directories and Paths ---
 BIN_DIR = bin
@@ -47,11 +50,6 @@ CA_UTIL_OBJ = $(CA_UTIL_SRC:.c=.o)
 TEST_HELPER_SRCS = $(TEST_DIR)/test_helpers.c
 TEST_HELPER_OBJS = $(TEST_HELPER_SRCS:.c=.o)
 
-# [VERIFIED] The wildcard '*.c' automatically discovers all test source files,
-# including 'test_core_crypto.c', 'test_api_integration.c', and the new
-# 'test_expert_api.c', while filtering out helpers. This is robust.
-# Note: The original submission split tests into multiple files. For this Makefile,
-# we assume they are distinct source files like test_core_crypto.c, test_pki_verification.c, etc.
 TEST_SRCS = $(filter-out $(TEST_HELPER_SRCS) $(CA_UTIL_SRC), $(wildcard $(TEST_DIR)/test_*.c))
 TEST_OBJS = $(TEST_SRCS:.c=.o)
 
@@ -61,8 +59,6 @@ TARGET_CLI = $(BIN_DIR)/hsc_cli$(TARGET_CLI_EXT)
 TARGET_DEMO = $(BIN_DIR)/hsc_demo$(TARGET_CLI_EXT)
 TARGET_CA_UTIL = $(BIN_DIR)/test_ca_util$(TARGET_CLI_EXT)
 
-# This list of executables is automatically populated with all test targets
-# thanks to the robust TEST_SRCS discovery logic.
 TEST_EXECUTABLES = $(patsubst $(TEST_DIR)/%.c,$(BIN_DIR)/%,$(TEST_SRCS))
 
 # --- Dependency Management ---
@@ -71,14 +67,33 @@ DEPS = $(ALL_OBJS:.o=.d)
 
 # --- Build Rules ---
 
-.PHONY: all kernel cli demo ca_util tests clean run-tests
+.PHONY: all kernel cli demo ca_util tests clean run-tests check-deps
 
-all: cli demo ca_util tests
+all: check-deps cli demo ca_util tests
 
 cli: $(TARGET_CLI)
 demo: $(TARGET_DEMO)
 ca_util: $(TARGET_CA_UTIL)
 tests: $(TEST_EXECUTABLES)
+
+# [COMMITTEE FIX v2] Using robust version comparison with `sort -V`
+check-deps:
+	@echo "==> Checking dependencies..."
+	@if ! command -v openssl > /dev/null; then \
+		echo "ERROR: 'openssl' command not found. Please install OpenSSL."; \
+		exit 1; \
+	fi
+	@DETECTED_VERSION=$$(openssl version | awk '{print $$2}'); \
+	EARLIEST_VERSION=$$(printf "%s\n%s" "$(MIN_OPENSSL_VERSION)" "$$DETECTED_VERSION" | sort -V | head -n1); \
+	if [ "$$EARLIEST_VERSION" != "$(MIN_OPENSSL_VERSION)" ]; then \
+		echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+		echo "!! BUILD FAILED: Dependency requirement not met."; \
+		echo "!! Required OpenSSL version: >= $(MIN_OPENSSL_VERSION)"; \
+		echo "!! Detected version:       $$DETECTED_VERSION"; \
+		echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+		exit 1; \
+	fi
+	@echo "  -> Dependencies OK."
 
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
@@ -99,9 +114,6 @@ $(TARGET_CA_UTIL): $(CA_UTIL_OBJ) | $(BIN_DIR)
 	@echo "==> Linking Test CA Utility: $@"
 	$(CC) $(CFLAGS_EXEC) -o $@ $< $(LDFLAGS)
 
-# This generic rule correctly handles building all test executables.
-# It correctly links the specific test object, the common helper objects,
-# and the hsc_kernel library.
 $(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.c $(TEST_HELPER_OBJS) $(TARGET_LIB) | $(BIN_DIR)
 	@echo "==> Linking Test Executable: $@"
 	$(CC) $(CFLAGS_EXEC) -o $@ $< $(TEST_HELPER_OBJS) -L$(BIN_DIR) -lhsc_kernel $(LDFLAGS)

@@ -1,0 +1,128 @@
+[
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe -Dhsc_kernel_EXPORTS @CMakeFiles/hsc_kernel.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\hsc_kernel.dir\\src\\common\\secure_memory.c.obj -c D:\\C\\Oracipher-core\\src\\common\\secure_memory.c",
+  "file": "D:/C/Oracipher-core/src/common/secure_memory.c",
+  "output": "CMakeFiles/hsc_kernel.dir/src/common/secure_memory.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe -Dhsc_kernel_EXPORTS @CMakeFiles/hsc_kernel.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\hsc_kernel.dir\\src\\core_crypto\\crypto_client.c.obj -c D:\\C\\Oracipher-core\\src\\core_crypto\\crypto_client.c",
+  "file": "D:/C/Oracipher-core/src/core_crypto/crypto_client.c",
+  "output": "CMakeFiles/hsc_kernel.dir/src/core_crypto/crypto_client.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe -Dhsc_kernel_EXPORTS @CMakeFiles/hsc_kernel.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\hsc_kernel.dir\\src\\hsc_kernel.c.obj -c D:\\C\\Oracipher-core\\src\\hsc_kernel.c",
+  "file": "D:/C/Oracipher-core/src/hsc_kernel.c",
+  "output": "CMakeFiles/hsc_kernel.dir/src/hsc_kernel.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe -Dhsc_kernel_EXPORTS @CMakeFiles/hsc_kernel.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\hsc_kernel.dir\\src\\pki\\pki_handler.c.obj -c D:\\C\\Oracipher-core\\src\\pki\\pki_handler.c",
+  "file": "D:/C/Oracipher-core/src/pki/pki_handler.c",
+  "output": "CMakeFiles/hsc_kernel.dir/src/pki/pki_handler.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/hsc_cli.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\hsc_cli.dir\\src\\cli.c.obj -c D:\\C\\Oracipher-core\\src\\cli.c",
+  "file": "D:/C/Oracipher-core/src/cli.c",
+  "output": "CMakeFiles/hsc_cli.dir/src/cli.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/hsc_demo.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\hsc_demo.dir\\src\\main.c.obj -c D:\\C\\Oracipher-core\\src\\main.c",
+  "file": "D:/C/Oracipher-core/src/main.c",
+  "output": "CMakeFiles/hsc_demo.dir/src/main.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe   -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_ca_util.dir\\tests\\test_ca_util.c.obj -c D:\\C\\Oracipher-core\\tests\\test_ca_util.c",
+  "file": "D:/C/Oracipher-core/tests/test_ca_util.c",
+  "output": "CMakeFiles/test_ca_util.dir/tests/test_ca_util.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_api_integration.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_api_integration.dir\\tests\\test_api_integration.c.obj -c D:\\C\\Oracipher-core\\tests\\test_api_integration.c",
+  "file": "D:/C/Oracipher-core/tests/test_api_integration.c",
+  "output": "CMakeFiles/test_api_integration.dir/tests/test_api_integration.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_api_integration.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_api_integration.dir\\tests\\test_helpers.c.obj -c D:\\C\\Oracipher-core\\tests\\test_helpers.c",
+  "file": "D:/C/Oracipher-core/tests/test_helpers.c",
+  "output": "CMakeFiles/test_api_integration.dir/tests/test_helpers.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_asymmetric_crypto.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_asymmetric_crypto.dir\\tests\\test_asymmetric_crypto.c.obj -c D:\\C\\Oracipher-core\\tests\\test_asymmetric_crypto.c",
+  "file": "D:/C/Oracipher-core/tests/test_asymmetric_crypto.c",
+  "output": "CMakeFiles/test_asymmetric_crypto.dir/tests/test_asymmetric_crypto.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_asymmetric_crypto.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_asymmetric_crypto.dir\\tests\\test_helpers.c.obj -c D:\\C\\Oracipher-core\\tests\\test_helpers.c",
+  "file": "D:/C/Oracipher-core/tests/test_helpers.c",
+  "output": "CMakeFiles/test_asymmetric_crypto.dir/tests/test_helpers.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_core_crypto.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_core_crypto.dir\\tests\\test_core_crypto.c.obj -c D:\\C\\Oracipher-core\\tests\\test_core_crypto.c",
+  "file": "D:/C/Oracipher-core/tests/test_core_crypto.c",
+  "output": "CMakeFiles/test_core_crypto.dir/tests/test_core_crypto.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_core_crypto.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_core_crypto.dir\\tests\\test_helpers.c.obj -c D:\\C\\Oracipher-core\\tests\\test_helpers.c",
+  "file": "D:/C/Oracipher-core/tests/test_helpers.c",
+  "output": "CMakeFiles/test_core_crypto.dir/tests/test_helpers.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_expert_api.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_expert_api.dir\\tests\\test_expert_api.c.obj -c D:\\C\\Oracipher-core\\tests\\test_expert_api.c",
+  "file": "D:/C/Oracipher-core/tests/test_expert_api.c",
+  "output": "CMakeFiles/test_expert_api.dir/tests/test_expert_api.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_expert_api.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_expert_api.dir\\tests\\test_helpers.c.obj -c D:\\C\\Oracipher-core\\tests\\test_helpers.c",
+  "file": "D:/C/Oracipher-core/tests/test_helpers.c",
+  "output": "CMakeFiles/test_expert_api.dir/tests/test_helpers.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_kdf.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_kdf.dir\\tests\\test_kdf.c.obj -c D:\\C\\Oracipher-core\\tests\\test_kdf.c",
+  "file": "D:/C/Oracipher-core/tests/test_kdf.c",
+  "output": "CMakeFiles/test_kdf.dir/tests/test_kdf.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_kdf.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_kdf.dir\\tests\\test_helpers.c.obj -c D:\\C\\Oracipher-core\\tests\\test_helpers.c",
+  "file": "D:/C/Oracipher-core/tests/test_helpers.c",
+  "output": "CMakeFiles/test_kdf.dir/tests/test_helpers.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_pki_verification.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_pki_verification.dir\\tests\\test_pki_verification.c.obj -c D:\\C\\Oracipher-core\\tests\\test_pki_verification.c",
+  "file": "D:/C/Oracipher-core/tests/test_pki_verification.c",
+  "output": "CMakeFiles/test_pki_verification.dir/tests/test_pki_verification.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_pki_verification.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_pki_verification.dir\\tests\\test_helpers.c.obj -c D:\\C\\Oracipher-core\\tests\\test_helpers.c",
+  "file": "D:/C/Oracipher-core/tests/test_helpers.c",
+  "output": "CMakeFiles/test_pki_verification.dir/tests/test_helpers.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_symmetric_crypto.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_symmetric_crypto.dir\\tests\\test_symmetric_crypto.c.obj -c D:\\C\\Oracipher-core\\tests\\test_symmetric_crypto.c",
+  "file": "D:/C/Oracipher-core/tests/test_symmetric_crypto.c",
+  "output": "CMakeFiles/test_symmetric_crypto.dir/tests/test_symmetric_crypto.c.obj"
+},
+{
+  "directory": "D:/C/Oracipher-core/build",
+  "command": "D:\\MSYS2\\ucrt64\\bin\\gcc.exe  @CMakeFiles/test_symmetric_crypto.dir/includes_C.rsp -g -std=c11 -Wall -Wextra -Werror -o CMakeFiles\\test_symmetric_crypto.dir\\tests\\test_helpers.c.obj -c D:\\C\\Oracipher-core\\tests\\test_helpers.c",
+  "file": "D:/C/Oracipher-core/tests/test_helpers.c",
+  "output": "CMakeFiles/test_symmetric_crypto.dir/tests/test_helpers.c.obj"
+}
+]

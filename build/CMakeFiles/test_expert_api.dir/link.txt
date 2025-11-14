@@ -1,0 +1,3 @@
+D:\MSYS2\ucrt64\bin\cmake.exe -E rm -f CMakeFiles\test_expert_api.dir/objects.a
+D:\MSYS2\ucrt64\bin\ar.exe qc CMakeFiles\test_expert_api.dir/objects.a @CMakeFiles\test_expert_api.dir\objects1.rsp
+D:\MSYS2\ucrt64\bin\gcc.exe -g -Wl,--whole-archive CMakeFiles\test_expert_api.dir/objects.a -Wl,--no-whole-archive -o test_expert_api.exe -Wl,--out-implib,libtest_expert_api.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\test_expert_api.dir\linkLibs.rsp

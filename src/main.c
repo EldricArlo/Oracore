@@ -62,7 +62,7 @@ int main() {
     unsigned char* decrypted_file_content = NULL;
 
     // --- 初始化 ---
-    if (hsc_init() != HSC_OK) { // [修改] 使用新的成功码
+    if (hsc_init() != HSC_OK) {
         fprintf(stderr, "错误: 高安全内核库初始化失败！\n");
         goto cleanup;
     }
@@ -107,14 +107,14 @@ int main() {
     if (!encrypted_file) { fprintf(stderr, "内存分配失败！\n"); goto cleanup; }
     unsigned long long actual_enc_file_len;
     
-    if (hsc_aead_encrypt(encrypted_file, &actual_enc_file_len, (unsigned char*)file_content, file_content_len, session_key) != HSC_OK) { // [修改]
+    if (hsc_aead_encrypt(encrypted_file, &actual_enc_file_len, (unsigned char*)file_content, file_content_len, session_key) != HSC_OK) {
         fprintf(stderr, "严重错误: 对称加密文件失败！\n"); goto cleanup;
     }
     printf("  > 文件内容已使用 AEAD 对称加密。\n\n");
     
     // 2. 验证接收者 ('Alice') 的证书
     printf("2. 验证接收者 ('Alice') 的证书...\n");
-    if (hsc_verify_user_certificate(alice_cert_pem, ca_cert_pem, alice_username) != HSC_OK) { // [修改]
+    if (hsc_verify_user_certificate(alice_cert_pem, ca_cert_pem, alice_username) != HSC_OK) {
         fprintf(stderr, "严重错误: 接收者证书验证失败！中止共享。\n");
         goto cleanup;
     }
@@ -123,7 +123,7 @@ int main() {
     // 3. 从证书中提取接收者公钥
     printf("3. 从证书中提取接收者公钥...\n");
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert(alice_cert_pem, recipient_pk) != HSC_OK) { // [修改]
+    if (hsc_extract_public_key_from_cert(alice_cert_pem, recipient_pk) != HSC_OK) {
         fprintf(stderr, "严重错误: 无法从证书中提取公钥！\n"); goto cleanup;
     }
     print_hex("  > 提取到的接收者公钥", recipient_pk, sizeof(recipient_pk));
@@ -137,7 +137,7 @@ int main() {
     
     size_t actual_encapsulated_len;
     if (hsc_encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len, session_key, sizeof(session_key),
-                                recipient_pk, alice_mkp) != HSC_OK) { // [修改]
+                                recipient_pk, alice_mkp) != HSC_OK) {
         fprintf(stderr, "严重错误: 封装会话密钥失败！\n"); goto cleanup;
     }
     printf("  > 会话密钥已使用非对称加密封装。\n\n");
@@ -151,12 +151,11 @@ int main() {
     if (!decrypted_session_key) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
 
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    // [修改] 注意: 这里也需要检查返回值
     if (hsc_extract_public_key_from_cert(alice_cert_pem, sender_pk) != HSC_OK) {
         fprintf(stderr, "严重错误: 无法从发送者证书中提取公钥！\n"); goto cleanup;
     }
 
-    if (hsc_decapsulate_session_key(decrypted_session_key, encapsulated_session_key, actual_encapsulated_len, sender_pk, alice_mkp) != HSC_OK) { // [修改]
+    if (hsc_decapsulate_session_key(decrypted_session_key, encapsulated_session_key, actual_encapsulated_len, sender_pk, alice_mkp) != HSC_OK) {
         fprintf(stderr, "解密错误: 无法解封装会话密钥！\n"); goto cleanup;
     }
     print_hex("  > [解密] 恢复的会话密钥", decrypted_session_key, sizeof(session_key));
@@ -173,19 +172,27 @@ int main() {
     if (!decrypted_file_content) { fprintf(stderr, "内存分配失败！\n"); goto cleanup; }
     unsigned long long actual_dec_file_len;
     
-    if (hsc_aead_decrypt(decrypted_file_content, &actual_dec_file_len, encrypted_file, actual_enc_file_len, decrypted_session_key) != HSC_OK) { // [修改]
+    if (hsc_aead_decrypt(decrypted_file_content, &actual_dec_file_len, encrypted_file, actual_enc_file_len, decrypted_session_key) != HSC_OK) {
         fprintf(stderr, "解密错误: 无法解密文件内容！\n");
         goto cleanup;
     }
     decrypted_file_content[actual_dec_file_len] = '\0';
     
     printf("  > [解密] 恢复的文件内容: \"%s\"\n", (char*)decrypted_file_content);
-    if (strcmp(file_content, (char*)decrypted_file_content) == 0) {
+
+    // --- [COMMITTEE FIX] ---
+    // 使用 sodium_memcmp (恒定时间比较) 替换 strcmp (可变时间比较)
+    // 1. 首先比较长度是否一致
+    // 2. 如果长度一致，再比较内容
+    if (actual_dec_file_len == file_content_len &&
+        sodium_memcmp(file_content, decrypted_file_content, file_content_len) == 0) 
+    {
         printf("  > 验证成功: 恢复的文件内容与原始内容匹配。\n\n");
     } else {
         printf("  > 验证失败: 恢复的文件内容与原始内容不匹配！\n\n");
         goto cleanup;
     }
+    // --- [COMMITTEE FIX END] ---
     
     ret = 0; 
     printf("\033[32m--- 演示成功完成 ---\033[0m\n");
