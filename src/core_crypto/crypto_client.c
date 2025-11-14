@@ -1,7 +1,7 @@
 // --- crypto_client.c (REVISED BY COMMITTEE FOR LOGGING CALLBACK) ---
 #include "crypto_client.h"
 #include "../common/secure_memory.h"
-#include "../common/internal_logger.h" // [COMMITTEE FIX] 引入内部日志头文件
+#include "../common/internal_logger.h"
 
 #include <sodium.h>
 #include <string.h>
@@ -239,7 +239,7 @@ int decrypt_symmetric_aead(
     return 0;
 }
 
-// --- [新增] 分离模式 AEAD 实现 ---
+// --- 分离模式 AEAD 实现 ---
 
 int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* tag_out,
                                     const unsigned char* message, size_t message_len,

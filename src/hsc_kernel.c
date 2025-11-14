@@ -358,10 +358,8 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     if (enc_key_len == 0 || enc_key_len > HSC_MAX_ENCAPSULATED_KEY_SIZE) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
     }
-    // --- [COMMITTEE FIX START] ---
     // 使用 hsc_secure_alloc 替换 malloc 以增强安全性
     encapsulated_key = hsc_secure_alloc(enc_key_len);
-    // --- [COMMITTEE FIX END] ---
     if (!encapsulated_key) { ret_code = HSC_ERROR_ALLOCATION_FAILED; goto cleanup; }
     if (fread(encapsulated_key, 1, enc_key_len, f_in) != enc_key_len) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
@@ -393,10 +391,8 @@ cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
     if (ret_code != HSC_OK && output_path != NULL) remove(output_path);
-    // --- [COMMITTEE FIX START] ---
     // 使用 hsc_secure_free 替换 free
     hsc_secure_free(encapsulated_key);
-    // --- [COMMITTEE FIX END] ---
     hsc_crypto_stream_state_free(&st);
     hsc_secure_free(dec_session_key);
     return ret_code;
@@ -433,7 +429,7 @@ void _hsc_log(int level, const char* format, ...) {
 }
 
 // =======================================================================
-// --- [新增] 专家级API实现 ---
+// --- 专家级API实现 ---
 // =======================================================================
 
 static const unsigned char g_internal_pepper[32] = {
@@ -444,7 +440,7 @@ static const unsigned char g_internal_pepper[32] = {
 
 int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_len,
                                    const char* password, const unsigned char* salt) {
-    // [COMMITTEE FIX] 添加 API 边界参数验证
+    // 添加 API 边界参数验证
     if (derived_key == NULL || password == NULL || salt == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -460,7 +456,7 @@ int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_
 }
 
 int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsigned char* ed25519_pk_in) {
-    // [COMMITTEE FIX] 添加 API 边界参数验证
+    // 添加 API 边界参数验证
     if (x25519_pk_out == NULL || ed25519_pk_in == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -471,7 +467,7 @@ int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsi
 }
 
 int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsigned char* ed25519_sk_in) {
-    // [COMMITTEE FIX] 添加 API 边界参数验证
+    // 添加 API 边界参数验证
     if (x25519_sk_out == NULL || ed25519_sk_in == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -485,7 +481,7 @@ int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
                               const unsigned char* message, size_t message_len,
                               const unsigned char* additional_data, size_t ad_len,
                               const unsigned char* nonce, const unsigned char* key) {
-    // [COMMITTEE FIX] 添加 API 边界参数验证
+    // 添加 API 边界参数验证
     if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce == NULL || key == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -499,7 +495,7 @@ int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
                               const unsigned char* tag,
                               const unsigned char* additional_data, size_t ad_len,
                               const unsigned char* nonce, const unsigned char* key) {
-    // [COMMITTEE FIX] 添加 API 边界参数验证
+    // 添加 API 边界参数验证
     if (decrypted_message == NULL || ciphertext == NULL || tag == NULL || nonce == NULL || key == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }

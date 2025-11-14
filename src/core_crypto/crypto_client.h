@@ -22,7 +22,7 @@ typedef struct {
 // --- 函数原型 ---
 
 /**
- * @brief [新增] 从环境变量加载并验证密码学参数。
+ * @brief 从环境变量加载并验证密码学参数。
  *        此函数会读取如 HSC_ARGON2_OPSLIMIT 等环境变量，
  *        如果它们的值高于内置的安全基线，则使用它们，否则保持基线值。
  */
@@ -124,7 +124,7 @@ int decrypt_symmetric_aead(
 );
 
 /**
- * @brief [新增] [分离模式] 内部实现 AEAD 对称加密
+ * @brief [分离模式] 内部实现 AEAD 对称加密
  */
 int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* tag_out,
                                     const unsigned char* message, size_t message_len,
@@ -132,7 +132,7 @@ int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* ta
                                     const unsigned char* nonce, const unsigned char* key);
 
 /**
- * @brief [新增] [分离模式] 内部实现 AEAD 对称解密
+ * @brief [分离模式] 内部实现 AEAD 对称解密
  */
 int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
                                     const unsigned char* ciphertext, size_t ciphertext_len,

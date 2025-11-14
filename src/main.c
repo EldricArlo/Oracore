@@ -5,7 +5,7 @@
 #include <errno.h>
 
 #include "hsc_kernel.h"
-// [修复] 引入 sodium.h 以使用 sodium_memcmp 进行安全比较
+// 引入 sodium.h 以使用 sodium_memcmp 进行安全比较
 #include <sodium.h>
 
 // --- 辅助函数 ---
@@ -180,7 +180,6 @@ int main() {
     
     printf("  > [解密] 恢复的文件内容: \"%s\"\n", (char*)decrypted_file_content);
 
-    // --- [COMMITTEE FIX] ---
     // 使用 sodium_memcmp (恒定时间比较) 替换 strcmp (可变时间比较)
     // 1. 首先比较长度是否一致
     // 2. 如果长度一致，再比较内容
@@ -192,7 +191,6 @@ int main() {
         printf("  > 验证失败: 恢复的文件内容与原始内容不匹配！\n\n");
         goto cleanup;
     }
-    // --- [COMMITTEE FIX END] ---
     
     ret = 0; 
     printf("\033[32m--- 演示成功完成 ---\033[0m\n");

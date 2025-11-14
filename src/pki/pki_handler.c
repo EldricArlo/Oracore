@@ -11,26 +11,26 @@
 
 #include "pki_handler.h"
 #include "../common/secure_memory.h"
-#include "../../include/hsc_kernel.h" // 引入公共头文件以使用常量和错误码
-#include "../common/internal_logger.h" // [COMMITTEE FIX] 引入内部日志头文件
+#include "../../include/hsc_kernel.h"
+#include "../common/internal_logger.h"
 
 #include <sodium.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h> // For SIZE_MAX
+#include <limits.h>
 
-// [新增] 内部使用的常量
+// 内部使用的常量
 #define OCSP_HTTP_CONNECT_TIMEOUT_SECONDS 5L
 #define OCSP_HTTP_TOTAL_TIMEOUT_SECONDS 10L
 #define OCSP_RESPONSE_VALIDITY_SLACK_SECONDS 300L // 5分钟的宽限期
 #define INITIAL_HTTP_CHUNK_CAPACITY 1024
 
 
-// ======================= [COMMITTEE FIX] 错误报告宏 (已重构) =======================
+// ======================= 错误报告宏 =======================
 
 /**
- * @brief [新增] 内部辅助函数，用于将 OpenSSL 的错误队列内容路由到日志系统。
+ * @brief 内部辅助函数，用于将 OpenSSL 的错误队列内容路由到日志系统。
  *        它会遍历所有待处理的 OpenSSL 错误，并将它们格式化为字符串，
  *        然后通过 _hsc_log 发送出去，而不是直接打印到 stderr。
  */
@@ -86,7 +86,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     }
     *out_csr_pem = NULL;
 
-    int ret = HSC_ERROR_PKI_OPERATION; // [修改] 默认返回 PKI 操作失败
+    int ret = HSC_ERROR_PKI_OPERATION; // 默认返回 PKI 操作失败
     EVP_PKEY* pkey = NULL;
     X509_REQ* req = NULL;
     BIO* bio = NULL;
@@ -137,7 +137,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
         if (*out_csr_pem) {
             memcpy(*out_csr_pem, mem->data, mem->length);
             (*out_csr_pem)[mem->length] = '\0';
-            ret = HSC_OK; // [修改] 成功
+            ret = HSC_OK; // 成功
         } else {
              _hsc_log(HSC_LOG_LEVEL_ERROR, "malloc failed for CSR PEM string.");
              ret = HSC_ERROR_ALLOCATION_FAILED;
@@ -155,7 +155,7 @@ cleanup:
 }
 
 
-// ======================= OCSP 检查的静态辅助函数 (REFACTORED) =======================
+// ======================= OCSP 检查的静态辅助函数 =======================
 
 struct memory_chunk {
     char* memory;

@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// --- [委员会修复] 全局API返回码体系 ---
+// --- 全局API返回码体系 ---
 #define HSC_OK                                     0 // 操作成功
 #define HSC_ERROR_GENERAL                         -1 // 未指定的常规错误
 #define HSC_ERROR_ALLOCATION_FAILED               -2 // 内存分配失败 (包括安全内存)
@@ -21,7 +21,7 @@
 #define HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED    -12 // 证书已被吊销，或OCSP检查失败 (遵循"故障关闭"原则)
 
 
-// --- [DEPRECATED] 旧版证书验证返回码 (为保持向后兼容性) ---
+// --- 旧版证书验证返回码 (为保持向后兼容性) ---
 #define HSC_VERIFY_SUCCESS HSC_OK
 #define HSC_VERIFY_ERROR_GENERAL HSC_ERROR_GENERAL
 #define HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY HSC_ERROR_CERT_CHAIN_OR_VALIDITY
@@ -38,7 +38,7 @@
 // 流式加密 (XChaCha20-Poly1035 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
 #define HSC_STREAM_TAG_BYTES      16 // The size of the authentication tag
-// [COMMITTEE FIX] 修正了此处宏定义的拼写错误
+// 修正了此处宏定义的拼写错误
 #define HSC_STREAM_CHUNK_OVERHEAD (HSC_STREAM_TAG_BYTES)
 
 // 为单次 AEAD 加密提供的开销常量
@@ -133,7 +133,7 @@ void hsc_set_log_callback(hsc_log_callback callback);
 
 
 // =======================================================================
-// --- [新增] 专家级API (EXPERT-LEVEL APIS) ---
+// --- 专家级API (EXPERT-LEVEL APIS) ---
 // 警告：以下函数为高级用户设计，需要调用者对密码学概念有深入理解。
 //      不当使用这些函数可能导致严重的安全漏洞。
 // =======================================================================

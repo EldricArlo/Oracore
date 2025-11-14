@@ -99,7 +99,7 @@ void test_hybrid_stream_roundtrip_ok() {
     hsc_master_key_pair* recipient_kp = hsc_generate_master_key_pair();
     _assert(sender_kp && recipient_kp);
 
-    // [COMMITTEE FIX] 使用新的API函数合法地获取公钥
+    // 使用新的API函数合法地获取公钥
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     _assert(hsc_get_master_public_key(sender_kp, sender_pk) == HSC_OK);
@@ -155,7 +155,7 @@ void test_hybrid_stream_decrypt_tampered_file() {
     hsc_master_key_pair* recipient_kp = hsc_generate_master_key_pair();
     _assert(sender_kp && recipient_kp);
 
-    // [COMMITTEE FIX] 使用新的API函数合法地获取公钥
+    // 使用新的API函数合法地获取公钥
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     _assert(hsc_get_master_public_key(sender_kp, sender_pk) == HSC_OK);
@@ -181,7 +181,7 @@ void test_hybrid_stream_empty_file() {
     hsc_master_key_pair* recipient_kp = hsc_generate_master_key_pair();
     _assert(sender_kp && recipient_kp);
 
-    // [COMMITTEE FIX] 使用新的API函数合法地获取公钥
+    // 使用新的API函数合法地获取公钥
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     _assert(hsc_get_master_public_key(sender_kp, sender_pk) == HSC_OK);

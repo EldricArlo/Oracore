@@ -4,7 +4,7 @@
 #include "../core_crypto/crypto_client.h" // 需要用到 master_key_pair 结构
 #include "../../include/hsc_kernel.h"      // 引入公共定义以保持一致
 
-// [新增] 从证书主题中提取的通用名称（Common Name）的最大长度
+// 从证书主题中提取的通用名称（Common Name）的最大长度
 #define CERT_COMMON_NAME_MAX_LEN 256
 
 /**

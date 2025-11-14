@@ -1,4 +1,3 @@
-// --- cli.c (FINAL VERSION, FIXED BY COMMITTEE) ---
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +17,7 @@ extern int optind;
 
 #include "hsc_kernel.h"
 
-// --- [COMMITTEE FIX START] 日志回调实现 ---
+// --- 日志回调实现 ---
 
 /**
  * @brief 命令行工具的日志处理函数。
@@ -43,10 +42,6 @@ static void cli_logger(int level, const char* message) {
             break;
     }
 }
-// --- [COMMITTEE FIX END] ---
-
-
-// --- [移除] 字节序处理辅助函数 store64_le / load64_le 已移至 hsc_kernel.c ---
 
 // --- 辅助函数 ---
 void print_usage(const char* prog_name) {
