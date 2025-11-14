@@ -1,4 +1,4 @@
-// --- crypto_client.c (REVISED BY COMMITTEE FOR LOGGING CALLBACK) ---
+// --- crypto_client.c (REVISED BY COMMITTEE FOR EXTERNAL PEPPER) ---
 #include "crypto_client.h"
 #include "../common/secure_memory.h"
 #include "../common/internal_logger.h"
@@ -8,20 +8,74 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h> // 包含 errno.h 以检查 strtoull 的范围错误
+#include <ctype.h> // 包含 ctype.h 用于 isxdigit
 
 // --- 运行时安全参数的定义与初始化 ---
-// 这些变量持有程序实际使用的Argon2id参数。
-// 它们被初始化为编译时的基线值，确保在任何配置加载前都有一个安全的默认值。
 unsigned long long g_argon2_opslimit = BASELINE_ARGON2ID_OPSLIMIT;
 size_t g_argon2_memlimit = BASELINE_ARGON2ID_MEMLIMIT;
 
+// [COMMITTEE FIX] 全局胡椒现在存储在安全内存中，并在运行时加载
+static unsigned char* g_internal_pepper = NULL;
+static size_t g_internal_pepper_len = 0;
+#define REQUIRED_PEPPER_BYTES 32
+
 
 /**
- * @brief 从环境变量加载并验证密码学参数。
- *        此函数会读取 HSC_ARGON2_OPSLIMIT 和 HSC_ARGON2_MEMLIMIT 环境变量。
- *        如果环境变量被设置、解析成功，并且其值不低于内置的安全基线，
- *        则程序将使用这些更高强度的值。否则，将通过日志系统打印警告并保持安全的默认基线值。
+ * @brief [内部] 将十六进制字符转换为其整数值。
  */
+static int hex_char_to_int(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/**
+ * @brief [内部] 从环境变量加载并验证全局胡椒。
+ *        这是一个关键的安全函数，它确保了胡椒这个秘密值在运行时被安全注入。
+ * @return 成功返回 0，失败返回 -1。
+ */
+static int crypto_config_load_pepper_from_env() {
+    _hsc_log(HSC_LOG_LEVEL_INFO, "Loading global cryptographic pepper...");
+
+    const char* pepper_hex = getenv("HSC_PEPPER_HEX");
+    if (pepper_hex == NULL) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Security pepper environment variable 'HSC_PEPPER_HEX' is not set.");
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "  >        The library cannot operate securely without it. Initialization aborted.");
+        return -1;
+    }
+
+    size_t hex_len = strlen(pepper_hex);
+    if (hex_len != REQUIRED_PEPPER_BYTES * 2) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: 'HSC_PEPPER_HEX' must be exactly %zu hex characters long, but got %zu.", REQUIRED_PEPPER_BYTES * 2, hex_len);
+        return -1;
+    }
+
+    g_internal_pepper = secure_alloc(REQUIRED_PEPPER_BYTES);
+    if (g_internal_pepper == NULL) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Failed to allocate secure memory for the pepper.");
+        return -1;
+    }
+    
+    for (size_t i = 0; i < REQUIRED_PEPPER_BYTES; ++i) {
+        int high = hex_char_to_int(pepper_hex[2 * i]);
+        int low = hex_char_to_int(pepper_hex[2 * i + 1]);
+        if (high == -1 || low == -1) {
+            secure_free(g_internal_pepper);
+            g_internal_pepper = NULL;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: 'HSC_PEPPER_HEX' contains invalid non-hexadecimal characters.");
+            return -1;
+        }
+        g_internal_pepper[i] = (unsigned char)((high << 4) | low);
+    }
+
+    g_internal_pepper_len = REQUIRED_PEPPER_BYTES;
+    _hsc_log(HSC_LOG_LEVEL_INFO, "  > Successfully loaded and validated the %zu-byte global pepper from environment.", g_internal_pepper_len);
+    
+    return 0;
+}
+
+
 void crypto_config_load_from_env() {
     _hsc_log(HSC_LOG_LEVEL_INFO, "Loading cryptographic parameters...");
 
@@ -29,10 +83,8 @@ void crypto_config_load_from_env() {
     const char* opslimit_env = getenv("HSC_ARGON2_OPSLIMIT");
     if (opslimit_env) {
         char* endptr;
-        errno = 0; // 在调用 strtoull 之前重置 errno
+        errno = 0;
         unsigned long long ops_from_env = strtoull(opslimit_env, &endptr, 10);
-
-        // 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
         if (errno == ERANGE) {
             _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_OPSLIMIT value is out of range. Using default.");
         } else if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT) {
@@ -47,10 +99,8 @@ void crypto_config_load_from_env() {
     const char* memlimit_env = getenv("HSC_ARGON2_MEMLIMIT");
     if (memlimit_env) {
         char* endptr;
-        errno = 0; // 在调用 strtoull 之前重置 errno
+        errno = 0;
         unsigned long long mem_from_env = strtoull(memlimit_env, &endptr, 10);
-        
-        // 增强检查: 1. 转换是否溢出 2. 字符串是否完全转换 3. 值是否不低于基线
         if (errno == ERANGE) {
             _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_MEMLIMIT value is out of range. Using default.");
         } else if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT) {
@@ -66,34 +116,45 @@ void crypto_config_load_from_env() {
 }
 
 int crypto_client_init() {
-    // 规范要求: 必须使用经过审查的专业密码学库。
-    // sodium_init() 初始化 libsodium，并选择最优的、与平台无关的算法实现。
-    // 它是线程安全的，可以多次调用。
     if (sodium_init() < 0) {
-        return -1; // 初始化失败
+        // No logger available yet, this is a very early failure.
+        return -1;
     }
 
-    // 初始化后立即从环境变量加载配置参数
+    // [COMMITTEE FIX] 加载胡椒是初始化过程中的关键安全步骤。
+    // 如果加载失败，整个库的初始化也必须失败。
+    if (crypto_config_load_pepper_from_env() != 0) {
+        return -1;
+    }
+
+    // 加载其他可配置参数
     crypto_config_load_from_env();
     
     return 0;
 }
 
-/**
- * @brief 生成一个全新的 Ed25519 主密钥对，用于签名。
- */
+void crypto_client_cleanup() {
+    // [COMMITTEE FIX] 安全释放胡椒占用的内存。
+    if (g_internal_pepper) {
+        secure_free(g_internal_pepper);
+        g_internal_pepper = NULL;
+        g_internal_pepper_len = 0;
+    }
+}
+
+const unsigned char* get_global_pepper(size_t* out_len) {
+    if (out_len) {
+        *out_len = g_internal_pepper_len;
+    }
+    return g_internal_pepper;
+}
+
+
 int generate_master_key_pair(master_key_pair* kp) {
-    if (kp == NULL) {
-        return -1;
-    }
-
+    if (kp == NULL) return -1;
     kp->sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
-    if (kp->sk == NULL) {
-        return -1;
-    }
-
+    if (kp->sk == NULL) return -1;
     crypto_sign_keypair(kp->pk, kp->sk);
-
     return 0;
 }
 
@@ -105,13 +166,9 @@ void free_master_key_pair(master_key_pair* kp) {
 }
 
 int generate_recovery_key(recovery_key* rk) {
-    if (rk == NULL) {
-        return -1;
-    }
+    if (rk == NULL) return -1;
     rk->key = secure_alloc(RECOVERY_KEY_BYTES);
-    if (rk->key == NULL) {
-        return -1;
-    }
+    if (rk->key == NULL) return -1;
     randombytes_buf(rk->key, RECOVERY_KEY_BYTES);
     return 0;
 }
@@ -138,6 +195,11 @@ int derive_key_from_password(
     const unsigned char* global_pepper, size_t pepper_len
 ) {
     if (derived_key == NULL || password == NULL || salt == NULL || global_pepper == NULL) {
+        return -1;
+    }
+    // [COMMITTEE FIX] 增加对胡椒长度的运行时检查，作为深度防御的一环。
+    if (pepper_len == 0) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "KDF Error: Pepper length is zero. Aborting operation.");
         return -1;
     }
 
@@ -175,6 +237,7 @@ cleanup:
     return ret;
 }
 
+// ... ael resto de las funciones (encrypt_symmetric_aead, etc.) permanecen sin cambios ...
 int encrypt_symmetric_aead(
     unsigned char* ciphertext, unsigned long long* ciphertext_len,
     const unsigned char* message, size_t message_len,
@@ -238,8 +301,6 @@ int decrypt_symmetric_aead(
 
     return 0;
 }
-
-// --- 分离模式 AEAD 实现 ---
 
 int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* tag_out,
                                     const unsigned char* message, size_t message_len,

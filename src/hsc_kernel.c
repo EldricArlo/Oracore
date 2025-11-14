@@ -4,6 +4,7 @@
 #include "common/secure_memory.h"
 #include "core_crypto/crypto_client.h"
 #include "pki/pki_handler.h"
+#include "common/internal_logger.h"
 
 #include <string.h>
 #include <curl/curl.h>
@@ -123,6 +124,8 @@ int hsc_init() {
 }
 
 void hsc_cleanup() {
+    // [COMMITTEE FIX] 调用底层密码学模块的清理函数以释放胡椒。
+    crypto_client_cleanup();
     curl_global_cleanup();
 }
 
@@ -358,7 +361,6 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     if (enc_key_len == 0 || enc_key_len > HSC_MAX_ENCAPSULATED_KEY_SIZE) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
     }
-    // 使用 hsc_secure_alloc 替换 malloc 以增强安全性
     encapsulated_key = hsc_secure_alloc(enc_key_len);
     if (!encapsulated_key) { ret_code = HSC_ERROR_ALLOCATION_FAILED; goto cleanup; }
     if (fread(encapsulated_key, 1, enc_key_len, f_in) != enc_key_len) {
@@ -391,7 +393,6 @@ cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
     if (ret_code != HSC_OK && output_path != NULL) remove(output_path);
-    // 使用 hsc_secure_free 替换 free
     hsc_secure_free(encapsulated_key);
     hsc_crypto_stream_state_free(&st);
     hsc_secure_free(dec_session_key);
@@ -432,31 +433,35 @@ void _hsc_log(int level, const char* format, ...) {
 // --- 专家级API实现 ---
 // =======================================================================
 
-static const unsigned char g_internal_pepper[32] = {
-    0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x7a, 0x8b, 0x9c, 0x0d, 0x1e, 0x2f, 
-    0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x9a, 0x0b, 0x1c, 0x2d, 0x3e, 0x4f,
-    0x5a, 0x6b, 0x7c, 0x8d, 0x9e, 0x0f, 0x1a, 0x2b
-};
+// [COMMITTEE FIX] 移除硬编码的胡椒
+// static const unsigned char g_internal_pepper[32] = { ... };
 
 int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_len,
                                    const char* password, const unsigned char* salt) {
-    // 添加 API 边界参数验证
     if (derived_key == NULL || password == NULL || salt == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
+    
+    // [COMMITTEE FIX] 从底层模块动态获取在初始化时加载的胡椒
+    size_t pepper_len = 0;
+    const unsigned char* pepper = get_global_pepper(&pepper_len);
+    if (pepper == NULL || pepper_len == 0) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "FATAL: Global pepper is not available. Was hsc_init() called and successful?");
+        return HSC_ERROR_GENERAL; // 表示库未正确初始化
+    }
+
     int result = derive_key_from_password(
         derived_key, derived_key_len,
         password,
         salt,
         g_argon2_opslimit,
         g_argon2_memlimit,
-        g_internal_pepper, sizeof(g_internal_pepper)
+        pepper, pepper_len
     );
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsigned char* ed25519_pk_in) {
-    // 添加 API 边界参数验证
     if (x25519_pk_out == NULL || ed25519_pk_in == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -467,7 +472,6 @@ int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsi
 }
 
 int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsigned char* ed25519_sk_in) {
-    // 添加 API 边界参数验证
     if (x25519_sk_out == NULL || ed25519_sk_in == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -481,7 +485,6 @@ int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
                               const unsigned char* message, size_t message_len,
                               const unsigned char* additional_data, size_t ad_len,
                               const unsigned char* nonce, const unsigned char* key) {
-    // 添加 API 边界参数验证
     if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce == NULL || key == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -495,7 +498,6 @@ int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
                               const unsigned char* tag,
                               const unsigned char* additional_data, size_t ad_len,
                               const unsigned char* nonce, const unsigned char* key) {
-    // 添加 API 边界参数验证
     if (decrypted_message == NULL || ciphertext == NULL || tag == NULL || nonce == NULL || key == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }

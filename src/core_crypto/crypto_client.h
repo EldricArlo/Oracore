@@ -3,6 +3,7 @@
 
 #include "../common/security_spec.h"
 #include <stdbool.h>
+#include <stddef.h>
 
 // --- 数据结构定义 ---
 
@@ -29,10 +30,25 @@ typedef struct {
 void crypto_config_load_from_env();
 
 /**
- * @brief 初始化密码学库，必须在任何密码学操作前调用
+ * @brief 初始化密码学库，必须在任何密码学操作前调用。
+ *        [关键安全变更] 此函数现在会强制从环境变量 HSC_PEPPER_HEX 加载全局胡椒。
+ *        如果加载失败，整个初始化将失败。
  * @return 成功返回 0，失败返回 -1
  */
 int crypto_client_init();
+
+/**
+ * @brief [COMMITTEE ADD] 清理密码学客户端分配的资源，如全局胡椒。
+ *        应在程序退出前调用。
+ */
+void crypto_client_cleanup();
+
+/**
+ * @brief [COMMITTEE ADD] 获取已加载的全局胡椒。
+ * @param out_len (输出) 用于存储胡椒长度的指针。
+ * @return 指向存储在安全内存中的全局胡椒的常量指针。
+ */
+const unsigned char* get_global_pepper(size_t* out_len);
 
 /**
  * @brief 生成一个全新的主密钥对 (公钥 + 私钥)

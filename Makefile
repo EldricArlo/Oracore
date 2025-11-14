@@ -124,11 +124,16 @@ $(TEST_EXECUTABLES): $(BIN_DIR)/% : $(TEST_DIR)/%.c $(TEST_HELPER_OBJS) $(TARGET
 
 # --- Commands ---
 
+# [COMMITTEE FIX] Define a dedicated, non-secret pepper ONLY for the test suite.
+# This ensures that the tests can run in a CI/CD environment without real secrets.
+# IMPORTANT: This pepper has no security value and MUST NOT be used in production.
+TEST_PEPPER_HEX = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
 run-tests: tests
 	@echo "\n--- Running all test suites ---"
 	@for test_exe in $(TEST_EXECUTABLES); do \
 		echo "[RUNNING] ./$$test_exe"; \
-		./$$test_exe; \
+		HSC_PEPPER_HEX=$(TEST_PEPPER_HEX) ./$$test_exe; \
 		if [ $$? -ne 0 ]; then \
 			echo "!!! TEST FAILED: $$test_exe !!!"; \
 			exit 1; \
