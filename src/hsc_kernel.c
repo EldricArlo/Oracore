@@ -358,7 +358,10 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     if (enc_key_len == 0 || enc_key_len > HSC_MAX_ENCAPSULATED_KEY_SIZE) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
     }
-    encapsulated_key = malloc(enc_key_len);
+    // --- [COMMITTEE FIX START] ---
+    // 使用 hsc_secure_alloc 替换 malloc 以增强安全性
+    encapsulated_key = hsc_secure_alloc(enc_key_len);
+    // --- [COMMITTEE FIX END] ---
     if (!encapsulated_key) { ret_code = HSC_ERROR_ALLOCATION_FAILED; goto cleanup; }
     if (fread(encapsulated_key, 1, enc_key_len, f_in) != enc_key_len) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
@@ -390,7 +393,10 @@ cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
     if (ret_code != HSC_OK && output_path != NULL) remove(output_path);
-    free(encapsulated_key);
+    // --- [COMMITTEE FIX START] ---
+    // 使用 hsc_secure_free 替换 free
+    hsc_secure_free(encapsulated_key);
+    // --- [COMMITTEE FIX END] ---
     hsc_crypto_stream_state_free(&st);
     hsc_secure_free(dec_session_key);
     return ret_code;
