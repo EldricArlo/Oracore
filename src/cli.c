@@ -72,9 +72,15 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
             return NULL;
         }
 
+        #define MAX_STDIN_SIZE (16 * 1024 * 1024) // [COMMITTEE FIX] 为stdin读取增加上限
         size_t bytes_read;
         while ((bytes_read = fread(buffer + size, 1, capacity - size, f)) > 0) {
             size += bytes_read;
+             if (size > MAX_STDIN_SIZE) {
+                fprintf(stderr, "错误: 从标准输入读取的数据超过了 %d MB 的上限\n", MAX_STDIN_SIZE / (1024 * 1024));
+                free(buffer);
+                return NULL;
+            }
             if (size == capacity) {
                 if (capacity > SIZE_MAX / 2) {
                     fprintf(stderr, "错误: 输入文件过大\n");
@@ -277,16 +283,32 @@ cleanup:
     free(user_cert_pem); free(ca_cert_pem); return ret;
 }
 
-int handle_hybrid_encrypt(int argc, char* argv[]) {
-    if (argc < 3) { print_usage(argv[0]); return 1; }
+// ====================================================================================
+// --- REFACTORED: handle_hybrid_encrypt and its new helper functions ---
+// ====================================================================================
 
-    const char* in_file = argv[2];
-    const char* recipient_cert_file = NULL;
-    const char* recipient_pk_file = NULL;
-    const char* sender_priv_file = NULL;
-    const char* ca_path = NULL;
-    const char* user_cn = NULL;
-    bool no_verify_flag = false;
+/**
+ * @brief [REFACTORED] A structure to hold all parsed arguments for the encrypt command.
+ */
+typedef struct {
+    const char* in_file;
+    const char* recipient_cert_file;
+    const char* recipient_pk_file;
+    const char* sender_priv_file;
+    const char* ca_path;
+    const char* user_cn;
+    bool no_verify_flag;
+    unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
+} encrypt_args;
+
+/**
+ * @brief [REFACTORED] Parses command line arguments for the encrypt command into the args struct.
+ * @return Returns true on success, false on parsing errors or invalid combinations.
+ */
+static bool _parse_encrypt_args(int argc, char* argv[], encrypt_args* args) {
+    // Initialize args with default values
+    memset(args, 0, sizeof(encrypt_args));
+    args->in_file = argv[2];
 
     static struct option long_options[] = {
         {"to",                required_argument, 0, 't'},
@@ -299,89 +321,131 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     };
     
     int opt;
-    optind = 3;
+    optind = 3; // Start parsing after "hsc_cli encrypt"
     while ((opt = getopt_long(argc, argv, "t:f:r:c:u:n", long_options, NULL)) != -1) {
         switch (opt) {
-            case 't': recipient_cert_file = optarg; break;
-            case 'f': sender_priv_file = optarg; break;
-            case 'r': recipient_pk_file = optarg; break;
-            case 'c': ca_path = optarg; break;
-            case 'u': user_cn = optarg; break;
-            case 'n': no_verify_flag = true; break;
-            default: print_usage(argv[0]); return 1;
+            case 't': args->recipient_cert_file = optarg; break;
+            case 'f': args->sender_priv_file = optarg; break;
+            case 'r': args->recipient_pk_file = optarg; break;
+            case 'c': args->ca_path = optarg; break;
+            case 'u': args->user_cn = optarg; break;
+            case 'n': args->no_verify_flag = true; break;
+            default: return false; // Unrecognized option
         }
     }
 
-    if (!in_file || !sender_priv_file || (!recipient_cert_file && !recipient_pk_file)) {
-        print_usage(argv[0]); return 1;
+    // --- Validate argument combinations ---
+    if (!args->in_file || !args->sender_priv_file || (!args->recipient_cert_file && !args->recipient_pk_file)) {
+        fprintf(stderr, "错误: 缺少必要的加密参数。\n");
+        return false;
     }
-    if (recipient_cert_file && recipient_pk_file) {
+    if (args->recipient_cert_file && args->recipient_pk_file) {
         fprintf(stderr, "错误: --to 和 --recipient-pk-file 选项是互斥的。\n");
-        return 1;
+        return false;
     }
-
-    char out_file[FILENAME_MAX];
-    if (!create_output_path(out_file, sizeof(out_file), in_file, ".hsc")) {
-        fprintf(stderr, "错误: 生成的输出文件名过长。\n"); return 1;
+    if (args->recipient_cert_file && !args->no_verify_flag && (!args->ca_path || !args->user_cn)) {
+        fprintf(stderr, "错误: 使用证书加密时，必须提供 --ca 和 --user 参数进行验证。\n");
+        fprintf(stderr, "      如果您确认要跳过验证，请添加 --no-verify 标志。\n");
+        return false;
     }
     
-    int ret = 1;
-    hsc_master_key_pair* sender_kp = NULL;
+    return true;
+}
+
+/**
+ * @brief [REFACTORED] Handles recipient key preparation for both raw key and certificate modes.
+ * @param args The parsed command line arguments.
+ * @return HSC_OK on success, or a specific HSC error code on failure.
+ */
+static int _prepare_recipient_pk(encrypt_args* args) {
     unsigned char* recipient_cert_pem = NULL;
     unsigned char* ca_cert_pem = NULL;
-    unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    
-    if (recipient_pk_file) {
+    int ret_code = HSC_ERROR_GENERAL;
+
+    if (args->recipient_pk_file) {
+        // --- Raw Public Key Mode ---
         fprintf(stdout, "\n\033[33m[警告] 您正在使用原始公钥模式进行加密。\n       系统不会验证接收者身份，请确保您信任此公钥的来源。\033[0m\n\n");
         size_t pk_len;
-        unsigned char* pk_buf = read_small_file(recipient_pk_file, &pk_len);
+        unsigned char* pk_buf = read_small_file(args->recipient_pk_file, &pk_len);
         if (!pk_buf || pk_len != HSC_MASTER_PUBLIC_KEY_BYTES) {
-            fprintf(stderr, "错误: 读取或验证接收者公钥文件 '%s' 失败。\n", recipient_pk_file);
+            fprintf(stderr, "错误: 读取或验证接收者公钥文件 '%s' 失败。\n", args->recipient_pk_file);
             free(pk_buf);
-            goto cleanup;
+            return HSC_ERROR_FILE_IO;
         }
-        memcpy(recipient_pk, pk_buf, HSC_MASTER_PUBLIC_KEY_BYTES);
+        memcpy(args->recipient_pk, pk_buf, HSC_MASTER_PUBLIC_KEY_BYTES);
         free(pk_buf);
-    } else {
-        size_t cert_len;
-        recipient_cert_pem = read_small_file(recipient_cert_file, &cert_len);
-        if (!recipient_cert_pem) { goto cleanup; }
+        ret_code = HSC_OK;
 
-        if (no_verify_flag) {
+    } else {
+        // --- Certificate Mode ---
+        size_t cert_len;
+        recipient_cert_pem = read_small_file(args->recipient_cert_file, &cert_len);
+        if (!recipient_cert_pem) { ret_code = HSC_ERROR_FILE_IO; goto cleanup; }
+
+        if (args->no_verify_flag) {
             fprintf(stdout, "\n\033[31m[危险警告] 您已选择 --no-verify 选项。\n           系统将不会验证接收者证书的真实性、有效性或吊销状态。\n           请仅在完全信任此证书来源的情况下使用此选项。\033[0m\n\n");
         } else {
-            if (!ca_path || !user_cn) {
-                fprintf(stderr, "错误: 使用证书加密时，必须提供 --ca 和 --user 参数进行验证。\n");
-                fprintf(stderr, "      如果您确认要跳过验证，请添加 --no-verify 标志。\n");
-                goto cleanup;
-            }
             size_t ca_len;
-            ca_cert_pem = read_small_file(ca_path, &ca_len);
-            if (!ca_cert_pem) { goto cleanup; }
+            ca_cert_pem = read_small_file(args->ca_path, &ca_len);
+            if (!ca_cert_pem) { ret_code = HSC_ERROR_FILE_IO; goto cleanup; }
 
-            printf("正在验证接收者证书 '%s' ...\n", recipient_cert_file);
-            int verify_result = hsc_verify_user_certificate((const char*)recipient_cert_pem, (const char*)ca_cert_pem, user_cn);
+            printf("正在验证接收者证书 '%s' ...\n", args->recipient_cert_file);
+            int verify_result = hsc_verify_user_certificate((const char*)recipient_cert_pem, (const char*)ca_cert_pem, args->user_cn);
             if (verify_result != HSC_OK) {
                 fprintf(stderr, "错误: 接收者证书验证失败 (代码: %d)。加密操作已中止。\n", verify_result);
+                ret_code = verify_result;
                 goto cleanup;
             }
             printf("✅ 接收者证书验证成功。\n");
         }
 
-        if (hsc_extract_public_key_from_cert((const char*)recipient_cert_pem, recipient_pk) != HSC_OK) {
-            fprintf(stderr, "错误: 无法从接收者证书 '%s' 中提取公钥。\n", recipient_cert_file);
+        if (hsc_extract_public_key_from_cert((const char*)recipient_cert_pem, args->recipient_pk) != HSC_OK) {
+            fprintf(stderr, "错误: 无法从接收者证书 '%s' 中提取公钥。\n", args->recipient_cert_file);
+            ret_code = HSC_ERROR_PKI_OPERATION;
             goto cleanup;
         }
+        ret_code = HSC_OK;
+    }
+
+cleanup:
+    free(recipient_cert_pem);
+    free(ca_cert_pem);
+    return ret_code;
+}
+
+/**
+ * @brief [REFACTORED] Main handler for the 'encrypt' command. Now acts as a high-level coordinator.
+ */
+int handle_hybrid_encrypt(int argc, char* argv[]) {
+    if (argc < 3) { print_usage(argv[0]); return 1; }
+
+    encrypt_args args;
+    if (!_parse_encrypt_args(argc, argv, &args)) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    char out_file[FILENAME_MAX];
+    if (!create_output_path(out_file, sizeof(out_file), args.in_file, ".hsc")) {
+        fprintf(stderr, "错误: 生成的输出文件名过长。\n");
+        return 1;
     }
     
-    sender_kp = hsc_load_master_key_pair_from_private_key(sender_priv_file);
-    if (!sender_kp) {
-        fprintf(stderr, "错误: 无法从 '%s' 加载发送者私钥。\n", sender_priv_file);
+    int ret = 1;
+    hsc_master_key_pair* sender_kp = NULL;
+    
+    if (_prepare_recipient_pk(&args) != HSC_OK) {
         goto cleanup;
     }
     
-    printf("正在加密 %s -> %s ...\n", in_file, out_file);
-    int result = hsc_hybrid_encrypt_stream_raw(out_file, in_file, recipient_pk, sender_kp);
+    sender_kp = hsc_load_master_key_pair_from_private_key(args.sender_priv_file);
+    if (!sender_kp) {
+        fprintf(stderr, "错误: 无法从 '%s' 加载发送者私钥。\n", args.sender_priv_file);
+        goto cleanup;
+    }
+    
+    printf("正在加密 %s -> %s ...\n", args.in_file, out_file);
+    int result = hsc_hybrid_encrypt_stream_raw(out_file, args.in_file, args.recipient_pk, sender_kp);
 
     if (result == HSC_OK) {
         printf("✅ 混合加密完成！\n");
@@ -391,11 +455,10 @@ int handle_hybrid_encrypt(int argc, char* argv[]) {
     }
 
 cleanup:
-    free(recipient_cert_pem);
-    free(ca_cert_pem);
     hsc_free_master_key_pair(&sender_kp);
     return ret;
 }
+
 
 int handle_hybrid_decrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
