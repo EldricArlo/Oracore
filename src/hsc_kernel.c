@@ -9,9 +9,9 @@
 #include <curl/curl.h>
 #include <sodium.h>
 #include <stdlib.h>
-#include <stdio.h>  // [新增] 用于文件操作, 以及 vsnprintf
-#include <stdint.h> // [新增] 用于固定宽度的整数类型
-#include <stdarg.h> // [COMMITTEE FIX] 为可变参数日志函数引入
+#include <stdio.h>
+#include <stdint.h>
+#include <stdarg.h>
 
 // --- 不透明结构体的内部定义 ---
 
@@ -28,11 +28,8 @@ struct hsc_crypto_stream_state_s {
 const uint8_t HSC_STREAM_TAG_FINAL = crypto_secretstream_xchacha20poly1305_TAG_FINAL;
 
 
-// --- [新增] 内部辅助函数 ---
+// --- 内部辅助函数 ---
 
-/**
- * @brief [重构自 cli.c] 将一个64位无符号整数以小端序存入字节数组。
- */
 static void store64_le(unsigned char* dst, uint64_t w) {
     dst[0] = (unsigned char)w; w >>= 8; dst[1] = (unsigned char)w; w >>= 8;
     dst[2] = (unsigned char)w; w >>= 8; dst[3] = (unsigned char)w; w >>= 8;
@@ -40,9 +37,6 @@ static void store64_le(unsigned char* dst, uint64_t w) {
     dst[6] = (unsigned char)w; w >>= 8; dst[7] = (unsigned char)w;
 }
 
-/**
- * @brief [重构自 cli.c] 从一个字节数组中以小端序加载一个64位无符号整数。
- */
 static uint64_t load64_le(const unsigned char* src) {
     uint64_t w = src[7];
     w = (w << 8) | src[6]; w = (w << 8) | src[5]; w = (w << 8) | src[4];
@@ -50,10 +44,6 @@ static uint64_t load64_le(const unsigned char* src) {
     w = (w << 8) | src[0]; return w;
 }
 
-/**
- * @brief [重构自 cli.c] 封装了加密过程中的文件I/O和流式加密循环。
- * @return 成功返回 HSC_OK, 失败返回相应的错误码。
- */
 static int _perform_stream_encryption(FILE* f_in, FILE* f_out, hsc_crypto_stream_state* st) {
     unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE];
     unsigned char buf_out[HSC_FILE_IO_CHUNK_SIZE + HSC_STREAM_CHUNK_OVERHEAD];
@@ -78,11 +68,6 @@ static int _perform_stream_encryption(FILE* f_in, FILE* f_out, hsc_crypto_stream
     return HSC_OK;
 }
 
-/**
- * @brief [重构自 cli.c] 封装了解密过程中的文件I/O和流式解密循环。
- * @param stream_finished_flag (输出) 一个指向布尔值的指针，用于指示流是否被正确终止。
- * @return 成功返回 HSC_OK, 失败返回相应的错误码。
- */
 static int _perform_stream_decryption(FILE* f_in, FILE* f_out, hsc_crypto_stream_state* st, bool* stream_finished_flag) {
     unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE + HSC_STREAM_CHUNK_OVERHEAD];
     unsigned char buf_out[HSC_FILE_IO_CHUNK_SIZE];
@@ -115,8 +100,6 @@ static int _perform_stream_decryption(FILE* f_in, FILE* f_out, hsc_crypto_stream
 static bool read_key_file(const char* filename, void* buffer, size_t expected_len) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
-    // Use robust fread instead of ftell to support non-regular files
-    // and ensure the file has the exact expected length.
     size_t bytes_read = fread(buffer, 1, expected_len, f);
     char dummy_byte;
     bool is_eof = (fread(&dummy_byte, 1, 1, f) == 0 && feof(f));
@@ -161,21 +144,17 @@ hsc_master_key_pair* hsc_generate_master_key_pair() {
 
 hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_key_path) {
     if (priv_key_path == NULL) return NULL;
-
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
     if (!kp) return NULL;
-    
     kp->internal_kp.sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
     if (!kp->internal_kp.sk) {
         free(kp); return NULL;
     }
-    
     if (!read_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
         secure_free(kp->internal_kp.sk); 
         free(kp); 
         return NULL;
     }
-    
     crypto_sign_ed25519_sk_to_pk(kp->internal_kp.pk, kp->internal_kp.sk);
     return kp;
 }
@@ -201,7 +180,6 @@ int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* publ
     if (kp == NULL || public_key_out == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
-    // 合法地在库内部访问不透明结构体的成员
     memcpy(public_key_out, kp->internal_kp.pk, HSC_MASTER_PUBLIC_KEY_BYTES);
     return HSC_OK;
 }
@@ -210,25 +188,18 @@ int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* publ
 
 int hsc_generate_csr(const hsc_master_key_pair* mkp, const char* username, char** out_csr_pem) {
     if (mkp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
-    // This is a wrapper call to the actual implementation in pki_handler.c
-    // It now directly returns the detailed error codes from the PKI module.
     return generate_csr(&mkp->internal_kp, username, out_csr_pem);
 }
 
 void hsc_free_pem_string(char* pem_string) {
-    // This is a wrapper call to the actual implementation in pki_handler.c
     free_csr_pem(pem_string);
 }
 
 int hsc_verify_user_certificate(const char* user_cert_pem, const char* trusted_ca_cert_pem, const char* expected_username) {
-    // This is a wrapper call to the actual implementation in pki_handler.c
-    // It now directly returns the detailed error codes from the PKI module.
     return verify_user_certificate(user_cert_pem, trusted_ca_cert_pem, expected_username);
 }
 
 int hsc_extract_public_key_from_cert(const char* user_cert_pem, unsigned char* public_key_out) {
-    // This is a wrapper call to the actual implementation in pki_handler.c
-    // It now directly returns the detailed error codes from the PKI module.
     return extract_public_key_from_cert(user_cert_pem, public_key_out);
 }
 
@@ -306,7 +277,7 @@ int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, u
 }
 
 
-// --- [新增] API 实现：高级混合加解密 (原始密钥模式) ---
+// --- API 实现：高级混合加解密 (原始密钥模式) ---
 
 int hsc_hybrid_encrypt_stream_raw(const char* output_path,
                                     const char* input_path,
@@ -316,67 +287,51 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
     if (output_path == NULL || input_path == NULL || recipient_pk == NULL || sender_kp == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
-
     int ret_code = HSC_ERROR_GENERAL;
     FILE *f_in = NULL, *f_out = NULL;
     hsc_crypto_stream_state* st = NULL;
-    unsigned char* session_key = NULL; // 将在安全内存中分配
-
+    unsigned char* session_key = NULL;
     session_key = hsc_secure_alloc(HSC_SESSION_KEY_BYTES);
     if (!session_key) {
         ret_code = HSC_ERROR_ALLOCATION_FAILED;
         goto cleanup;
     }
-
     unsigned char encapsulated_key[HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES];
     size_t actual_encapsulated_len;
-
-    // 1. 生成会话密钥
     hsc_random_bytes(session_key, HSC_SESSION_KEY_BYTES);
-
-    // 2. 封装会话密钥 (直接使用提供的原始公钥)
     if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len,
                                 session_key, HSC_SESSION_KEY_BYTES,
                                 recipient_pk, sender_kp) != HSC_OK) {
         ret_code = HSC_ERROR_CRYPTO_OPERATION;
         goto cleanup;
     }
-
     f_in = fopen(input_path, "rb");
     if (!f_in) { ret_code = HSC_ERROR_FILE_IO; goto cleanup; }
     f_out = fopen(output_path, "wb");
     if (!f_out) { ret_code = HSC_ERROR_FILE_IO; goto cleanup; }
-
-    // 3. 写入文件头: [封装的密钥长度 (8字节) | 封装的密钥 | 流加密头]
     unsigned char key_len_buf[8]; 
     store64_le(key_len_buf, actual_encapsulated_len);
     if (fwrite(key_len_buf, 1, sizeof(key_len_buf), f_out) != sizeof(key_len_buf) ||
         fwrite(encapsulated_key, 1, actual_encapsulated_len, f_out) != actual_encapsulated_len) {
         ret_code = HSC_ERROR_FILE_IO; goto cleanup;
     }
-
-    // 4. 初始化并写入流加密头
     unsigned char stream_header[HSC_STREAM_HEADER_BYTES];
     st = hsc_crypto_stream_state_new_push(stream_header, session_key);
     if (st == NULL) { ret_code = HSC_ERROR_CRYPTO_OPERATION; goto cleanup; }
     if (fwrite(stream_header, 1, sizeof(stream_header), f_out) != sizeof(stream_header)) {
         ret_code = HSC_ERROR_FILE_IO; goto cleanup;
     }
-
-    // 5. 执行流式加密
     ret_code = _perform_stream_encryption(f_in, f_out, st);
     if (ret_code != HSC_OK) {
         goto cleanup;
     }
-
     ret_code = HSC_OK;
-
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
     if (ret_code != HSC_OK && output_path != NULL) remove(output_path);
     hsc_crypto_stream_state_free(&st);
-    hsc_secure_free(session_key); // 使用安全释放函数
+    hsc_secure_free(session_key);
     return ret_code;
 }
 
@@ -388,70 +343,49 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     if (output_path == NULL || input_path == NULL || sender_pk == NULL || recipient_kp == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
-
     int ret_code = HSC_ERROR_GENERAL;
     FILE *f_in = NULL, *f_out = NULL;
     hsc_crypto_stream_state* st = NULL;
     unsigned char* encapsulated_key = NULL;
-    unsigned char* dec_session_key = NULL; // 将在安全内存中分配
-
+    unsigned char* dec_session_key = NULL;
     f_in = fopen(input_path, "rb");
     if (!f_in) { ret_code = HSC_ERROR_FILE_IO; goto cleanup; }
-
-    // 1. 读取文件头：封装的密钥长度
     unsigned char key_len_buf[8];
     if (fread(key_len_buf, 1, sizeof(key_len_buf), f_in) != sizeof(key_len_buf)) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
     }
     size_t enc_key_len = load64_le(key_len_buf);
-    
     if (enc_key_len == 0 || enc_key_len > HSC_MAX_ENCAPSULATED_KEY_SIZE) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
     }
-
-    // 2. 读取封装的密钥本身
     encapsulated_key = malloc(enc_key_len);
     if (!encapsulated_key) { ret_code = HSC_ERROR_ALLOCATION_FAILED; goto cleanup; }
     if (fread(encapsulated_key, 1, enc_key_len, f_in) != enc_key_len) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
     }
-
-    // 3. 解封装会话密钥
     dec_session_key = hsc_secure_alloc(HSC_SESSION_KEY_BYTES);
     if (!dec_session_key) { ret_code = HSC_ERROR_ALLOCATION_FAILED; goto cleanup; }
-
     if (hsc_decapsulate_session_key(dec_session_key, encapsulated_key, enc_key_len, sender_pk, recipient_kp) != HSC_OK) {
         ret_code = HSC_ERROR_CRYPTO_OPERATION; goto cleanup;
     }
-
-    // 4. 读取流加密头
     unsigned char stream_header[HSC_STREAM_HEADER_BYTES];
     if (fread(stream_header, 1, sizeof(stream_header), f_in) != sizeof(stream_header)) {
         ret_code = HSC_ERROR_INVALID_FORMAT; goto cleanup;
     }
-    
-    // 5. 初始化解密流
     st = hsc_crypto_stream_state_new_pull(stream_header, dec_session_key);
     if (st == NULL) { ret_code = HSC_ERROR_CRYPTO_OPERATION; goto cleanup; }
-
     f_out = fopen(output_path, "wb");
     if (!f_out) { ret_code = HSC_ERROR_FILE_IO; goto cleanup; }
-    
-    // 6. 执行流式解密
     bool stream_finished = false;
     ret_code = _perform_stream_decryption(f_in, f_out, st, &stream_finished);
     if (ret_code != HSC_OK) {
         goto cleanup;
     }
-    
-    // 7. 验证流是否被正确终止
     if (!stream_finished) {
-        ret_code = HSC_ERROR_INVALID_FORMAT; // 表示文件被截断或损坏
+        ret_code = HSC_ERROR_INVALID_FORMAT;
         goto cleanup;
     }
-
     ret_code = HSC_OK;
-
 cleanup:
     if (f_in) fclose(f_in);
     if (f_out) fclose(f_out);
@@ -472,32 +406,98 @@ void hsc_secure_free(void* ptr) {
     secure_free(ptr);
 }
 
-// --- [COMMITTEE FIX] API 实现：日志回调管理 ---
+// --- API 实现：日志回调管理 ---
 
-// 定义一个静态全局变量来存储用户提供的回调函数指针
 static hsc_log_callback g_log_callback = NULL;
 
-// 实现公共 API 函数以设置回调
 void hsc_set_log_callback(hsc_log_callback callback) {
     g_log_callback = callback;
 }
 
-// 实现供库内部模块使用的日志记录函数
 void _hsc_log(int level, const char* format, ...) {
-    // 如果没有注册回调，则直接返回，不执行任何操作
     if (g_log_callback == NULL) {
         return;
     }
-
-    char buffer[1024]; // 为日志消息分配一个合理的缓冲区
+    char buffer[1024];
     va_list args;
     va_start(args, format);
-    
-    // 使用 vsnprintf 安全地格式化消息，防止缓冲区溢出
     vsnprintf(buffer, sizeof(buffer), format, args);
-    
     va_end(args);
-
-    // 调用用户注册的回调函数
     g_log_callback(level, buffer);
+}
+
+// =======================================================================
+// --- [新增] 专家级API实现 ---
+// =======================================================================
+
+static const unsigned char g_internal_pepper[32] = {
+    0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x7a, 0x8b, 0x9c, 0x0d, 0x1e, 0x2f, 
+    0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x9a, 0x0b, 0x1c, 0x2d, 0x3e, 0x4f,
+    0x5a, 0x6b, 0x7c, 0x8d, 0x9e, 0x0f, 0x1a, 0x2b
+};
+
+int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_len,
+                                   const char* password, const unsigned char* salt) {
+    // [COMMITTEE FIX] 添加 API 边界参数验证
+    if (derived_key == NULL || password == NULL || salt == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    int result = derive_key_from_password(
+        derived_key, derived_key_len,
+        password,
+        salt,
+        g_argon2_opslimit,
+        g_argon2_memlimit,
+        g_internal_pepper, sizeof(g_internal_pepper)
+    );
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
+}
+
+int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsigned char* ed25519_pk_in) {
+    // [COMMITTEE FIX] 添加 API 边界参数验证
+    if (x25519_pk_out == NULL || ed25519_pk_in == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    if (crypto_sign_ed25519_pk_to_curve25519(x25519_pk_out, ed25519_pk_in) != 0) {
+        return HSC_ERROR_CRYPTO_OPERATION;
+    }
+    return HSC_OK;
+}
+
+int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsigned char* ed25519_sk_in) {
+    // [COMMITTEE FIX] 添加 API 边界参数验证
+    if (x25519_sk_out == NULL || ed25519_sk_in == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    if (crypto_sign_ed25519_sk_to_curve25519(x25519_sk_out, ed25519_sk_in) != 0) {
+        return HSC_ERROR_CRYPTO_OPERATION;
+    }
+    return HSC_OK;
+}
+
+int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
+                              const unsigned char* message, size_t message_len,
+                              const unsigned char* additional_data, size_t ad_len,
+                              const unsigned char* nonce, const unsigned char* key) {
+    // [COMMITTEE FIX] 添加 API 边界参数验证
+    if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce == NULL || key == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    int result = encrypt_symmetric_aead_detached(ciphertext, tag_out, message, message_len,
+                                                 additional_data, ad_len, nonce, key);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
+}
+
+int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
+                              const unsigned char* ciphertext, size_t ciphertext_len,
+                              const unsigned char* tag,
+                              const unsigned char* additional_data, size_t ad_len,
+                              const unsigned char* nonce, const unsigned char* key) {
+    // [COMMITTEE FIX] 添加 API 边界参数验证
+    if (decrypted_message == NULL || ciphertext == NULL || tag == NULL || nonce == NULL || key == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    int result = decrypt_symmetric_aead_detached(decrypted_message, ciphertext, ciphertext_len,
+                                                 tag, additional_data, ad_len, nonce, key);
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }

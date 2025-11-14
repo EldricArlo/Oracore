@@ -123,6 +123,23 @@ int decrypt_symmetric_aead(
     const unsigned char* key
 );
 
+/**
+ * @brief [新增] [分离模式] 内部实现 AEAD 对称加密
+ */
+int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* tag_out,
+                                    const unsigned char* message, size_t message_len,
+                                    const unsigned char* additional_data, size_t ad_len,
+                                    const unsigned char* nonce, const unsigned char* key);
+
+/**
+ * @brief [新增] [分离模式] 内部实现 AEAD 对称解密
+ */
+int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
+                                    const unsigned char* ciphertext, size_t ciphertext_len,
+                                    const unsigned char* tag,
+                                    const unsigned char* additional_data, size_t ad_len,
+                                    const unsigned char* nonce, const unsigned char* key);
+
 
 /**
  * @brief 规范 4 - 阶段三 - 4: 封装会话密钥 (非对称加密)

@@ -33,8 +33,9 @@
 #define HSC_MASTER_PUBLIC_KEY_BYTES 32
 #define HSC_MASTER_SECRET_KEY_BYTES 64
 #define HSC_SESSION_KEY_BYTES       32
+#define HSC_KDF_SALT_BYTES          32 // 为新的KDF函数提供一个标准的盐长度
 
-// 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
+// 流式加密 (XChaCha20-Poly1035 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
 #define HSC_STREAM_TAG_BYTES      16 // The size of the authentication tag
 // [COMMITTEE FIX] 修正了此处宏定义的拼写错误
@@ -51,7 +52,8 @@
 #define HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES (HSC_BOX_NONCE_BYTES + HSC_BOX_MAC_BYTES)
 
 // 为解封装的会话密钥长度提供一个安全、合理的上限
-#define HSC_MAX_ENCAPSULATED_KEY_SIZE (HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES + 16)
+#define HSC_MAX_ENCAPSULATED_KEY_SIZE (HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES)
+
 
 // 为文件流式处理定义的标准块大小
 #define HSC_FILE_IO_CHUNK_SIZE 4096
@@ -73,14 +75,6 @@ hsc_master_key_pair* hsc_generate_master_key_pair();
 hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_key_path);
 int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_path, const char* priv_key_path);
 void hsc_free_master_key_pair(hsc_master_key_pair** kp);
-
-/**
- * @brief [NEW] 从一个主密钥对句柄中提取原始的公钥字节。
- * @param kp 指向一个已初始化的主密钥对的不透明指针。
- * @param public_key_out (输出) 一个缓冲区，用于存储提取出的原始公钥。
- *                       其大小必须至少为 HSC_MASTER_PUBLIC_KEY_BYTES。
- * @return 成功返回 HSC_OK，失败返回相应的错误码。
- */
 int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* public_key_out);
 
 // --- 核心API函数：PKI 与证书 ---
@@ -110,30 +104,11 @@ void hsc_crypto_stream_state_free(hsc_crypto_stream_state** state);
 int hsc_crypto_stream_push(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, const unsigned char* in, size_t in_len, uint8_t tag);
 int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, unsigned char* tag, const unsigned char* in, size_t in_len);
 
-// --- [新增] 核心API函数：高级混合加解密 (原始密钥模式) ---
-// 警告：这些函数不提供身份验证，调用者必须自行确保密钥的真实性。
-
-/**
- * @brief [原始模式] 使用接收者的原始公钥和发送者的原始密钥对，对一个文件进行流式混合加密。
- * @param output_path 加密后输出文件的路径。
- * @param input_path  要加密的源文件路径。
- * @param recipient_pk 指向接收者原始公钥的指针 (HSC_MASTER_PUBLIC_KEY_BYTES)。
- * @param sender_kp    指向发送者主密钥对的指针。
- * @return 成功返回 HSC_OK，失败返回相应的错误码。
- */
+// --- 核心API函数：高级混合加解密 (原始密钥模式) ---
 int hsc_hybrid_encrypt_stream_raw(const char* output_path,
                                     const char* input_path,
                                     const unsigned char* recipient_pk,
                                     const hsc_master_key_pair* sender_kp);
-
-/**
- * @brief [原始模式] 使用接收者的原始密钥对和发送者的原始公钥，对一个文件进行流式混合解密。
- * @param output_path 解密后输出文件的路径。
- * @param input_path  要解密的源文件路径。
- * @param sender_pk   指向发送者原始公key的指针 (HSC_MASTER_PUBLIC_KEY_BYTES)。
- * @param recipient_kp 指向接收者主密钥对的指针。
- * @return 成功返回 HSC_OK，失败返回相应的错误码。
- */
 int hsc_hybrid_decrypt_stream_raw(const char* output_path,
                                     const char* input_path,
                                     const unsigned char* sender_pk,
@@ -152,21 +127,92 @@ int hsc_aead_decrypt(unsigned char* decrypted_message, unsigned long long* decry
 void* hsc_secure_alloc(size_t size);
 void hsc_secure_free(void* ptr);
 
-// --- [COMMITTEE FIX] 核心API函数：日志回调管理 ---
-
-/**
- * @brief 定义日志回调函数的类型。
- * @param level 日志级别 (0: INFO, 1: WARNING, 2: ERROR)。
- * @param message 要记录的日志消息字符串。
- */
+// --- 核心API函数：日志回调管理 ---
 typedef void (*hsc_log_callback)(int level, const char* message);
+void hsc_set_log_callback(hsc_log_callback callback);
+
+
+// =======================================================================
+// --- [新增] 专家级API (EXPERT-LEVEL APIS) ---
+// 警告：以下函数为高级用户设计，需要调用者对密码学概念有深入理解。
+//      不当使用这些函数可能导致严重的安全漏洞。
+// =======================================================================
 
 /**
- * @brief 设置一个全局日志回调函数。
- *        库内部将通过此函数报告其操作状态，而不是直接打印到 stdout/stderr。
- * @param callback 用户提供的回调函数指针。传递 NULL 可以禁用日志记录。
+ * @brief [专家级] 从用户密码和盐安全地派生密钥。
+ *        此函数使用库内部配置的、经过安全基线验证的 Argon2id 参数。
+ *        它会自动处理内部的全局胡椒，用户无需也无法干预此过程。
+ * @param derived_key (输出) 存储派生密钥的缓冲区。
+ * @param derived_key_len 期望派生的密钥长度。
+ * @param password 用户提供的密码字符串。
+ * @param salt 一个唯一的、针对此密码的盐值 (建议使用 hsc_random_bytes 生成，
+ *             长度应为 HSC_KDF_SALT_BYTES)。
+ * @return 成功返回 HSC_OK，失败返回相应的错误码。
  */
-void hsc_set_log_callback(hsc_log_callback callback);
+int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_len,
+                                   const char* password, const unsigned char* salt);
+
+/**
+ * @brief [专家级] 将一个Ed25519公钥 (用于签名) 转换为X25519公钥 (用于密钥交换)。
+ * @param x25519_pk_out (输出) 存储转换后X25519公钥的缓冲区。
+ *                      大小必须为 32 字节 (crypto_box_PUBLICKEYBYTES)。
+ * @param ed25519_pk_in (输入) 原始的Ed25519公钥。
+ *                      大小必须为 32 字节 (crypto_sign_PUBLICKEYBYTES)。
+ * @return 成功返回 HSC_OK，如果转换失败则返回 HSC_ERROR_CRYPTO_OPERATION。
+ */
+int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsigned char* ed25519_pk_in);
+
+/**
+ * @brief [专家级] 将一个Ed25519私钥 (用于签名) 转换为X25519私钥 (用于密钥交换)。
+ * @param x25519_sk_out (输出) 存储转换后X25519私钥的缓冲区。
+ *                      **警告**: 此密钥为敏感数据，建议存储在安全内存中，并在用后立即擦除。
+ *                      大小必须为 32 字节 (crypto_box_SECRETKEYBYTES)。
+ * @param ed25519_sk_in (输入) 原始的Ed25519私钥。
+ *                      大小必须为 64 字节 (crypto_sign_SECRETKEYBYTES)。
+ * @return 成功返回 HSC_OK，如果转换失败则返回 HSC_ERROR_CRYPTO_OPERATION。
+ */
+int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsigned char* ed25519_sk_in);
+
+
+/**
+ * @brief [专家级] [分离模式] 使用AEAD (XChaCha20-Poly1305) 对称加密数据。
+ *        此版本允许用户提供 Nonce，并将认证标签 (Tag) 与密文分开返回。
+ * @param ciphertext (输出) 加密后的数据缓冲区 (仅包含纯密文)。
+ * @param tag_out (输出) 生成的16字节认证标签 (HSC_AEAD_TAG_BYTES)。
+ * @param message 要加密的明文。
+ * @param message_len 明文的长度。
+ * @param additional_data (可选) 附加验证数据 (AD)，如果不需要则为 NULL。
+ * @param ad_len 附加数据的长度，如果 AD 为 NULL 则为 0。
+ * @param nonce (输入) 24字节的Nonce (HSC_AEAD_NONCE_BYTES)。
+ *              **!!! 致命安全警告 !!!**
+ *              **对于同一个密钥，绝不能使用相同的Nonce加密两条不同的消息。**
+ *              **重用Nonce将彻底摧毁此加密算法的安全性。**
+ *              **强烈建议使用 hsc_random_bytes 为每条消息生成一个唯一的Nonce。**
+ * @param key 加密密钥 (HSC_SESSION_KEY_BYTES)。
+ * @return 成功返回 HSC_OK，失败返回 HSC_ERROR_CRYPTO_OPERATION。
+ */
+int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
+                              const unsigned char* message, size_t message_len,
+                              const unsigned char* additional_data, size_t ad_len,
+                              const unsigned char* nonce, const unsigned char* key);
+
+/**
+ * @brief [专家级] [分离模式] 使用AEAD (XChaCha20-Poly1305) 对称解密数据。
+ * @param decrypted_message (输出) 解密后的明文缓冲区。
+ * @param ciphertext 要解密的纯密文。
+ * @param ciphertext_len 纯密文的长度。
+ * @param tag (输入) 与密文关联的16字节认证标签 (HSC_AEAD_TAG_BYTES)。
+ * @param additional_data (可选) 附加验证数据 (AD)。
+ * @param ad_len 附加数据的长度。
+ * @param nonce (输入) 用于加密的24字节Nonce (HSC_AEAD_NONCE_BYTES)。
+ * @param key 解密密钥 (HSC_SESSION_KEY_BYTES)。
+ * @return 成功返回 HSC_OK，如果认证失败或解密失败则返回 HSC_ERROR_CRYPTO_OPERATION。
+ */
+int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
+                              const unsigned char* ciphertext, size_t ciphertext_len,
+                              const unsigned char* tag,
+                              const unsigned char* additional_data, size_t ad_len,
+                              const unsigned char* nonce, const unsigned char* key);
 
 
 #endif // HSC_KERNEL_H

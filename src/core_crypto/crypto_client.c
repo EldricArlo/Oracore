@@ -83,19 +83,15 @@ int crypto_client_init() {
  * @brief 生成一个全新的 Ed25519 主密钥对，用于签名。
  */
 int generate_master_key_pair(master_key_pair* kp) {
-    // 将 assert 替换为返回错误码的运行时检查。
     if (kp == NULL) {
         return -1;
     }
 
-    // 规范 3.3: 安全内存管理
-    // 私钥是最高价值的敏感数据，必须存储在受保护的内存中。
     kp->sk = secure_alloc(MASTER_SECRET_KEY_BYTES);
     if (kp->sk == NULL) {
-        return -1; // 内存分配失败
+        return -1;
     }
 
-    // 使用 crypto_sign_keypair 生成 Ed25519 密钥对，专门用于数字签名。
     crypto_sign_keypair(kp->pk, kp->sk);
 
     return 0;
@@ -103,27 +99,20 @@ int generate_master_key_pair(master_key_pair* kp) {
 
 void free_master_key_pair(master_key_pair* kp) {
     if (kp != NULL && kp->sk != NULL) {
-        // secure_free 会在释放前安全地擦除内存，防止敏感数据残留。
         secure_free(kp->sk);
         kp->sk = NULL;
     }
 }
 
 int generate_recovery_key(recovery_key* rk) {
-    // 将 assert 替换为返回错误码的运行时检查。
     if (rk == NULL) {
         return -1;
     }
-
-    // 同样，恢复密钥也必须存储在安全内存中。
     rk->key = secure_alloc(RECOVERY_KEY_BYTES);
     if (rk->key == NULL) {
         return -1;
     }
-
-    // 使用密码学安全的伪随机数生成器填充密钥。
     randombytes_buf(rk->key, RECOVERY_KEY_BYTES);
-
     return 0;
 }
 
@@ -135,12 +124,8 @@ void free_recovery_key(recovery_key* rk) {
 }
 
 bool validate_argon2id_params(unsigned long long opslimit, size_t memlimit) {
-    // 规范 3.1: 抗降级攻击
-    // 客户端必须强制执行一个最小安全基线。
-    // 此函数现在总是与编译时定义的 BASELINE_ 宏进行比较，
-    // 以确保无论运行时配置如何，它都能拒绝来自外部的、低于绝对安全底线的值。
     if (opslimit < BASELINE_ARGON2ID_OPSLIMIT || memlimit < BASELINE_ARGON2ID_MEMLIMIT) {
-        return false; // 参数低于内置基线，拒绝执行！
+        return false;
     }
     return true;
 }
@@ -152,24 +137,17 @@ int derive_key_from_password(
     unsigned long long opslimit, size_t memlimit,
     const unsigned char* global_pepper, size_t pepper_len
 ) {
-    // 将 assert 替换为返回错误码的运行时检查。
     if (derived_key == NULL || password == NULL || salt == NULL || global_pepper == NULL) {
         return -1;
     }
 
-    int ret = -1; // 默认返回失败
-    // [安全修复 CRITICAL] 使用安全内存分配中间哈希值
+    int ret = -1;
     unsigned char* hashed_input = NULL;
 
-    // 规范 4 - 阶段二 - 3.b: 【安全验证点】
-    // 在执行任何 KDF 操作之前，必须先验证从服务器获取的参数。
     if (!validate_argon2id_params(opslimit, memlimit)) {
-        goto cleanup; // 参数验证失败
+        goto cleanup;
     }
     
-    // 为了安全地将 pepper 融入 Argon2id，我们先计算 H(pepper || password)，
-    // 然后将这个哈希值作为 Argon2id 的输入"密码"。这是一种健壮的模式。
-    // 我们使用 BLAKE2b (libsodium的crypto_generichash) 来实现 H。
     hashed_input = secure_alloc(crypto_generichash_BYTES);
     if (!hashed_input) { goto cleanup; }
 
@@ -179,21 +157,16 @@ int derive_key_from_password(
     crypto_generichash_update(&state, (const unsigned char*)password, strlen(password));
     crypto_generichash_final(&state, hashed_input, crypto_generichash_BYTES);
 
-    // 调用 libsodium 的 Argon2id 实现。
-    // 它是恒定时间的，符合规范 3.2 的要求。
     if (crypto_pwhash(derived_key, derived_key_len,
                        (const char*)hashed_input, crypto_generichash_BYTES,
                        salt, opslimit, memlimit,
                        crypto_pwhash_ALG_DEFAULT) != 0) {
-        goto cleanup; // 密钥派生失败
+        goto cleanup;
     }
 
-    ret = 0; // 所有操作成功
+    ret = 0;
 
 cleanup:
-    // 规范 3.3: 安全内存管理
-    // 立即清除内存中的中间哈希值。
-    // secure_free 会自动擦除内存。
     if (hashed_input) {
         secure_free(hashed_input);
         hashed_input = NULL;
@@ -207,7 +180,6 @@ int encrypt_symmetric_aead(
     const unsigned char* message, size_t message_len,
     const unsigned char* key
 ) {
-    // 将 assert 替换为返回错误码的运行时检查。
     if (ciphertext == NULL || ciphertext_len == NULL || message == NULL || key == NULL) {
         return -1;
     }
@@ -221,12 +193,12 @@ int encrypt_symmetric_aead(
     if (crypto_aead_xchacha20poly1305_ietf_encrypt(
             actual_ciphertext, ciphertext_len,
             message, message_len,
-            NULL, 0, // 无附加数据(AD)
-            NULL,    // nsec (必须为NULL)
-            nonce,   // 公共 nonce
+            NULL, 0,
+            NULL,
+            nonce,
             key
         ) != 0) {
-        return -1; // 加密失败
+        return -1;
     }
 
     *ciphertext_len += nonce_len;
@@ -239,7 +211,6 @@ int decrypt_symmetric_aead(
     const unsigned char* ciphertext, size_t ciphertext_len,
     const unsigned char* key
 ) {
-    // 将 assert 替换为返回错误码的运行时检查。
     if (decrypted_message == NULL || decrypted_message_len == NULL || ciphertext == NULL || key == NULL) {
         return -1;
     }
@@ -256,13 +227,65 @@ int decrypt_symmetric_aead(
     
     if (crypto_aead_xchacha20poly1305_ietf_decrypt(
         decrypted_message, decrypted_message_len,
-        NULL, // nsec (必须为NULL)
+        NULL,
         actual_ciphertext, actual_ciphertext_len,
-        NULL, 0, // 无附加数据(AD)
-        nonce,   // 从密文中提取的公共 nonce
+        NULL, 0,
+        nonce,
         key
     ) != 0) {
-        return -1; // 解密失败
+        return -1;
+    }
+
+    return 0;
+}
+
+// --- [新增] 分离模式 AEAD 实现 ---
+
+int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* tag_out,
+                                    const unsigned char* message, size_t message_len,
+                                    const unsigned char* additional_data, size_t ad_len,
+                                    const unsigned char* nonce, const unsigned char* key) {
+    if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce == NULL || key == NULL) {
+        return -1;
+    }
+    
+    unsigned long long ciphertext_len_out;
+    
+    if (crypto_aead_xchacha20poly1305_ietf_encrypt_detached(
+            ciphertext,
+            tag_out,
+            &ciphertext_len_out,
+            message, message_len,
+            additional_data, ad_len,
+            NULL,
+            nonce,
+            key
+        ) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
+                                    const unsigned char* ciphertext, size_t ciphertext_len,
+                                    const unsigned char* tag,
+                                    const unsigned char* additional_data, size_t ad_len,
+                                    const unsigned char* nonce, const unsigned char* key) {
+    if (decrypted_message == NULL || ciphertext == NULL || tag == NULL || nonce == NULL || key == NULL) {
+        return -1;
+    }
+    
+    if (crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
+            decrypted_message,
+            NULL,
+            ciphertext, ciphertext_len,
+            tag,
+            additional_data, ad_len,
+            nonce,
+            key
+        ) != 0) {
+        return -1;
     }
 
     return 0;
