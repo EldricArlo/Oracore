@@ -1,4 +1,3 @@
-// --- crypto_client.c (REVISED BY COMMITTEE FOR EXTERNAL PEPPER) ---
 #include "crypto_client.h"
 #include "../common/secure_memory.h"
 #include "../common/internal_logger.h"
@@ -14,7 +13,7 @@
 unsigned long long g_argon2_opslimit = BASELINE_ARGON2ID_OPSLIMIT;
 size_t g_argon2_memlimit = BASELINE_ARGON2ID_MEMLIMIT;
 
-// [COMMITTEE FIX] 全局胡椒现在存储在安全内存中，并在运行时加载
+// 全局胡椒现在存储在安全内存中，并在运行时加载
 static unsigned char* g_internal_pepper = NULL;
 static size_t g_internal_pepper_len = 0;
 #define REQUIRED_PEPPER_BYTES 32
@@ -121,7 +120,7 @@ int crypto_client_init() {
         return -1;
     }
 
-    // [COMMITTEE FIX] 加载胡椒是初始化过程中的关键安全步骤。
+    // 加载胡椒是初始化过程中的关键安全步骤。
     // 如果加载失败，整个库的初始化也必须失败。
     if (crypto_config_load_pepper_from_env() != 0) {
         return -1;

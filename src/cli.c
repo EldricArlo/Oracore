@@ -288,7 +288,7 @@ cleanup:
 // ====================================================================================
 
 /**
- * @brief [REFACTORED] A structure to hold all parsed arguments for the encrypt command.
+ * @brief A structure to hold all parsed arguments for the encrypt command.
  */
 typedef struct {
     const char* in_file;
@@ -302,7 +302,7 @@ typedef struct {
 } encrypt_args;
 
 /**
- * @brief [REFACTORED] Parses command line arguments for the encrypt command into the args struct.
+ * @brief Parses command line arguments for the encrypt command into the args struct.
  * @return Returns true on success, false on parsing errors or invalid combinations.
  */
 static bool _parse_encrypt_args(int argc, char* argv[], encrypt_args* args) {
@@ -353,7 +353,7 @@ static bool _parse_encrypt_args(int argc, char* argv[], encrypt_args* args) {
 }
 
 /**
- * @brief [REFACTORED] Handles recipient key preparation for both raw key and certificate modes.
+ * @brief Handles recipient key preparation for both raw key and certificate modes.
  * @param args The parsed command line arguments.
  * @return HSC_OK on success, or a specific HSC error code on failure.
  */
@@ -414,7 +414,7 @@ cleanup:
 }
 
 /**
- * @brief [REFACTORED] Main handler for the 'encrypt' command. Now acts as a high-level coordinator.
+ * @brief Main handler for the 'encrypt' command. Now acts as a high-level coordinator.
  */
 int handle_hybrid_encrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
@@ -560,7 +560,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "严重错误: 高安全内核库初始化失败！\n"); return 1;
     }
     
-    // [COMMITTEE FIX] 在 hsc_init() 之后立即注册日志回调
+    // 在 hsc_init() 之后立即注册日志回调
     hsc_set_log_callback(cli_logger);
 
     const char* command = argv[1];

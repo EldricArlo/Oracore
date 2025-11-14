@@ -38,13 +38,13 @@ void crypto_config_load_from_env();
 int crypto_client_init();
 
 /**
- * @brief [COMMITTEE ADD] 清理密码学客户端分配的资源，如全局胡椒。
+ * @brief 清理密码学客户端分配的资源，如全局胡椒。
  *        应在程序退出前调用。
  */
 void crypto_client_cleanup();
 
 /**
- * @brief [COMMITTEE ADD] 获取已加载的全局胡椒。
+ * @brief 获取已加载的全局胡椒。
  * @param out_len (输出) 用于存储胡椒长度的指针。
  * @return 指向存储在安全内存中的全局胡椒的常量指针。
  */

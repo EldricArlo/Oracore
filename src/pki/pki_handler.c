@@ -1,4 +1,3 @@
-// --- pki_handler.c (REVISED BY COMMITTEE FOR LOGGING CALLBACK) ---
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>

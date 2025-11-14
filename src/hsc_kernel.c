@@ -124,7 +124,7 @@ int hsc_init() {
 }
 
 void hsc_cleanup() {
-    // [COMMITTEE FIX] 调用底层密码学模块的清理函数以释放胡椒。
+    // 调用底层密码学模块的清理函数以释放胡椒。
     crypto_client_cleanup();
     curl_global_cleanup();
 }
@@ -433,7 +433,7 @@ void _hsc_log(int level, const char* format, ...) {
 // --- 专家级API实现 ---
 // =======================================================================
 
-// [COMMITTEE FIX] 移除硬编码的胡椒
+// 移除硬编码的胡椒
 // static const unsigned char g_internal_pepper[32] = { ... };
 
 int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_len,
@@ -442,7 +442,7 @@ int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_
         return HSC_ERROR_INVALID_ARGUMENT;
     }
     
-    // [COMMITTEE FIX] 从底层模块动态获取在初始化时加载的胡椒
+    // 从底层模块动态获取在初始化时加载的胡椒
     size_t pepper_len = 0;
     const unsigned char* pepper = get_global_pepper(&pepper_len);
     if (pepper == NULL || pepper_len == 0) {
