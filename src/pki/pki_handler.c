@@ -24,6 +24,7 @@
 #define OCSP_HTTP_TOTAL_TIMEOUT_SECONDS 10L
 #define OCSP_RESPONSE_VALIDITY_SLACK_SECONDS 300L // 5分钟的宽限期
 #define INITIAL_HTTP_CHUNK_CAPACITY 1024
+#define MAX_OCSP_RESPONSE_SIZE (1 * 1024 * 1024) // 1 MB
 
 
 // ======================= 错误报告宏 =======================
@@ -170,9 +171,18 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
     size_t realsize = size * nmemb;
     struct memory_chunk* mem = (struct memory_chunk*)userp;
 
+    if (mem->size + realsize > MAX_OCSP_RESPONSE_SIZE) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: Response exceeds the maximum allowed size of %d MB. Aborting.", MAX_OCSP_RESPONSE_SIZE / (1024*1024));
+        return 0; 
+    }
+
     if (mem->size + realsize + 1 > mem->capacity) {
         size_t new_capacity = (mem->capacity > 0) ? mem->capacity * 2 : INITIAL_HTTP_CHUNK_CAPACITY;
         if (new_capacity < mem->size + realsize + 1) new_capacity = mem->size + realsize + 1;
+        
+        if (new_capacity > MAX_OCSP_RESPONSE_SIZE) {
+            new_capacity = MAX_OCSP_RESPONSE_SIZE;
+        }
 
         char* ptr = realloc(mem->memory, new_capacity);
         if (ptr == NULL) {
@@ -430,7 +440,10 @@ int verify_user_certificate(const char* user_cert_pem,
         ret_code = HSC_ERROR_CERT_SUBJECT_MISMATCH;
         goto cleanup;
     }
-    if (strcmp(expected_username, cn) != 0) {
+
+    // [COMMITTEE FIX] 使用恒定时间的 sodium_memcmp 替换 strcmp，作为深度防御策略。
+    size_t expected_len = strlen(expected_username);
+    if (expected_len != (size_t)cn_len || sodium_memcmp(expected_username, cn, expected_len) != 0) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "      > FAILED: Certificate subject mismatch! Expected '%s', but got '%s'.", expected_username, cn);
         ret_code = HSC_ERROR_CERT_SUBJECT_MISMATCH;
         goto cleanup;

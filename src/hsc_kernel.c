@@ -101,11 +101,20 @@ static int _perform_stream_decryption(FILE* f_in, FILE* f_out, hsc_crypto_stream
 static bool read_key_file(const char* filename, void* buffer, size_t expected_len) {
     FILE* f = fopen(filename, "rb");
     if (!f) return false;
+    
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    if (file_size < 0 || (size_t)file_size != expected_len) {
+        fclose(f);
+        return false;
+    }
+    
     size_t bytes_read = fread(buffer, 1, expected_len, f);
-    char dummy_byte;
-    bool is_eof = (fread(&dummy_byte, 1, 1, f) == 0 && feof(f));
     fclose(f);
-    return (bytes_read == expected_len && is_eof);
+    
+    return (bytes_read == expected_len);
 }
 
 static bool write_key_file(const char* filename, const void* data, size_t len) {
@@ -140,7 +149,8 @@ hsc_master_key_pair* hsc_generate_master_key_pair() {
     if (!kp) return NULL;
     kp->internal_kp.sk = NULL;
     if (generate_master_key_pair(&kp->internal_kp) != 0) {
-        free(kp); return NULL;
+        hsc_free_master_key_pair(&kp);
+        return NULL;
     }
     return kp;
 }
@@ -149,13 +159,17 @@ hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_
     if (priv_key_path == NULL) return NULL;
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
     if (!kp) return NULL;
+    
+    // [COMMITTEE FIX] 初始化内部指针，这对 hsc_free_master_key_pair 在出错时是至关重要的
+    kp->internal_kp.sk = NULL;
+
     kp->internal_kp.sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
     if (!kp->internal_kp.sk) {
-        free(kp); return NULL;
+        hsc_free_master_key_pair(&kp); // 使用统一的清理函数
+        return NULL;
     }
     if (!read_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
-        secure_free(kp->internal_kp.sk); 
-        free(kp); 
+        hsc_free_master_key_pair(&kp); // 使用统一的清理函数
         return NULL;
     }
     crypto_sign_ed25519_sk_to_pk(kp->internal_kp.pk, kp->internal_kp.sk);

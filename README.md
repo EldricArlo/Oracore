@@ -42,7 +42,7 @@ This project is a security-centric, advanced hybrid encryption kernel library im
 Our design adheres to the following core security principles:
 
 *   **Choose Vetted, Modern Cryptography:** We never roll our own crypto. We only use modern cryptographic primitives that are widely recognized by the community and resistant to side-channel attacks.
-*   **Defense-in-Depth:** Security does not rely on any single layer. We implement protections at multiple levels, including memory management, API design, and protocol flow.
+*   **Defense-in-Depth:** Security does not rely on any single layer. We implement protections at multiple levels, including memory management, API design, protocol flow, and **robust handling of all external inputs to prevent resource exhaustion attacks**.
 *   **Secure Defaults & "Fail-Closed" Policy:** The system's default behavior must be secure. When faced with an uncertain state (e.g., unable to verify certificate revocation status), the system must choose to fail and terminate the operation (fail-closed) rather than proceed.
 *   **Minimize Sensitive Data Exposure:** We strictly control the lifecycle, scope, and residency of critical data like private keys in memory, keeping them to the absolute minimum necessary.
 
@@ -104,6 +104,8 @@ The project uses a clean, layered directory structure to achieve separation of c
 *   **libsodium:** (`libsodium-dev`)
 *   **OpenSSL:** **v3.0** or newer is recommended (`libssl-dev`)
 *   **libcurl:** (`libcurl4-openssl-dev`)
+
+**Security Note on Dependencies:** The project's build system (`CMakeLists.txt`) will automatically check the versions of your installed dependencies and issue a **FATAL ERROR** if OpenSSL is older than v3.0, and a **SECURITY WARNING** if OpenSSL or Libcurl have known critical vulnerabilities (e.g., CVE-2023-38545 for Libcurl). **Always pay attention to these warnings and keep your system libraries up to date.**
 
 **Installation on Major Systems:**
 
@@ -242,7 +244,7 @@ This section provides a complete, self-contained workflow demonstrating how two 
     ```
 
     **Option C: Direct Key Mode (Advanced - For Pre-Trusted Keys)**
-    *If Alice has already obtained Bob's public key (`bob.pub`) through a secure, trusted channel, she can encrypt to it directly, bypassing all certificate logic.*
+    *If Alice has already obtained Bob's public key (`bob.pub`) through a secure, trusted channel, she can encrypt to it directly, bypassing all certificate logic. **The tool will show a severe security warning and require explicit user confirmation before proceeding.**
     ```bash
     ./bin/hsc_cli encrypt secret.txt --recipient-pk-file bob.pub --from alice.key
     ```
@@ -407,8 +409,13 @@ Oracipher Core provides two distinct hybrid encryption workflows, each with diff
 *   **Security Guarantees:**
     *   Provides the same level of **confidentiality** and **integrity** for the encrypted data itself as the certificate mode.
 *   **Security Trade-offs:**
-    *   **No Authentication:** This mode **does not** verify the identity of the key's owner. The user is solely responsible for ensuring the authenticity of the public key they are using. Using an incorrect or malicious public key will result in the data being encrypted for the wrong party.
-*   **When to Use:** Only in closed systems or specific protocols where public keys have been exchanged and verified through an independent, trusted out-of-band mechanism (e.g., keys are baked into the firmware of a secure device, or verified in person).
+    > **[CRITICAL SECURITY WARNING]**
+    >
+    > *   **No Authentication:** This mode **does not** and **cannot** verify the identity of the key's owner. The user is solely responsible for ensuring the authenticity of the public key they are using.
+    > *   **Risk of Impersonation:** Using an incorrect or malicious public key will result in the data being encrypted for the wrong party (an attacker) without any warning from the system.
+    > *   **The `hsc_cli` tool will force you to acknowledge a detailed security warning before proceeding with this mode.**
+
+*   **When to Use:** **ONLY** in closed systems or specific protocols where public keys have been exchanged and verified through an independent, highly trusted out-of-band mechanism (e.g., keys are baked into the firmware of a secure device, verified in person, or managed by a secure orchestration system like a hardware security module). **If you are unsure, do not use this mode.**
 
 ## 9. Core API Reference (`include/hsc_kernel.h`)
 

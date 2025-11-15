@@ -72,7 +72,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
             return NULL;
         }
 
-        #define MAX_STDIN_SIZE (16 * 1024 * 1024) // [COMMITTEE FIX] 为stdin读取增加上限
+        #define MAX_STDIN_SIZE (16 * 1024 * 1024) // 为stdin读取增加上限
         size_t bytes_read;
         while ((bytes_read = fread(buffer + size, 1, capacity - size, f)) > 0) {
             size += bytes_read;
@@ -363,8 +363,23 @@ static int _prepare_recipient_pk(encrypt_args* args) {
     int ret_code = HSC_ERROR_GENERAL;
 
     if (args->recipient_pk_file) {
-        // --- Raw Public Key Mode ---
-        fprintf(stdout, "\n\033[33m[警告] 您正在使用原始公钥模式进行加密。\n       系统不会验证接收者身份，请确保您信任此公钥的来源。\033[0m\n\n");
+        // --- [COMMITTEE FIX] Enhanced interactive warning for raw public key mode ---
+        fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
+        fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--recipient-pk-file) 进行加密。\n");
+        fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证接收者的身份。\n");
+        fprintf(stderr, "如果您使用的公钥文件来源不可靠（例如，来自一个被篡改的网站），\n");
+        fprintf(stderr, "您的数据将被加密给 \033[1;31m攻击者\033[0m。\n");
+        fprintf(stderr, "请再次确认您绝对信任公钥文件 '%s' 的来源。\033[0m\n\n", args->recipient_pk_file);
+        fprintf(stderr, "要继续此高风险操作，请输入 'yes': ");
+        
+        char confirmation[10] = {0};
+        if (fgets(confirmation, sizeof(confirmation), stdin) == NULL || strncmp(confirmation, "yes\n", 4) != 0) {
+            fprintf(stderr, "\n操作已由用户取消。加密中止。\n");
+            return HSC_ERROR_GENERAL;
+        }
+        fprintf(stderr, "\n");
+        // --- End of committee fix ---
+        
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(args->recipient_pk_file, &pk_len);
         if (!pk_buf || pk_len != HSC_MASTER_PUBLIC_KEY_BYTES) {
@@ -505,7 +520,23 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
 
     if (sender_pk_file) {
-        fprintf(stdout, "\n\033[33m[警告] 您正在使用原始公钥模式进行解密。\n       系统不会验证发送者身份，请确保您信任此公钥的来源。\033[0m\n\n");
+        // --- [COMMITTEE FIX] Enhanced interactive warning for raw public key mode ---
+        fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
+        fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--sender-pk-file) 进行解密。\n");
+        fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证发送者的身份。\n");
+        fprintf(stderr, "这意味着您无法确定加密文件的真实来源，它可能来自一个 \033[1;31m伪造的发送者\033[0m。\n");
+        fprintf(stderr, "请再次确认您绝对信任公钥文件 '%s' 的来源。\033[0m\n\n", sender_pk_file);
+        fprintf(stderr, "要继续此高风险操作，请输入 'yes': ");
+        
+        char confirmation[10] = {0};
+        if (fgets(confirmation, sizeof(confirmation), stdin) == NULL || strncmp(confirmation, "yes\n", 4) != 0) {
+            fprintf(stderr, "\n操作已由用户取消。解密中止。\n");
+            // 直接返回错误码，而不是跳转，以避免在 cleanup 中删除文件
+            return HSC_ERROR_GENERAL;
+        }
+        fprintf(stderr, "\n");
+        // --- End of committee fix ---
+        
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(sender_pk_file, &pk_len);
         if (!pk_buf || pk_len != HSC_MASTER_PUBLIC_KEY_BYTES) {
@@ -520,6 +551,9 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         sender_cert_pem = read_small_file(sender_cert_file, &cert_len);
         if (!sender_cert_pem) goto cleanup;
 
+        // 注意：解密时，我们默认信任发送方证书中包含的公钥。
+        // 一个更完整的系统可能会在这里增加对发送方证书的验证（例如，检查它是否由可信CA签发）。
+        // 但对于端到端加密模型，核心是验证“接收方”的身份，而不是“发送方”。
         if (hsc_extract_public_key_from_cert((const char*)sender_cert_pem, sender_pk) != HSC_OK) {
             fprintf(stderr, "错误: 无法从发送者证书 '%s' 中提取公钥。\n", sender_cert_file);
             goto cleanup;
