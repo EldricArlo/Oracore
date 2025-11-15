@@ -37,7 +37,7 @@ set(CTEST_P4_UPDATE_CUSTOM "")
 set(CTEST_P4_UPDATE_OPTIONS "")
 
 # CTest Configure Step
-set(CTEST_CMAKE_GENERATOR "MinGW Makefiles")
+set(CTEST_CMAKE_GENERATOR "Ninja")
 set(CTEST_LABELS_FOR_SUBPROJECTS "")
 
 # CTest Build Step
@@ -62,7 +62,7 @@ set(CTEST_MEMORYCHECK_SUPPRESSIONS_FILE "")
 
 # CTest Submit Step
 set(CTEST_SITE "ricardoan")
-set(CTEST_BUILD_NAME "Win32-mingw32-make")
+set(CTEST_BUILD_NAME "Win32-ninja")
 set(CTEST_SUBMIT_URL "http://")
 set(CTEST_SUBMIT_INACTIVITY_TIMEOUT "")
 set(CTEST_TLS_VERIFY "")

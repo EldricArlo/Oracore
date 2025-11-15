@@ -1,3 +1,0 @@
-D:\MSYS2\ucrt64\bin\cmake.exe -E rm -f CMakeFiles\hsc_kernel.dir/objects.a
-D:\MSYS2\ucrt64\bin\ar.exe qc CMakeFiles\hsc_kernel.dir/objects.a @CMakeFiles\hsc_kernel.dir\objects1.rsp
-D:\MSYS2\ucrt64\bin\gcc.exe -g -shared -o libhsc_kernel.dll -Wl,--out-implib,libhsc_kernel.dll.a -Wl,--major-image-version,0,--minor-image-version,0 -Wl,--whole-archive CMakeFiles\hsc_kernel.dir/objects.a -Wl,--no-whole-archive @CMakeFiles\hsc_kernel.dir\linkLibs.rsp

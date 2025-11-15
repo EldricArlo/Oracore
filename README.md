@@ -20,7 +20,8 @@ English | [简体中文](./languages/README_zh_CN.md) | [繁體中文](./languag
 3.  [Project Structure](#3-project-structure)
 4.  [Quick Start](#4-quick-start)
     *   [4.1 Dependencies](#41-dependencies)
-    *   [4.2 Compilation & Testing](#42-compilation--testing)
+    *   [4.2 Critical Security Configuration: The Pepper](#42-critical-security-configuration-the-pepper)
+    *   [4.3 Compilation & Testing](#43-compilation--testing)
 5.  [Usage Guide](#5-usage-guide)
     *   [5.1 Using as a Command-Line Tool (`hsc_cli` & `test_ca_util`)](#51-using-as-a-command-line-tool-hsc_cli--test_ca_util)
     *   [5.2 Using as a Library in Your Project](#52-using-as-a-library-in-your-project)
@@ -120,7 +121,30 @@ The project uses a clean, layered directory structure to achieve separation of c
     brew install libsodium openssl@3 curl
     ```
 
-### 4.2 Compilation & Testing
+### 4.2 Critical Security Configuration: The Pepper
+
+> **CRITICAL: The library will not function without this step.**
+
+Oracipher Core enhances the security of its key derivation function (Argon2id) with a system-wide secret known as a "pepper". You **MUST** provide this pepper via an environment variable named `HSC_PEPPER_HEX` before running any application that uses this library. If this variable is not set, the library's initialization (`hsc_init()`) will fail.
+
+The pepper must be a **64-character hexadecimal string**, which represents 32 cryptographically secure random bytes.
+
+**For Development & Testing:**
+You can generate a suitable random pepper and export it to your shell session.
+
+```bash
+# Generate a random 32-byte pepper and display it as a hex string
+export HSC_PEPPER_HEX=$(openssl rand -hex 32)
+
+# You can verify that it has been set
+echo $HSC_PEPPER_HEX
+```
+For convenience during development, you may want to add the `export` line to your shell's startup file (e.g., `~/.bashrc`, `~/.zshrc`).
+
+**For Production Environments:**
+The pepper is a critical secret. It **MUST NOT** be hardcoded in scripts or checked into version control. It should be managed securely using your deployment platform's secret management tools (e.g., Docker secrets, Kubernetes secrets, AWS Secrets Manager, HashiCorp Vault, etc.).
+
+### 4.3 Compilation & Testing
 
 The project is designed to be highly portable and avoids platform-specific hardcoded paths, ensuring it builds and runs correctly on all supported systems.
 
@@ -261,6 +285,7 @@ This section provides a complete, self-contained workflow demonstrating how two 
     }
 
     int main() {
+        // CRITICAL: Ensure HSC_PEPPER_HEX is set in the environment before this call!
         if (hsc_init() != HSC_OK) {
             // Handle fatal error
         }
@@ -358,6 +383,8 @@ export HSC_ARGON2_OPSLIMIT=10
 export HSC_ARGON2_MEMLIMIT=536870912
 
 # Any program run in a shell with these variables set will automatically use these stronger parameters.
+# Don't forget the mandatory HSC_PEPPER_HEX variable!
+export HSC_PEPPER_HEX=$(openssl rand -hex 32)
 ./bin/hsc_cli gen-keypair my_strong_key
 ```
 
@@ -388,7 +415,7 @@ Oracipher Core provides two distinct hybrid encryption workflows, each with diff
 ### Initialization & Cleanup
 | Function | Description |
 | :--- | :--- |
-| `int hsc_init()` | **(Must be called first)** Initializes the entire library. |
+| `int hsc_init()` | **(Must be called first)** Initializes the entire library. Requires `HSC_PEPPER_HEX` env var. |
 | `void hsc_cleanup()` | Call before program exit to free global resources. |
 
 ### Key Management
