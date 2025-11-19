@@ -441,7 +441,7 @@ int verify_user_certificate(const char* user_cert_pem,
         goto cleanup;
     }
 
-    // [COMMITTEE FIX] 使用恒定时间的 sodium_memcmp 替换 strcmp，作为深度防御策略。
+    // [COMMITTEE FIX] 使用恒定时间的 sodium_memcmp 替换 strcmp，以防御计时攻击。
     size_t expected_len = strlen(expected_username);
     if (expected_len != (size_t)cn_len || sodium_memcmp(expected_username, cn, expected_len) != 0) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "      > FAILED: Certificate subject mismatch! Expected '%s', but got '%s'.", expected_username, cn);

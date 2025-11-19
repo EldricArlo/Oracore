@@ -180,9 +180,9 @@ int main() {
     
     printf("  > [解密] 恢复的文件内容: \"%s\"\n", (char*)decrypted_file_content);
 
-    // 使用 sodium_memcmp (恒定时间比较) 替换 strcmp (可变时间比较)
+    // [COMMITTEE FIX] 使用恒定时间的 sodium_memcmp 替换 strcmp，以防御计时攻击。
     // 1. 首先比较长度是否一致
-    // 2. 如果长度一致，再比较内容
+    // 2. 如果长度一致，再进行恒定时间的内容比较
     if (actual_dec_file_len == file_content_len &&
         sodium_memcmp(file_content, decrypted_file_content, file_content_len) == 0) 
     {
