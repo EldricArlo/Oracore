@@ -184,12 +184,16 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
             new_capacity = MAX_OCSP_RESPONSE_SIZE;
         }
 
-        char* ptr = realloc(mem->memory, new_capacity);
-        if (ptr == NULL) {
+        // [COMMITTEE FIX] 使用临时指针安全地调用 realloc，防止内存泄漏。
+        // 只有在 realloc 成功后才更新原始指针。
+        char* new_ptr = realloc(mem->memory, new_capacity);
+        if (new_ptr == NULL) {
             _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: not enough memory (realloc returned NULL)");
+            // 此时不应 free(mem->memory)，因为原始内存块仍然有效，
+            // 只是无法扩展。直接返回错误，让调用者处理。
             return 0;
         }
-        mem->memory = ptr;
+        mem->memory = new_ptr;
         mem->capacity = new_capacity;
     }
 

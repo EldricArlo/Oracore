@@ -452,16 +452,44 @@ void hsc_set_log_callback(hsc_log_callback callback) {
     g_log_callback = callback;
 }
 
+// [COMMITTEE FIX] 重构日志函数以使用动态内存分配，防止消息截断和栈溢出风险。
 void _hsc_log(int level, const char* format, ...) {
     if (g_log_callback == NULL) {
         return;
     }
-    char buffer[1024];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
+
+    va_list args_for_size;
+    va_start(args_for_size, format);
+    va_list args_for_print;
+    va_copy(args_for_print, args_for_size);
+
+    // 1. 调用 vsnprintf 获取格式化字符串所需的总长度
+    int needed_size = vsnprintf(NULL, 0, format, args_for_size);
+    va_end(args_for_size);
+
+    if (needed_size < 0) {
+        // vsnprintf 遇到编码错误
+        va_end(args_for_print);
+        return;
+    }
+
+    // 2. 动态分配足够大的缓冲区 (+1 用于空终止符)
+    char* buffer = malloc(needed_size + 1);
+    if (buffer == NULL) {
+        // 内存分配失败，无法记录日志
+        va_end(args_for_print);
+        return;
+    }
+
+    // 3. 再次调用 vsnprintf 将消息格式化到新缓冲区中
+    vsnprintf(buffer, needed_size + 1, format, args_for_print);
+    va_end(args_for_print);
+
+    // 4. 使用格式化后的完整消息调用回调函数
     g_log_callback(level, buffer);
+
+    // 5. 释放动态分配的内存
+    free(buffer);
 }
 
 // =======================================================================
