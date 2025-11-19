@@ -269,8 +269,12 @@ int handle_verify_cert(int argc, char* argv[]) {
         case HSC_ERROR_CERT_SUBJECT_MISMATCH: 
             fprintf(stderr, "\033[31m[失败]\033[0m 证书主体(CN)与预期用户不匹配。\n"); 
             break;
-        case HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED: 
-            fprintf(stderr, "\033[31m[失败]\033[0m 证书吊销状态检查失败 (OCSP)！\n"); 
+        // [COMMITTEE FIX] 更新 switch 语句以处理新的、更精确的错误码
+        case HSC_ERROR_CERT_REVOKED: 
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书已被其颁发机构明确吊销！\n"); 
+            break;
+        case HSC_ERROR_CERT_OCSP_UNAVAILABLE:
+            fprintf(stderr, "\033[31m[失败]\033[0m 无法完成证书吊销状态检查 (OCSP)。可能存在网络问题或OCSP服务器无响应。\n");
             break;
         case HSC_ERROR_INVALID_FORMAT:
             fprintf(stderr, "\033[31m[失败]\033[0m 无法解析证书文件，请检查是否为有效的PEM格式。\n"); 

@@ -160,27 +160,31 @@ hsc_master_key_pair* hsc_generate_master_key_pair() {
 
 hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_key_path) {
     if (priv_key_path == NULL) return NULL;
+    
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
     if (!kp) return NULL;
     
-    // 初始化内部指针，这对于在出错时安全调用 hsc_free_master_key_pair 至关重要。
+    // [COMMITTEE FIX] 初始化内部指针，这对 cleanup 块至关重要。
     kp->internal_kp.sk = NULL;
 
     kp->internal_kp.sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
     if (!kp->internal_kp.sk) {
-        // [修复] 统一使用 hsc_free_master_key_pair 进行清理，以避免悬垂指针。
-        hsc_free_master_key_pair(&kp);
-        return NULL;
+        // [COMMITTEE FIX] 切换到 goto cleanup 模式
+        goto cleanup;
     }
 
     if (!read_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
-        // 此处已正确使用统一的清理函数
-        hsc_free_master_key_pair(&kp);
-        return NULL;
+        // [COMMITTEE FIX] 切换到 goto cleanup 模式
+        goto cleanup;
     }
 
     crypto_sign_ed25519_sk_to_pk(kp->internal_kp.pk, kp->internal_kp.sk);
     return kp;
+
+// [COMMITTEE FIX] 新增的统一清理块
+cleanup:
+    hsc_free_master_key_pair(&kp);
+    return NULL;
 }
 
 int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_path, const char* priv_key_path) {

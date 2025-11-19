@@ -345,7 +345,8 @@ cleanup:
 
 static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "      iv. [Checking Revocation Status (OCSP)]:");
-    int ret = HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED;
+    // [COMMITTEE FIX] Default return code is now for OCSP unavailability.
+    int ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
 
     OCSP_REQUEST* ocsp_req = _create_ocsp_request(user_cert, issuer_cert);
     if (!ocsp_req) {
@@ -368,12 +369,18 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
             break;
         case V_OCSP_CERTSTATUS_REVOKED:
             _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP status is 'Revoked'. Certificate has been revoked!");
+            // [COMMITTEE FIX] Return the specific 'Revoked' error code.
+            ret = HSC_ERROR_CERT_REVOKED;
             break;
         case V_OCSP_CERTSTATUS_UNKNOWN:
             _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP status is 'Unknown'. The certificate's status is unknown.");
+            // [COMMITTEE FIX] An 'Unknown' status is treated as an OCSP failure.
+            ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
             break;
         default:
              LOG_PKI_ERROR("Unknown or failed OCSP certificate status check.");
+             // [COMMITTEE FIX] Any other failure is also an OCSP failure.
+             ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
              break;
     }
 

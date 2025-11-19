@@ -18,7 +18,9 @@
 // -- 证书验证专用错误码 --
 #define HSC_ERROR_CERT_CHAIN_OR_VALIDITY         -10 // 证书链验证失败或证书已过期/尚未生效
 #define HSC_ERROR_CERT_SUBJECT_MISMATCH          -11 // 证书的主体(Common Name)与预期不符
-#define HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED    -12 // 证书已被吊销，或OCSP检查失败 (遵循"故障关闭"原则)
+// [COMMITTEE FIX] 拆分错误码以提供更精确的失败原因
+#define HSC_ERROR_CERT_REVOKED                   -12 // 证书已被吊销
+#define HSC_ERROR_CERT_OCSP_UNAVAILABLE          -13 // OCSP检查因网络或服务器问题失败 (遵循"故障关闭"原则)
 
 
 // --- 旧版证书验证返回码 (为保持向后兼容性) ---
@@ -26,7 +28,11 @@
 #define HSC_VERIFY_ERROR_GENERAL HSC_ERROR_GENERAL
 #define HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY HSC_ERROR_CERT_CHAIN_OR_VALIDITY
 #define HSC_VERIFY_ERROR_SUBJECT_MISMATCH HSC_ERROR_CERT_SUBJECT_MISMATCH
-#define HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED
+// [COMMITTEE FIX] 更新旧版宏定义以匹配新的错误码体系
+#define HSC_VERIFY_ERROR_REVOKED HSC_ERROR_CERT_REVOKED
+#define HSC_VERIFY_ERROR_OCSP_UNAVAILABLE HSC_ERROR_CERT_OCSP_UNAVAILABLE
+// [COMMITTEE NOTE] 保留旧宏以兼容可能依赖它的代码，但指向一个更具体的错误
+#define HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED HSC_ERROR_CERT_OCSP_UNAVAILABLE
 
 
 // --- 公共常量 ---

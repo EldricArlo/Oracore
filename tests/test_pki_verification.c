@@ -77,9 +77,10 @@ static int test_verification_successful_path() {
     if (sign_csr_with_ca(&user_cert, user_csr, ca_key, ca_cert, 0, 31536000L) != 0) goto cleanup;
 
     int res = verify_user_certificate(user_cert, ca_cert, username);
-    // [修改] 使用新的错误码宏进行断言
-    if (res != HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED) {
-        fprintf(stderr, "    > FAILED: Verification must fail with OCSP error (%d), but got %d\n", HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED, res);
+    // [COMMITTEE FIX] 更新测试断言以使用新的、正确的错误码。
+    // 测试的意图是验证 OCSP 服务器不可达的情况，因此应检查 HSC_ERROR_CERT_OCSP_UNAVAILABLE。
+    if (res != HSC_ERROR_CERT_OCSP_UNAVAILABLE) {
+        fprintf(stderr, "    > FAILED: Verification must fail with OCSP error (%d), but got %d\n", HSC_ERROR_CERT_OCSP_UNAVAILABLE, res);
         goto cleanup;
     }
     
