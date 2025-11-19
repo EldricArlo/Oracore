@@ -58,6 +58,10 @@ void print_usage(const char* prog_name) {
     fprintf(stderr, "  (原始密钥模式) decrypt <file.hsc> --to <recipient.key> --sender-pk-file <sender.pub>\n");
 }
 
+// [修复] 为文件读取定义一个统一、合理的上限，防止资源耗尽攻击。
+// 10MB 对于证书、密钥或小型配置文件来说是足够大的。
+#define MAX_READ_FILE_SIZE (10 * 1024 * 1024)
+
 unsigned char* read_small_file(const char* filename, size_t* out_len) {
     FILE* f;
     bool is_stdin = (strcmp(filename, "-") == 0);
@@ -72,22 +76,31 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
             return NULL;
         }
 
-        #define MAX_STDIN_SIZE (16 * 1024 * 1024) // 为stdin读取增加上限
         size_t bytes_read;
         while ((bytes_read = fread(buffer + size, 1, capacity - size, f)) > 0) {
             size += bytes_read;
-             if (size > MAX_STDIN_SIZE) {
-                fprintf(stderr, "错误: 从标准输入读取的数据超过了 %d MB 的上限\n", MAX_STDIN_SIZE / (1024 * 1024));
+            // [修复] 检查读取的总大小是否已超过设定的硬性上限。
+            if (size >= MAX_READ_FILE_SIZE) {
+                fprintf(stderr, "错误: 从标准输入读取的数据超过了 %d MB 的上限\n", MAX_READ_FILE_SIZE / (1024 * 1024));
                 free(buffer);
                 return NULL;
             }
+
             if (size == capacity) {
+                // [修复] 在进行乘法运算前，检查是否会导致 size_t 溢出。
+                // 这是防止整数溢出攻击的关键步骤。
                 if (capacity > SIZE_MAX / 2) {
-                    fprintf(stderr, "错误: 输入文件过大\n");
+                    fprintf(stderr, "错误: 输入数据流过大，无法安全地扩展缓冲区。\n");
                     free(buffer);
                     return NULL;
                 }
                 capacity *= 2;
+                
+                // [修复] 确保新的容量不会超过我们的硬性上限。
+                if (capacity > MAX_READ_FILE_SIZE) {
+                    capacity = MAX_READ_FILE_SIZE;
+                }
+
                 unsigned char* new_buffer = realloc(buffer, capacity);
                 if (!new_buffer) {
                     fprintf(stderr, "错误: 内存重分配失败\n");
@@ -97,7 +110,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
                 buffer = new_buffer;
             }
         }
-        buffer[size] = '\0';
+        buffer[size] = '\0'; // 尽管是二进制读取，为字符串使用保留空字符
         *out_len = size;
         return buffer;
 
@@ -109,14 +122,19 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         }
         
         fseek(f, 0, SEEK_END);
-        long file_size = ftell(f);
+        long file_size_long = ftell(f);
         fseek(f, 0, SEEK_SET);
 
-        if (file_size < 0 || file_size > 1024 * 1024) { 
-            fprintf(stderr, "错误: 文件过大或无法读取大小: %s\n", filename);
+        // [修复] 对 ftell 的返回值进行严格检查。
+        // 1. 检查是否为负（表示错误，或在32位系统上文件超过2GB）。
+        // 2. 检查文件大小是否超过我们设定的硬性上限。
+        if (file_size_long < 0 || (unsigned long)file_size_long >= MAX_READ_FILE_SIZE) { 
+            fprintf(stderr, "错误: 文件过大或无法读取大小 (上限 %dMB): %s\n", MAX_READ_FILE_SIZE / (1024 * 1024), filename);
             fclose(f);
             return NULL;
         }
+        
+        size_t file_size = (size_t)file_size_long;
 
         unsigned char* buffer = malloc(file_size + 1);
         if (!buffer) {
@@ -126,7 +144,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         }
 
         size_t bytes_read = fread(buffer, 1, file_size, f);
-        if (bytes_read != (size_t)file_size) {
+        if (bytes_read != file_size) {
             fprintf(stderr, "错误: 读取文件失败: %s\n", filename);
             free(buffer);
             fclose(f);
@@ -134,7 +152,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         }
         
         fclose(f);
-        buffer[bytes_read] = '\0';
+        buffer[bytes_read] = '\0'; // 同样，为字符串使用保留空字符
         *out_len = bytes_read;
         return buffer;
     }
@@ -269,7 +287,6 @@ int handle_verify_cert(int argc, char* argv[]) {
         case HSC_ERROR_CERT_SUBJECT_MISMATCH: 
             fprintf(stderr, "\033[31m[失败]\033[0m 证书主体(CN)与预期用户不匹配。\n"); 
             break;
-        // [COMMITTEE FIX] 更新 switch 语句以处理新的、更精确的错误码
         case HSC_ERROR_CERT_REVOKED: 
             fprintf(stderr, "\033[31m[失败]\033[0m 证书已被其颁发机构明确吊销！\n"); 
             break;
@@ -367,7 +384,6 @@ static int _prepare_recipient_pk(encrypt_args* args) {
     int ret_code = HSC_ERROR_GENERAL;
 
     if (args->recipient_pk_file) {
-        // --- [COMMITTEE FIX] Enhanced interactive warning for raw public key mode ---
         fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
         fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--recipient-pk-file) 进行加密。\n");
         fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证接收者的身份。\n");
@@ -382,7 +398,6 @@ static int _prepare_recipient_pk(encrypt_args* args) {
             return HSC_ERROR_GENERAL;
         }
         fprintf(stderr, "\n");
-        // --- End of committee fix ---
         
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(args->recipient_pk_file, &pk_len);
@@ -524,7 +539,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
 
     if (sender_pk_file) {
-        // --- [COMMITTEE FIX] Enhanced interactive warning for raw public key mode ---
         fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
         fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--sender-pk-file) 进行解密。\n");
         fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证发送者的身份。\n");
@@ -535,11 +549,9 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         char confirmation[10] = {0};
         if (fgets(confirmation, sizeof(confirmation), stdin) == NULL || strncmp(confirmation, "yes\n", 4) != 0) {
             fprintf(stderr, "\n操作已由用户取消。解密中止。\n");
-            // 直接返回错误码，而不是跳转，以避免在 cleanup 中删除文件
             return HSC_ERROR_GENERAL;
         }
         fprintf(stderr, "\n");
-        // --- End of committee fix ---
         
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(sender_pk_file, &pk_len);
@@ -555,9 +567,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         sender_cert_pem = read_small_file(sender_cert_file, &cert_len);
         if (!sender_cert_pem) goto cleanup;
 
-        // 注意：解密时，我们默认信任发送方证书中包含的公钥。
-        // 一个更完整的系统可能会在这里增加对发送方证书的验证（例如，检查它是否由可信CA签发）。
-        // 但对于端到端加密模型，核心是验证“接收方”的身份，而不是“发送方”。
         if (hsc_extract_public_key_from_cert((const char*)sender_cert_pem, sender_pk) != HSC_OK) {
             fprintf(stderr, "错误: 无法从发送者证书 '%s' 中提取公钥。\n", sender_cert_file);
             goto cleanup;
@@ -598,7 +607,6 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "严重错误: 高安全内核库初始化失败！\n"); return 1;
     }
     
-    // 在 hsc_init() 之后立即注册日志回调
     hsc_set_log_callback(cli_logger);
 
     const char* command = argv[1];

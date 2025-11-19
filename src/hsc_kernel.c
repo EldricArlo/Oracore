@@ -152,39 +152,48 @@ hsc_master_key_pair* hsc_generate_master_key_pair() {
     kp->internal_kp.sk = NULL;
 
     if (generate_master_key_pair(&kp->internal_kp) != 0) {
+        // [修复] 此处的 hsc_free_master_key_pair 调用是安全的，
+        // 因为即使 internal_kp.sk 分配失败，它也会是 NULL。
+        // 而如果 malloc 失败，我们已经提前返回了。
         hsc_free_master_key_pair(&kp);
         return NULL;
     }
     return kp;
 }
 
+// [修复] 重构整个函数以确保在任何失败路径上都能正确清理资源。
 hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_key_path) {
     if (priv_key_path == NULL) return NULL;
     
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
-    if (!kp) return NULL;
+    if (!kp) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to allocate memory for key pair structure.");
+        return NULL;
+    }
     
-    // [COMMITTEE FIX] 初始化内部指针，这对 cleanup 块至关重要。
+    // 关键步骤：在进行任何可能失败的操作之前，将内部指针初始化为 NULL。
+    // 这确保了即使后续操作失败，调用 hsc_free_master_key_pair 也是安全的。
     kp->internal_kp.sk = NULL;
 
     kp->internal_kp.sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
     if (!kp->internal_kp.sk) {
-        // [COMMITTEE FIX] 切换到 goto cleanup 模式
-        goto cleanup;
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to allocate secure memory for private key.");
+        // secure_alloc 失败，只需释放外层结构体。
+        free(kp);
+        return NULL;
     }
 
     if (!read_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
-        // [COMMITTEE FIX] 切换到 goto cleanup 模式
-        goto cleanup;
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to read private key file: %s", priv_key_path);
+        // read_key_file 失败，此时 sk 和 kp 都已分配，
+        // 调用 hsc_free_master_key_pair 会安全地清理两者。
+        hsc_free_master_key_pair(&kp);
+        return NULL;
     }
 
+    // 所有操作成功，派生公钥并返回。
     crypto_sign_ed25519_sk_to_pk(kp->internal_kp.pk, kp->internal_kp.sk);
     return kp;
-
-// [COMMITTEE FIX] 新增的统一清理块
-cleanup:
-    hsc_free_master_key_pair(&kp);
-    return NULL;
 }
 
 int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_path, const char* priv_key_path) {
@@ -200,8 +209,9 @@ int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_
 
 void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
     if (kp == NULL || *kp == NULL) return;
-    free_master_key_pair(&(*kp)->internal_kp);
-    free(*kp); *kp = NULL;
+    free_master_key_pair(&(*kp)->internal_kp); // 此函数负责安全释放 internal_kp.sk
+    free(*kp); 
+    *kp = NULL;
 }
 
 int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* public_key_out) {

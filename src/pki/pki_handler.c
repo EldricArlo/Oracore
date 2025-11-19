@@ -104,6 +104,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_seed, crypto_sign_SEEDBYTES);
     
+    // [修复建议已采纳] 立即清理敏感的种子数据，缩短其在内存中的生命周期。
     OPENSSL_cleanse(private_seed, crypto_sign_SEEDBYTES);
     secure_free(private_seed);
     private_seed = NULL;
@@ -145,9 +146,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     }
     
 cleanup:
-    if (private_seed) {
-        secure_free(private_seed);
-    }
+    // private_seed 相关的清理已提前完成。
     BIO_free(bio);
     X509_REQ_free(req);
     EVP_PKEY_free(pkey);
@@ -171,6 +170,7 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
     size_t realsize = size * nmemb;
     struct memory_chunk* mem = (struct memory_chunk*)userp;
 
+    // 虽然 libcurl 会提前中止，但这层检查作为深度防御依然保留。
     if (mem->size + realsize > MAX_OCSP_RESPONSE_SIZE) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: Response exceeds the maximum allowed size of %d MB. Aborting.", MAX_OCSP_RESPONSE_SIZE / (1024*1024));
         return 0; 
@@ -222,8 +222,19 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         
+        // [修复] 利用 libcurl 的内置功能来防御资源耗尽攻击。
+        // 这会告诉 libcurl 在下载的数据量超过 MAX_OCSP_RESPONSE_SIZE 时立即中止传输。
+        curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)MAX_OCSP_RESPONSE_SIZE);
+        
         res = curl_easy_perform(curl);
-        if (res != CURLE_OK) {
+
+        // [修复] 明确检查是否因为文件过大而失败。
+        if (res == CURLE_FILESIZE_EXCEEDED) {
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: Response from server exceeded the maximum allowed size of %d MB.", MAX_OCSP_RESPONSE_SIZE / (1024*1024));
+            free(chunk.memory);
+            chunk.memory = NULL;
+            chunk.size = 0;
+        } else if (res != CURLE_OK) {
             _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: HTTP request failed: %s", curl_easy_strerror(res));
             free(chunk.memory);
             chunk.memory = NULL;
@@ -345,7 +356,6 @@ cleanup:
 
 static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "      iv. [Checking Revocation Status (OCSP)]:");
-    // [COMMITTEE FIX] Default return code is now for OCSP unavailability.
     int ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
 
     OCSP_REQUEST* ocsp_req = _create_ocsp_request(user_cert, issuer_cert);
@@ -369,17 +379,14 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
             break;
         case V_OCSP_CERTSTATUS_REVOKED:
             _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP status is 'Revoked'. Certificate has been revoked!");
-            // [COMMITTEE FIX] Return the specific 'Revoked' error code.
             ret = HSC_ERROR_CERT_REVOKED;
             break;
         case V_OCSP_CERTSTATUS_UNKNOWN:
             _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP status is 'Unknown'. The certificate's status is unknown.");
-            // [COMMITTEE FIX] An 'Unknown' status is treated as an OCSP failure.
             ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
             break;
         default:
              LOG_PKI_ERROR("Unknown or failed OCSP certificate status check.");
-             // [COMMITTEE FIX] Any other failure is also an OCSP failure.
              ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
              break;
     }
@@ -448,7 +455,6 @@ int verify_user_certificate(const char* user_cert_pem,
         goto cleanup;
     }
 
-    // [COMMITTEE FIX] 使用恒定时间的 sodium_memcmp 替换 strcmp，以防御计时攻击。
     size_t expected_len = strlen(expected_username);
     if (expected_len != (size_t)cn_len || sodium_memcmp(expected_username, cn, expected_len) != 0) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "      > FAILED: Certificate subject mismatch! Expected '%s', but got '%s'.", expected_username, cn);
