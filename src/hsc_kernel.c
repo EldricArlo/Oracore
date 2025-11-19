@@ -148,7 +148,7 @@ hsc_master_key_pair* hsc_generate_master_key_pair() {
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
     if (!kp) return NULL;
     
-    // [COMMITTEE FIX] 初始化内部指针，这对 hsc_free_master_key_pair 在出错时是至关重要的
+    // 初始化内部指针，这对 hsc_free_master_key_pair 在出错时是至关重要的
     kp->internal_kp.sk = NULL;
 
     if (generate_master_key_pair(&kp->internal_kp) != 0) {
@@ -163,18 +163,18 @@ hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
     if (!kp) return NULL;
     
-    // [COMMITTEE FIX] 初始化内部指针，这对于在出错时安全调用 hsc_free_master_key_pair 至关重要。
+    // 初始化内部指针，这对于在出错时安全调用 hsc_free_master_key_pair 至关重要。
     kp->internal_kp.sk = NULL;
 
     kp->internal_kp.sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
     if (!kp->internal_kp.sk) {
-        // [COMMITTEE FIX] 修复内存泄漏：如果 sk 分配失败，必须释放 kp。
-        free(kp);
+        // [修复] 统一使用 hsc_free_master_key_pair 进行清理，以避免悬垂指针。
+        hsc_free_master_key_pair(&kp);
         return NULL;
     }
 
     if (!read_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
-        // [COMMITTEE FIX] 修复内存泄漏：如果读取文件失败，使用统一的清理函数释放所有资源。
+        // 此处已正确使用统一的清理函数
         hsc_free_master_key_pair(&kp);
         return NULL;
     }
