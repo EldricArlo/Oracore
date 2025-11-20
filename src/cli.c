@@ -125,16 +125,21 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         long file_size_long = ftell(f);
         fseek(f, 0, SEEK_SET);
 
-        // [修复] 对 ftell 的返回值进行严格检查。
-        // 1. 检查是否为负（表示错误，或在32位系统上文件超过2GB）。
-        // 2. 检查文件大小是否超过我们设定的硬性上限。
-        if (file_size_long < 0 || (unsigned long)file_size_long >= MAX_READ_FILE_SIZE) { 
-            fprintf(stderr, "错误: 文件过大或无法读取大小 (上限 %dMB): %s\n", MAX_READ_FILE_SIZE / (1024 * 1024), filename);
+        // [COMMITTEE FIX] 采用更健壮的两步检查，以消除32位系统下的模糊性。
+        // 1. 首先，检查 ftell 是否返回任何错误（或在32位系统上文件 > 2GB）。
+        if (file_size_long < 0) {
+            fprintf(stderr, "错误: 无法确定文件大小或文件超过2GB (在32位系统上): %s\n", filename);
             fclose(f);
             return NULL;
         }
-        
+
+        // 2. 既然我们知道它是一个非负数，就可以安全地进行转换并与上限进行比较。
         size_t file_size = (size_t)file_size_long;
+        if (file_size >= MAX_READ_FILE_SIZE) { 
+            fprintf(stderr, "错误: 文件大小 (%zu bytes) 超过了允许的上限 (%d MB): %s\n", file_size, MAX_READ_FILE_SIZE / (1024 * 1024), filename);
+            fclose(f);
+            return NULL;
+        }
 
         unsigned char* buffer = malloc(file_size + 1);
         if (!buffer) {

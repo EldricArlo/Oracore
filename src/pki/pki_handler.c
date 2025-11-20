@@ -389,8 +389,8 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
             ret = HSC_ERROR_CERT_REVOKED;
             break;
         case V_OCSP_CERTSTATUS_UNKNOWN:
-            _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP status is 'Unknown'. The certificate's status is unknown.");
-            ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP status is 'Unknown'. This is treated as a revocation per security policy.");
+            ret = HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN;
             break;
         default:
              LOG_PKI_ERROR("Unknown or failed OCSP certificate status check.");
