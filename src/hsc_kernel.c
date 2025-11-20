@@ -556,6 +556,25 @@ int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
+// [COMMITTEE FIX] 实现新的、更安全的 detached 加密API
+int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag_out, unsigned char* nonce_out,
+                                   const unsigned char* message, size_t message_len,
+                                   const unsigned char* additional_data, size_t ad_len,
+                                   const unsigned char* key) {
+    if (ciphertext == NULL || tag_out == NULL || nonce_out == NULL || message == NULL || key == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    
+    // 关键步骤：在函数内部安全地生成 nonce
+    hsc_random_bytes(nonce_out, HSC_AEAD_NONCE_BYTES);
+    
+    // 调用底层的、现有的 detached 加密函数
+    int result = encrypt_symmetric_aead_detached(ciphertext, tag_out, message, message_len,
+                                                 additional_data, ad_len, nonce_out, key);
+
+    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
+}
+
 int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
                               const unsigned char* ciphertext, size_t ciphertext_len,
                               const unsigned char* tag,

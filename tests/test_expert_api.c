@@ -71,11 +71,12 @@ void test_api_key_conversion_validation() {
     _assert(sodium_memcmp(x25519_pk_from_pk, x25519_pk_from_sk, crypto_box_PUBLICKEYBYTES) == 0);
 }
 
-void test_api_aead_detached_roundtrip() {
+// [COMMITTEE FIX] Renamed test to reflect usage of the new safe API
+void test_api_aead_detached_safe_roundtrip() {
     unsigned char key[HSC_SESSION_KEY_BYTES];
-    unsigned char nonce[HSC_AEAD_NONCE_BYTES];
+    // [COMMITTEE FIX] Nonce is now an output of the safe function
+    unsigned char nonce_out[HSC_AEAD_NONCE_BYTES];
     hsc_random_bytes(key, sizeof(key));
-    hsc_random_bytes(nonce, sizeof(nonce));
 
     const char* message = "Detached mode test message.";
     const char* ad = "Authenticated Additional Data";
@@ -86,23 +87,23 @@ void test_api_aead_detached_roundtrip() {
     unsigned char tag[HSC_AEAD_TAG_BYTES];
     unsigned char decrypted_message[200];
 
-    // 加密
-    int res_enc = hsc_aead_encrypt_detached(ciphertext, tag, (unsigned char*)message, message_len, (unsigned char*)ad, ad_len, nonce, key);
+    // 加密 - 使用新的安全API
+    int res_enc = hsc_aead_encrypt_detached_safe(ciphertext, tag, nonce_out, (unsigned char*)message, message_len, (unsigned char*)ad, ad_len, key);
     _assert(res_enc == HSC_OK);
 
-    // 解密
-    int res_dec = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce, key);
+    // 解密 - 使用加密时返回的 nonce_out
+    int res_dec = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce_out, key);
     _assert(res_dec == HSC_OK);
 
     // 验证
     _assert(memcmp(message, decrypted_message, message_len) == 0);
 }
 
-void test_api_aead_detached_tampered() {
+// [COMMITTEE FIX] Renamed test to reflect usage of the new safe API
+void test_api_aead_detached_safe_tampered() {
     unsigned char key[HSC_SESSION_KEY_BYTES];
-    unsigned char nonce[HSC_AEAD_NONCE_BYTES];
+    unsigned char nonce_out[HSC_AEAD_NONCE_BYTES];
     hsc_random_bytes(key, sizeof(key));
-    hsc_random_bytes(nonce, sizeof(nonce));
 
     const char* message = "Another test message.";
     const char* ad = "Some AD";
@@ -113,29 +114,28 @@ void test_api_aead_detached_tampered() {
     unsigned char tag[HSC_AEAD_TAG_BYTES];
     unsigned char decrypted_message[200];
     
-    _assert(hsc_aead_encrypt_detached(ciphertext, tag, (unsigned char*)message, message_len, (unsigned char*)ad, ad_len, nonce, key) == HSC_OK);
+    _assert(hsc_aead_encrypt_detached_safe(ciphertext, tag, nonce_out, (unsigned char*)message, message_len, (unsigned char*)ad, ad_len, key) == HSC_OK);
     
     // 1. 测试篡改密文
     ciphertext[0] ^= 0xFF;
-    int res_dec_tamper_ct = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce, key);
+    int res_dec_tamper_ct = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce_out, key);
     _assert(res_dec_tamper_ct == HSC_ERROR_CRYPTO_OPERATION);
     ciphertext[0] ^= 0xFF; // 恢复
 
     // 2. 测试篡改认证标签
     tag[0] ^= 0xFF;
-    int res_dec_tamper_tag = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce, key);
+    int res_dec_tamper_tag = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce_out, key);
     _assert(res_dec_tamper_tag == HSC_ERROR_CRYPTO_OPERATION);
     tag[0] ^= 0xFF; // 恢复
 
     // 3. 测试使用错误的附加数据
     const char* bad_ad = "Wrong AD";
-    int res_dec_wrong_ad = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)bad_ad, strlen(bad_ad), nonce, key);
+    int res_dec_wrong_ad = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)bad_ad, strlen(bad_ad), nonce_out, key);
     _assert(res_dec_wrong_ad == HSC_ERROR_CRYPTO_OPERATION);
 }
 
 void test_api_expert_null_arguments() {
     unsigned char dummy_buf[64];
-    // [COMMITTEE FIX] Initialize the dummy buffer to a known state to satisfy the compiler.
     memset(dummy_buf, 0, sizeof(dummy_buf));
 
     // hsc_derive_key_from_password
@@ -151,16 +151,15 @@ void test_api_expert_null_arguments() {
     _assert(hsc_convert_ed25519_sk_to_x25519_sk(NULL, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
     _assert(hsc_convert_ed25519_sk_to_x25519_sk(dummy_buf, NULL) == HSC_ERROR_INVALID_ARGUMENT);
     
-    // hsc_aead_encrypt_detached
-    _assert(hsc_aead_encrypt_detached(NULL, dummy_buf, dummy_buf, 1, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_aead_encrypt_detached(dummy_buf, NULL, dummy_buf, 1, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    // ... (可以为每个参数都添加测试)
-    _assert(hsc_aead_encrypt_detached(dummy_buf, dummy_buf, dummy_buf, 1, NULL, 0, NULL, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_aead_encrypt_detached(dummy_buf, dummy_buf, dummy_buf, 1, NULL, 0, dummy_buf, NULL) == HSC_ERROR_INVALID_ARGUMENT);
+    // [COMMITTEE FIX] Test the new safe API for NULL arguments, remove tests for deprecated API.
+    // hsc_aead_encrypt_detached_safe
+    _assert(hsc_aead_encrypt_detached_safe(NULL, dummy_buf, dummy_buf, dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, NULL, dummy_buf, dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, dummy_buf, NULL, dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, dummy_buf, dummy_buf, dummy_buf, 1, NULL, 0, NULL) == HSC_ERROR_INVALID_ARGUMENT);
 
     // hsc_aead_decrypt_detached
     _assert(hsc_aead_decrypt_detached(NULL, dummy_buf, 1, dummy_buf, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    // ... (可以为每个参数都添加测试)
     _assert(hsc_aead_decrypt_detached(dummy_buf, dummy_buf, 1, NULL, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
 }
 
@@ -169,8 +168,9 @@ void run_all_tests() {
     printf("--- Running Expert-Level API Test Suite ---\n");
     RUN_TEST(test_api_kdf_deterministic);
     RUN_TEST(test_api_key_conversion_validation);
-    RUN_TEST(test_api_aead_detached_roundtrip);
-    RUN_TEST(test_api_aead_detached_tampered);
+    // [COMMITTEE FIX] Run the new safe API tests
+    RUN_TEST(test_api_aead_detached_safe_roundtrip);
+    RUN_TEST(test_api_aead_detached_safe_tampered);
     RUN_TEST(test_api_expert_null_arguments);
     printf("--- Test Suite Finished ---\n");
 }

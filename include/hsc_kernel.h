@@ -181,8 +181,9 @@ int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsi
 
 
 /**
- * @brief [专家级] [分离模式] 使用AEAD (XChaCha20-Poly1305) 对称加密数据。
+ * @brief [专家级] [已弃用] [分离模式] 使用AEAD (XChaCha20-Poly1305) 对称加密数据。
  *        此版本允许用户提供 Nonce，并将认证标签 (Tag) 与密文分开返回。
+ *
  * @param ciphertext (输出) 加密后的数据缓冲区 (仅包含纯密文)。
  * @param tag_out (输出) 生成的16字节认证标签 (HSC_AEAD_TAG_BYTES)。
  * @param message 要加密的明文。
@@ -197,10 +198,33 @@ int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsi
  * @param key 加密密钥 (HSC_SESSION_KEY_BYTES)。
  * @return 成功返回 HSC_OK，失败返回 HSC_ERROR_CRYPTO_OPERATION。
  */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((deprecated("Extremely dangerous due to manual nonce management. Use hsc_aead_encrypt_detached_safe instead.")))
+#endif
 int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
                               const unsigned char* message, size_t message_len,
                               const unsigned char* additional_data, size_t ad_len,
                               const unsigned char* nonce, const unsigned char* key);
+
+/**
+ * @brief [专家级] [推荐] [分离模式] 安全地使用AEAD (XChaCha20-Poly1305) 对称加密数据。
+ *        此版本在内部安全地生成一个唯一的Nonce，并将其与密文分开返回，从根本上避免了Nonce重用风险。
+ * 
+ * @param ciphertext (输出) 加密后的数据缓冲区 (仅包含纯密文)。
+ * @param tag_out (输出) 生成的16字节认证标签 (HSC_AEAD_TAG_BYTES)。
+ * @param nonce_out (输出) 存储由函数内部生成的24字节唯一Nonce的缓冲区 (HSC_AEAD_NONCE_BYTES)。
+ * @param message 要加密的明文。
+ * @param message_len 明文的长度。
+ * @param additional_data (可选) 附加验证数据 (AD)，如果不需要则为 NULL。
+ * @param ad_len 附加数据的长度，如果 AD 为 NULL 则为 0。
+ * @param key 加密密钥 (HSC_SESSION_KEY_BYTES)。
+ * @return 成功返回 HSC_OK，失败返回 HSC_ERROR_CRYPTO_OPERATION。
+ */
+int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag_out, unsigned char* nonce_out,
+                                   const unsigned char* message, size_t message_len,
+                                   const unsigned char* additional_data, size_t ad_len,
+                                   const unsigned char* key);
+
 
 /**
  * @brief [专家级] [分离模式] 使用AEAD (XChaCha20-Poly1305) 对称解密数据。
