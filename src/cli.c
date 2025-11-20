@@ -293,6 +293,9 @@ int handle_verify_cert(int argc, char* argv[]) {
         case HSC_ERROR_CERT_OCSP_UNAVAILABLE:
             fprintf(stderr, "\033[31m[失败]\033[0m 无法完成证书吊销状态检查 (OCSP)。可能存在网络问题或OCSP服务器无响应。\n");
             break;
+        case HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN:
+            fprintf(stderr, "\033[31m[失败]\033[0m OCSP服务器报告此证书状态未知！根据安全策略，这被视为证书无效。\n");
+            break;
         case HSC_ERROR_INVALID_FORMAT:
             fprintf(stderr, "\033[31m[失败]\033[0m 无法解析证书文件，请检查是否为有效的PEM格式。\n"); 
             break;

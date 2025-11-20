@@ -1,8 +1,13 @@
 #ifndef PKI_HANDLER_H
 #define PKI_HANDLER_H
 
-#include "../core_crypto/crypto_client.h" // 需要用到 master_key_pair 结构
+// [修复] 移除了对 crypto_client.h 的直接包含，这是解耦的关键步骤。
+// #include "../core_crypto/crypto_client.h" 
 #include "../../include/hsc_kernel.h"      // 引入公共定义以保持一致
+
+// [修复] 使用 typedef 进行前向声明。这使得我们可以在不知道
+// master_key_pair 结构体完整定义的情况下，声明指向它的指针。
+typedef struct master_key_pair_s master_key_pair;
 
 // 从证书主题中提取的通用名称（Common Name）的最大长度
 #define CERT_COMMON_NAME_MAX_LEN 256
@@ -19,7 +24,7 @@ int pki_init();
  *        此函数使用用户的主私钥来创建一个标准的 CSR，
  *        该 CSR 包含了主公钥和用户身份信息（用户名）。
  *
- * @param mkp 指向已初始化的主密钥对的指针。
+ * @param mkp 指向已初始化的主密钥对的指针。函数签名保持不变，但现在依赖于前向声明。
  * @param username 要嵌入到 CSR 主题中的用户名 (Common Name)。
  * @param out_csr_pem (输出) 指向一个 char 指针的指针。函数将分配内存
  *                    并存储 PEM 格式的 CSR 字符串。调用者必须负责

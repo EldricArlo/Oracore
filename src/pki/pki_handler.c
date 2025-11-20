@@ -9,6 +9,9 @@
 #include <curl/curl.h>
 
 #include "pki_handler.h"
+// [修复] 在此实现文件中包含了 crypto_client.h 以获取 master_key_pair 结构体的完整定义。
+// 这是必要的，因为我们需要访问其内部成员，如 mkp->sk。
+#include "../core_crypto/crypto_client.h" 
 #include "../common/secure_memory.h"
 #include "../../include/hsc_kernel.h"
 #include "../common/internal_logger.h"

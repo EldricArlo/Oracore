@@ -18,9 +18,9 @@
 // -- 证书验证专用错误码 --
 #define HSC_ERROR_CERT_CHAIN_OR_VALIDITY         -10 // 证书链验证失败或证书已过期/尚未生效
 #define HSC_ERROR_CERT_SUBJECT_MISMATCH          -11 // 证书的主体(Common Name)与预期不符
-// [COMMITTEE FIX] 拆分错误码以提供更精确的失败原因
-#define HSC_ERROR_CERT_REVOKED                   -12 // 证书已被吊销
+#define HSC_ERROR_CERT_REVOKED                   -12 // 证书已被其颁发机构明确吊销
 #define HSC_ERROR_CERT_OCSP_UNAVAILABLE          -13 // OCSP检查因网络或服务器问题失败 (遵循"故障关闭"原则)
+#define HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN       -14 // OCSP服务器报告该证书状态未知 (根据策略视为吊销)
 
 
 // --- 旧版证书验证返回码 (为保持向后兼容性) ---
@@ -28,9 +28,9 @@
 #define HSC_VERIFY_ERROR_GENERAL HSC_ERROR_GENERAL
 #define HSC_VERIFY_ERROR_CHAIN_OR_VALIDITY HSC_ERROR_CERT_CHAIN_OR_VALIDITY
 #define HSC_VERIFY_ERROR_SUBJECT_MISMATCH HSC_ERROR_CERT_SUBJECT_MISMATCH
-// [COMMITTEE FIX] 更新旧版宏定义以匹配新的错误码体系
 #define HSC_VERIFY_ERROR_REVOKED HSC_ERROR_CERT_REVOKED
 #define HSC_VERIFY_ERROR_OCSP_UNAVAILABLE HSC_ERROR_CERT_OCSP_UNAVAILABLE
+#define HSC_VERIFY_ERROR_OCSP_STATUS_UNKNOWN HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN // 为旧宏添加新错误码
 // [COMMITTEE NOTE] 保留旧宏以兼容可能依赖它的代码，但指向一个更具体的错误
 #define HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED HSC_ERROR_CERT_OCSP_UNAVAILABLE
 
@@ -41,7 +41,7 @@
 #define HSC_SESSION_KEY_BYTES       32
 #define HSC_KDF_SALT_BYTES          32 // 为新的KDF函数提供一个标准的盐长度
 
-// 流式加密 (XChaCha20-Poly1035 SecretStream) 相关常量
+// 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
 #define HSC_STREAM_TAG_BYTES      16 // The size of the authentication tag
 // 修正了此处宏定义的拼写错误

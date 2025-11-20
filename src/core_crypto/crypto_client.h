@@ -7,15 +7,15 @@
 
 // --- 数据结构定义 ---
 
-// 主密钥对结构体
-typedef struct {
+// [修复] 为主密钥对结构体添加了标签名 `master_key_pair_s`，以便进行前向声明。
+typedef struct master_key_pair_s {
     unsigned char pk[MASTER_PUBLIC_KEY_BYTES];
     // 使用 `secure_alloc` 分配，确保私钥在受保护的内存中
     unsigned char* sk; 
 } master_key_pair;
 
-// 恢复密钥结构体 (同样使用受保护内存)
-typedef struct {
+// [修复] 为恢复密钥结构体添加了标签名 `recovery_key_s`，以保持一致性。
+typedef struct recovery_key_s {
     unsigned char* key;
 } recovery_key;
 
