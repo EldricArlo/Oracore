@@ -71,6 +71,10 @@ static int _load_pepper(const char* explicit_hex) {
     for (size_t i = 0; i < REQUIRED_PEPPER_BYTES; ++i) {
         int high = hex_char_to_int(pepper_hex[2 * i]);
         int low = hex_char_to_int(pepper_hex[2 * i + 1]);
+        
+        // [FIX]: Finding #3 - 消除未定义行为 (UB)
+        // 必须在执行位移操作 (high << 4) 之前检查 high 是否为 -1。
+        // 在 C 语言中，对负数进行左移位是未定义行为。
         if (high == -1 || low == -1) {
             secure_free(g_internal_pepper);
             g_internal_pepper = NULL;
@@ -78,6 +82,7 @@ static int _load_pepper(const char* explicit_hex) {
             // [FIX]: Finding #1 - 同样，不再尝试擦除环境变量。
             return -1;
         }
+        
         g_internal_pepper[i] = (unsigned char)((high << 4) | low);
     }
 

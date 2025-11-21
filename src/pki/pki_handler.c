@@ -1,5 +1,3 @@
-/* --- START OF FILE src/pki/pki_handler.c --- */
-
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -250,6 +248,18 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
         else if (ip[0] == 0xFE && (ip[1] & 0xC0) == 0x80) {
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Link-Local IPv6: %s", ip_str);
+        }
+        // [FIX]: Finding #1 - Explicitly Block IPv4-mapped IPv6 addresses (::ffff:0:0/96)
+        // Format: 80 bits of zeros + 16 bits of ones (0xFFFF) + 32 bits IPv4
+        // Attack vector: Attacker uses ::ffff:127.0.0.1 to bypass IPv4 whitelist checks.
+        else {
+            static const unsigned char ipv4_mapped_prefix[12] = {
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF
+            };
+            if (memcmp(ip, ipv4_mapped_prefix, 12) == 0) {
+                block_connection = true;
+                _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked IPv4-mapped IPv6 address: %s (Bypassing strictly prohibited)", ip_str);
+            }
         }
     }
 
@@ -663,4 +673,3 @@ cleanup:
     if (cert_bio) BIO_free(cert_bio);
     return ret;
 }
-/* --- END OF FILE src/pki/pki_handler.c --- */

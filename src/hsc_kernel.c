@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <errno.h> // [FIX] Added for errno reporting in hsc_init
 
 // [FIX]: 引入资源限制头文件以禁用 Core Dumps (Mitigation for Finding #2)
 #ifndef _WIN32
@@ -144,10 +145,11 @@ int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
     core_limits.rlim_cur = 0;
     core_limits.rlim_max = 0;
     if (setrlimit(RLIMIT_CORE, &core_limits) != 0) {
-        // 注意：此时日志系统尚未初始化，无法使用 _hsc_log。
-        // 我们选择默默失败或打印到 stderr，作为库设计，这里选择不因环境限制而阻断初始化，
-        // 但这确实是一个安全隐患。在 V1.1 中可考虑将其提升为硬性错误。
-        fprintf(stderr, "[Oracipher Core] Security Warning: Failed to disable core dumps via setrlimit.\n");
+        // [FIX]: Remediation for Finding #2 (Fail-Closed)
+        // 之前只是打印警告，现在升级为致命错误。
+        // 必须确保环境安全（不产生Core Dump）才能启动，否则视为不安全状态。
+        fprintf(stderr, "[Oracipher Core] FATAL: Failed to disable core dumps (errno=%d). Aborting initialization to protect secrets.\n", errno);
+        return HSC_ERROR_GENERAL; 
     }
     #endif
 
