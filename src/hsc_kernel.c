@@ -553,17 +553,7 @@ int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsi
     return HSC_OK;
 }
 
-int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
-                              const unsigned char* message, size_t message_len,
-                              const unsigned char* additional_data, size_t ad_len,
-                              const unsigned char* nonce, const unsigned char* key) {
-    if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce == NULL || key == NULL) {
-        return HSC_ERROR_INVALID_ARGUMENT;
-    }
-    int result = encrypt_symmetric_aead_detached(ciphertext, tag_out, message, message_len,
-                                                 additional_data, ad_len, nonce, key);
-    return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
-}
+// [FIX]: 已移除 hsc_aead_encrypt_detached 的实现，与头文件保持一致。
 
 int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag_out, unsigned char* nonce_out,
                                    const unsigned char* message, size_t message_len,

@@ -212,16 +212,11 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, OCSP_HTTP_TOTAL_TIMEOUT_SECONDS);
         curl_easy_setopt(curl, CURLOPT_URL, url);
         
-        // [FIX]: 严格防御 SSRF (服务端请求伪造) 攻击，并处理版本兼容性
-        // 恶意证书可能会在 AIA 扩展中包含 file://, gopher://, ftp:// 等危险协议
-        // 导致服务器读取本地文件或扫描内网。
-        
+        // [FIX]: 严格防御 SSRF (服务端请求伪造) 攻击
         #if LIBCURL_VERSION_NUM >= 0x075500 // 7.85.0
-            // 新版 Libcurl 使用字符串 API
             curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
             curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
         #else
-            // 旧版 Libcurl 使用位掩码 API (已废弃但对于旧版是必须的)
             curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
             curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
         #endif
@@ -286,9 +281,11 @@ static OCSP_RESPONSE* _send_and_parse_ocsp_request(X509* user_cert, OCSP_REQUEST
     BIO* req_bio = NULL;
     STACK_OF(OPENSSL_STRING)* ocsp_uris = X509_get1_ocsp(user_cert);
 
+    // 注意：调用者应该已经检查过 URI 是否存在。
+    // 但为了安全起见，我们在这里再次进行基本检查。
     if (!ocsp_uris || sk_OPENSSL_STRING_num(ocsp_uris) <= 0) {
-        _hsc_log(HSC_LOG_LEVEL_WARN, "         > FAILED: No OCSP URI found in certificate. Cannot verify revocation status.");
-        goto cleanup;
+        if(ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris);
+        return NULL;
     }
     const char* ocsp_uri = sk_OPENSSL_STRING_value(ocsp_uris, 0);
     _hsc_log(HSC_LOG_LEVEL_INFO, "         > OCSP Server: %s", ocsp_uri);
@@ -368,14 +365,32 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     _hsc_log(HSC_LOG_LEVEL_INFO, "      iv. [Checking Revocation Status (OCSP)]:");
     int ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
 
+    // [FIX START]: 区分“无 OCSP URL”和“连接失败”。
+    // 1. 首先检查证书中是否存在 OCSP URI (AIA 扩展)。
+    STACK_OF(OPENSSL_STRING)* ocsp_uris = X509_get1_ocsp(user_cert);
+    if (!ocsp_uris || sk_OPENSSL_STRING_num(ocsp_uris) <= 0) {
+        // 证书没有 OCSP 扩展。在私有 PKI 环境中，这是常见情况。
+        // 策略: 记录警告，但允许验证通过 (Soft Fail)。
+        _hsc_log(HSC_LOG_LEVEL_WARN, "         > WARNING: Certificate contains no OCSP URI (AIA extension missing).");
+        _hsc_log(HSC_LOG_LEVEL_WARN, "         > Assuming certificate is valid (internal CA/private PKI mode). Revocation check SKIPPED.");
+        
+        if (ocsp_uris) sk_OPENSSL_STRING_free(ocsp_uris);
+        return HSC_OK; 
+    }
+    sk_OPENSSL_STRING_free(ocsp_uris);
+    // [FIX END]
+
     OCSP_REQUEST* ocsp_req = _create_ocsp_request(user_cert, issuer_cert);
     if (!ocsp_req) {
         return ret;
     }
 
+    // 2. 如果存在 URI，则尝试连接。如果此时失败（网络错误/服务器错误），则必须 Fail-Closed。
     OCSP_RESPONSE* ocsp_resp = _send_and_parse_ocsp_request(user_cert, ocsp_req);
     OCSP_REQUEST_free(ocsp_req);
     if (!ocsp_resp) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP URI exists, but server is unreachable.");
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "         > Security Policy: Fail-Closed enforced.");
         return ret;
     }
 
