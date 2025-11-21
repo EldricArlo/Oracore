@@ -1,3 +1,5 @@
+/* --- START OF FILE include/hsc_kernel.h --- */
+
 #ifndef HSC_KERNEL_H
 #define HSC_KERNEL_H
 
@@ -55,6 +57,9 @@
 #define HSC_AEAD_OVERHEAD_BYTES (HSC_AEAD_NONCE_BYTES + HSC_AEAD_TAG_BYTES)
 
 // 为密钥封装提供的开销常量
+// [FIX]: Audit Finding #1 - 语义更新
+// 这些常量现在明确对应 crypto_box_curve25519xchacha20poly1305_*
+// 数值 (24, 16) 与原 XSalsa20 版一致，但语义已强制锁定为 XChaCha20。
 #define HSC_BOX_NONCE_BYTES     24
 #define HSC_BOX_MAC_BYTES       16
 #define HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES (HSC_BOX_NONCE_BYTES + HSC_BOX_MAC_BYTES)
@@ -248,3 +253,4 @@ int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
 
 
 #endif // HSC_KERNEL_H
+/* --- END OF FILE include/hsc_kernel.h --- */

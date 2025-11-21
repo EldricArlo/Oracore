@@ -16,6 +16,12 @@
 #include <stdint.h>
 #include <stdarg.h>
 
+// [FIX]: 引入资源限制头文件以禁用 Core Dumps (Mitigation for Finding #2)
+#ifndef _WIN32
+    #include <sys/time.h>
+    #include <sys/resource.h>
+#endif
+
 // --- 不透明结构体的内部定义 ---
 
 struct hsc_master_key_pair_s {
@@ -130,6 +136,21 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 
 // [FIX]: 接收配置参数和显式Pepper，透传给 crypto_client_init
 int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
+    
+    // [FIX]: Mitigation for Finding #2 - 禁用 Core Dumps
+    // 在内存中可能包含敏感数据（如 OpenSSL 堆中的私钥副本）的情况下，防止崩溃时数据泄露到磁盘。
+    #ifndef _WIN32
+    struct rlimit core_limits;
+    core_limits.rlim_cur = 0;
+    core_limits.rlim_max = 0;
+    if (setrlimit(RLIMIT_CORE, &core_limits) != 0) {
+        // 注意：此时日志系统尚未初始化，无法使用 _hsc_log。
+        // 我们选择默默失败或打印到 stderr，作为库设计，这里选择不因环境限制而阻断初始化，
+        // 但这确实是一个安全隐患。在 V1.1 中可考虑将其提升为硬性错误。
+        fprintf(stderr, "[Oracipher Core] Security Warning: Failed to disable core dumps via setrlimit.\n");
+    }
+    #endif
+
     if (crypto_client_init(pepper_hex) != 0) return HSC_ERROR_CRYPTO_OPERATION;
     if (pki_init(config) != 0) return HSC_ERROR_PKI_OPERATION;
     return HSC_OK;
@@ -553,8 +574,6 @@ int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsi
     }
     return HSC_OK;
 }
-
-// [FIX]: 已移除 hsc_aead_encrypt_detached 的实现，与头文件保持一致。
 
 int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag_out, unsigned char* nonce_out,
                                    const unsigned char* message, size_t message_len,

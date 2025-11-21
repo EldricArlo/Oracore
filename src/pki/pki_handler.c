@@ -1,3 +1,5 @@
+/* --- START OF FILE src/pki/pki_handler.c --- */
+
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -8,8 +10,23 @@
 #include <openssl/ocsp.h>
 #include <curl/curl.h>
 
+// [FIX]: Finding #3 - 引入网络头文件以解析 IP 地址进行 SSRF 防御
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+#endif
+
 #include "pki_handler.h"
+
+// [FIX]: 编译错误修复
+// 必须包含 crypto_client.h 才能访问 master_key_pair 结构体的内部成员 (identity_sk)
+// 以及获取 MASTER_PUBLIC_KEY_BYTES 常量定义。
 #include "../core_crypto/crypto_client.h" 
+
 #include "../common/secure_memory.h"
 #include "../../include/hsc_kernel.h"
 #include "../common/internal_logger.h"
@@ -19,6 +36,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stdbool.h>
 
 // 内部使用的常量
 #define OCSP_HTTP_CONNECT_TIMEOUT_SECONDS 5L
@@ -27,16 +45,13 @@
 #define INITIAL_HTTP_CHUNK_CAPACITY 1024
 #define MAX_OCSP_RESPONSE_SIZE (1 * 1024 * 1024) // 1 MB
 
-// [FIX]: 内部全局配置状态，默认为严格安全模式
+// 内部全局配置状态，默认为严格安全模式
 static hsc_pki_config g_pki_config = {
     .allow_no_ocsp_uri = false
 };
 
 // ======================= 错误报告宏 =======================
 
-/**
- * @brief 内部辅助函数，用于将 OpenSSL 的错误队列内容路由到日志系统。
- */
 static void _hsc_log_openssl_error_queue() {
     unsigned long err_code;
     char err_buf[256];
@@ -58,7 +73,6 @@ static void _hsc_log_openssl_error_queue() {
 
 
 // --- 初始化函数 ---
-// [FIX]: 接收配置并设置全局状态
 int pki_init(const hsc_pki_config* config) {
     // 更新配置状态
     if (config != NULL) {
@@ -92,6 +106,7 @@ void free_csr_pem(char* csr_pem) {
 }
 
 int generate_csr(const master_key_pair* mkp, const char* username, char** out_csr_pem) {
+    // [FIXED]: 现在包含了 crypto_client.h，编译器可以看到 mkp->identity_sk 的定义
     if (mkp == NULL || mkp->identity_sk == NULL || username == NULL || out_csr_pem == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -159,14 +174,93 @@ cleanup:
     BIO_free(bio);
     X509_REQ_free(req);
     EVP_PKEY_free(pkey);
-    
     ERR_clear_error();
-    
     return ret;
 }
 
 
 // ======================= OCSP 检查的静态辅助函数 =======================
+
+// [FIX]: Finding #3 - SSRF 防御回调函数实现
+static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, struct curl_sockaddr *addr) {
+    (void)clientp; // 未使用
+
+    // 我们只拦截 IP 连接请求
+    if (purpose != CURLSOCKTYPE_IPCXN) {
+        return socket(addr->family, addr->socktype, addr->protocol);
+    }
+
+    bool block_connection = false;
+    char ip_str[INET6_ADDRSTRLEN];
+    ip_str[0] = '\0';
+
+    // 检查环境变量配置，看是否允许连接私有网络
+    bool allow_private = (getenv("HSC_PKI_ALLOW_PRIVATE_IP") != NULL);
+
+    if (addr->family == AF_INET) {
+        // --- IPv4 Checks ---
+        struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr->addr;
+        unsigned char *ip = (unsigned char *)&addr4->sin_addr;
+        
+        // 用于日志
+        inet_ntop(AF_INET, &addr4->sin_addr, ip_str, sizeof(ip_str));
+
+        // 1. Block Loopback (127.0.0.0/8) - ALWAYS BLOCKED
+        if (ip[0] == 127) {
+            block_connection = true;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Loopback IP: %s", ip_str);
+        }
+        // 2. Block Link-Local (169.254.0.0/16) - ALWAYS BLOCKED (AWS/Cloud Metadata)
+        else if (ip[0] == 169 && ip[1] == 254) {
+            block_connection = true;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Link-Local IP: %s", ip_str);
+        }
+        // 3. Block Private LANs (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) - CONDITIONALLY BLOCKED
+        else if (!allow_private) {
+            if (ip[0] == 10 ||
+                (ip[0] == 172 && (ip[1] >= 16 && ip[1] <= 31)) ||
+                (ip[0] == 192 && ip[1] == 168)) {
+                block_connection = true;
+                _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Private LAN IP: %s (Set HSC_PKI_ALLOW_PRIVATE_IP=1 to allow)", ip_str);
+            }
+        }
+
+    } else if (addr->family == AF_INET6) {
+        // --- IPv6 Checks ---
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&addr->addr;
+        unsigned char *ip = (unsigned char *)&addr6->sin6_addr;
+        
+        // 用于日志
+        inet_ntop(AF_INET6, &addr6->sin6_addr, ip_str, sizeof(ip_str));
+
+        // 1. Block Loopback (::1) - ALWAYS BLOCKED
+        static const unsigned char loopback_v6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        if (memcmp(ip, loopback_v6, 16) == 0) {
+            block_connection = true;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Loopback IPv6: %s", ip_str);
+        }
+        // 2. Block Unique Local (fc00::/7) - CONDITIONALLY BLOCKED
+        // fc00:: to fdff:: -> First byte & 0xFE == 0xFC
+        else if (!allow_private && (ip[0] & 0xFE) == 0xFC) {
+            block_connection = true;
+             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Unique Local IPv6: %s", ip_str);
+        }
+        // 3. Block Link-Local (fe80::/10) - ALWAYS BLOCKED
+        // First byte 0xFE, second byte & 0xC0 == 0x80
+        else if (ip[0] == 0xFE && (ip[1] & 0xC0) == 0x80) {
+            block_connection = true;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Link-Local IPv6: %s", ip_str);
+        }
+    }
+
+    if (block_connection) {
+        return CURL_SOCKET_BAD;
+    }
+
+    // 安全检查通过，手动创建 socket 并返回给 libcurl
+    return socket(addr->family, addr->socktype, addr->protocol);
+}
+
 
 struct memory_chunk {
     char* memory;
@@ -233,6 +327,10 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
             curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
         #endif
         
+        // [FIX]: Finding #3 - 启用 SSRF 防御回调
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, opensocket_callback);
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, NULL);
+
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
@@ -251,6 +349,9 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
             free(chunk.memory);
             chunk.memory = NULL;
             chunk.size = 0;
+        } else if (res == CURLE_COULDNT_CONNECT && chunk.memory == NULL) {
+            // 如果是因为 socket 回调拒绝而连接失败
+             _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: Connection blocked (SSRF Protection) or failed to connect.");
         } else if (res != CURLE_OK) {
             _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: HTTP request failed: %s", curl_easy_strerror(res));
             free(chunk.memory);
@@ -405,7 +506,7 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     OCSP_RESPONSE* ocsp_resp = _send_and_parse_ocsp_request(user_cert, ocsp_req);
     OCSP_REQUEST_free(ocsp_req);
     if (!ocsp_resp) {
-        _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP URI exists, but server is unreachable.");
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP URI exists, but server is unreachable (or blocked by SSRF protection).");
         _hsc_log(HSC_LOG_LEVEL_ERROR, "         > Security Policy: Fail-Closed enforced.");
         return ret;
     }
@@ -549,6 +650,7 @@ int extract_public_key_from_cert(const char* user_cert_pem,
         ret = HSC_ERROR_INVALID_FORMAT;
         goto cleanup;
     }
+    // [FIXED]: MASTER_PUBLIC_KEY_BYTES 现在已定义 (通过 crypto_client.h -> security_spec.h)
     size_t pub_key_len = MASTER_PUBLIC_KEY_BYTES;
     if (EVP_PKEY_get_raw_public_key(pkey, public_key_out, &pub_key_len) != 1 || pub_key_len != MASTER_PUBLIC_KEY_BYTES) {
         LOG_PKI_ERROR("Failed to get raw public key bytes from certificate.");
@@ -561,3 +663,4 @@ cleanup:
     if (cert_bio) BIO_free(cert_bio);
     return ret;
 }
+/* --- END OF FILE src/pki/pki_handler.c --- */

@@ -2,7 +2,7 @@
 # CMakeLists.txt for Oracipher Core
 #
 # Reviewed and Updated by the Oracipher Core Code Review Committee
-# Version: 2.6 (Refactored: Conditional Installation of Dev Tools)
+# Version: 2.7 (Fix: Link against Ws2_32 on Windows for SSRF protection)
 #
 # This file now integrates clang-tidy directly into the build process,
 # enforces strict dependency version checks, and prevents test utilities
@@ -122,6 +122,12 @@ target_link_libraries(hsc_kernel PUBLIC
     ${CURL_LIBRARIES}
 )
 
+# [FIX]: 修复 Windows 下链接错误 (undefined reference to __imp_socket)
+# 因为 pki_handler.c 在 Windows 下使用了 Winsock2 API (socket, inet_ntop) 进行 SSRF 防御
+if(WIN32)
+    target_link_libraries(hsc_kernel PRIVATE ws2_32)
+endif()
+
 
 # --- 5. Define Executable Targets ---
 add_executable(hsc_cli src/cli.c)
@@ -142,6 +148,11 @@ target_link_libraries(test_ca_util PRIVATE
     ${OPENSSL_LIBRARIES}
     ${CURL_LIBRARIES}
 )
+
+# [FIX]: Windows 下 test_ca_util 也可能间接依赖 socket 符号，安全起见也加上
+if(WIN32)
+    target_link_libraries(test_ca_util PRIVATE ws2_32)
+endif()
 
 
 # --- 6. Define Test Suite ---

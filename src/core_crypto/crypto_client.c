@@ -1,3 +1,5 @@
+/* --- START OF FILE src/core_crypto/crypto_client.c --- */
+
 #include "crypto_client.h"
 #include "../common/secure_memory.h"
 #include "../common/internal_logger.h"
@@ -379,19 +381,25 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     // 2. [关键变更] 不再在这里将 my_sign_sk 转换为临时私钥。
     //    直接使用传入的 my_enc_sk (X25519 key)。
     
-    unsigned char nonce[crypto_box_NONCEBYTES];
+    // [FIX]: Audit Finding #1 - 必须使用 XChaCha20 专用常量
+    // 之前使用的是 crypto_box_NONCEBYTES (可能指向 XSalsa20 的常量)
+    unsigned char nonce[crypto_box_curve25519xchacha20poly1305_NONCEBYTES];
     randombytes_buf(nonce, sizeof(nonce));
 
-    unsigned char* ciphertext_ptr = encrypted_output + crypto_box_NONCEBYTES;
+    // [FIX]: Audit Finding #1 - 使用 XChaCha20 专用 nonce 长度来计算指针偏移
+    unsigned char* ciphertext_ptr = encrypted_output + crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
     
     // 3. 使用 Box 算法进行非对称加密
-    int result = crypto_box_easy(ciphertext_ptr, session_key, session_key_len,
+    // [FIX]: Audit Finding #1 - 强制替换为 crypto_box_curve25519xchacha20poly1305_easy
+    // 之前使用的是 crypto_box_easy (基于 XSalsa20)
+    int result = crypto_box_curve25519xchacha20poly1305_easy(ciphertext_ptr, session_key, session_key_len,
                                  nonce,
                                  recipient_encrypt_pk, my_enc_sk);
     
     if (result == 0) {
         memcpy(encrypted_output, nonce, sizeof(nonce));
-        *encrypted_output_len = crypto_box_NONCEBYTES + session_key_len + crypto_box_MACBYTES;
+        // [FIX]: Audit Finding #1 - 修正输出长度计算，使用 XChaCha20 专用常量
+        *encrypted_output_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + session_key_len + crypto_box_curve25519xchacha20poly1305_MACBYTES;
     } else {
         *encrypted_output_len = 0;
     }
@@ -409,13 +417,15 @@ int decapsulate_session_key(unsigned char* decrypted_output,
         return -1;
     }
 
-    if (encrypted_input_len < crypto_box_NONCEBYTES) {
+    // [FIX]: Audit Finding #1 - 使用 XChaCha20 专用常量检查长度
+    if (encrypted_input_len < crypto_box_curve25519xchacha20poly1305_NONCEBYTES) {
         return -1;
     }
     
     const unsigned char* nonce = encrypted_input;
-    const unsigned char* actual_ciphertext = encrypted_input + crypto_box_NONCEBYTES;
-    const size_t actual_ciphertext_len = encrypted_input_len - crypto_box_NONCEBYTES;
+    // [FIX]: Audit Finding #1 - 使用 XChaCha20 专用 nonce 长度计算指针
+    const unsigned char* actual_ciphertext = encrypted_input + crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
+    const size_t actual_ciphertext_len = encrypted_input_len - crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
 
     // 1. 转换发送者的公钥 (Ed25519 PK -> X25519 PK)
     //    我们需要知道是谁发的（从证书提取的Sign PK），然后转换成Encrypt PK来验证和解密。
@@ -425,9 +435,11 @@ int decapsulate_session_key(unsigned char* decrypted_output,
     }
 
     // 2. [关键变更] 直接使用 my_enc_sk 进行解密
-    int result = crypto_box_open_easy(decrypted_output, actual_ciphertext, actual_ciphertext_len,
+    // [FIX]: Audit Finding #1 - 强制替换为 crypto_box_curve25519xchacha20poly1305_open_easy
+    int result = crypto_box_curve25519xchacha20poly1305_open_easy(decrypted_output, actual_ciphertext, actual_ciphertext_len,
                                       nonce,
                                       sender_encrypt_pk, my_enc_sk);
 
     return result;
 }
+/* --- END OF FILE src/core_crypto/crypto_client.c --- */
