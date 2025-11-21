@@ -20,7 +20,6 @@ void print_hex(const char* label, const unsigned char* data, size_t len) {
 }
 
 // 从文件中读取PEM字符串的辅助函数
-// 注意：证书是公开信息，因此这里使用标准 malloc 是可以接受的。
 char* read_pem_file(const char* filename) {
     FILE* f = fopen(filename, "rb");
     if (!f) {
@@ -49,8 +48,8 @@ char* read_pem_file(const char* filename) {
 
 // --- 主演示程序 ---
 int main() {
-    printf("--- Oracipher Core v1.0 内核库API演示 ---\n");
-    printf("此程序演示了作为库客户端的端到端工作流。\n");
+    printf("--- Oracipher Core v5.0 (PFS Enabled) 内核库API演示 ---\n");
+    printf("此程序演示了作为库客户端的端到端工作流 (Ephemeral KEM)。\n");
     printf("它假定CA证书和用户证书已由一个独立的CA工具生成。\n\n");
     
     int ret = 1;
@@ -65,10 +64,7 @@ int main() {
     unsigned char* decrypted_file_content = NULL;
 
     // --- 初始化 ---
-    // [FIX]: 适配新的 API 签名 (config, pepper_hex)
-    // 传入 NULL, NULL 以使用：
-    // 1. 默认的严格安全配置 (Fail-Closed for No OCSP)
-    // 2. 默认的 ENV Pepper 加载机制 (并触发新增的 ENV 内存擦除逻辑)
+    // 传入 NULL, NULL 以使用默认安全配置和 ENV Pepper
     if (hsc_init(NULL, NULL) != HSC_OK) {
         fprintf(stderr, "错误: 高安全内核库初始化失败！\n");
         goto cleanup;
@@ -111,8 +107,6 @@ int main() {
     size_t file_content_len = strlen(file_content);
     size_t enc_file_buf_len = file_content_len + HSC_AEAD_OVERHEAD_BYTES;
     
-    // [FIX]: 内存安全修复 - 使用 secure_alloc 替代 malloc
-    // 即使是密文，为了防止侧信道或意外残留，也建议使用安全内存。
     encrypted_file = hsc_secure_alloc(enc_file_buf_len);
     if (!encrypted_file) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
     unsigned long long actual_enc_file_len;
@@ -139,20 +133,24 @@ int main() {
     print_hex("  > 提取到的接收者公钥", recipient_pk, sizeof(recipient_pk));
     printf("\n");
 
-    // 4. 封装会话密钥
-    printf("4. 为接收者封装会话密钥...\n");
-    size_t encapsulated_key_buf_len = sizeof(session_key) + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES;
+    // 4. 封装会话密钥 (Ephemeral KEM)
+    printf("4. 为接收者封装会话密钥 (使用 Ephemeral KEM)...\n");
+    size_t encapsulated_key_buf_len = HSC_MAX_ENCAPSULATED_KEY_SIZE;
     
-    // [FIX]: 内存安全修复 - 使用 secure_alloc
     encapsulated_session_key = hsc_secure_alloc(encapsulated_key_buf_len);
     if (!encapsulated_session_key) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
     
     size_t actual_encapsulated_len;
-    if (hsc_encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len, session_key, sizeof(session_key),
-                                recipient_pk, alice_mkp) != HSC_OK) {
+    
+    // [FIX]: PFS 变更 - 关键修正
+    // 旧代码有 6 个参数 (..., recipient_pk, alice_mkp)
+    // 新代码只有 5 个参数 (..., recipient_pk)
+    if (hsc_encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len, 
+                                    session_key, sizeof(session_key),
+                                    recipient_pk) != HSC_OK) {
         fprintf(stderr, "严重错误: 封装会话密钥失败！\n"); goto cleanup;
     }
-    printf("  > 会话密钥已使用非对称加密封装。\n\n");
+    printf("  > 会话密钥已使用非对称加密封装 (PFS Enabled)。\n\n");
     
     // --- 阶段四: 作为接收者解密 ---
     printf("--- 阶段四: 作为接收者 'Alice' 解密文件 ---\n");
@@ -162,12 +160,12 @@ int main() {
     decrypted_session_key = hsc_secure_alloc(sizeof(session_key));
     if (!decrypted_session_key) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
 
-    unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert(alice_cert_pem, sender_pk) != HSC_OK) {
-        fprintf(stderr, "严重错误: 无法从发送者证书中提取公钥！\n"); goto cleanup;
-    }
-
-    if (hsc_decapsulate_session_key(decrypted_session_key, encapsulated_session_key, actual_encapsulated_len, sender_pk, alice_mkp) != HSC_OK) {
+    // [FIX]: PFS 变更 - 关键修正
+    // 旧代码有 5 个参数 (..., sender_pk, alice_mkp)
+    // 新代码只有 4 个参数 (..., alice_mkp)，且不需要 sender_pk
+    if (hsc_decapsulate_session_key(decrypted_session_key, 
+                                    encapsulated_session_key, actual_encapsulated_len, 
+                                    alice_mkp) != HSC_OK) {
         fprintf(stderr, "解密错误: 无法解封装会话密钥！\n"); goto cleanup;
     }
     print_hex("  > [解密] 恢复的会话密钥", decrypted_session_key, sizeof(session_key));
@@ -181,8 +179,6 @@ int main() {
     // 2. 使用恢复的会话密钥解密文件内容
     printf("2. 使用恢复的会话密钥解密文件内容...\n");
     
-    // [FIX]: 内存安全修复 - 使用 secure_alloc 存储解密后的明文
-    // 这是最关键的修复点，防止明文被 Swap。
     decrypted_file_content = hsc_secure_alloc(file_content_len + 1);
     if (!decrypted_file_content) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
     unsigned long long actual_dec_file_len;
@@ -195,9 +191,6 @@ int main() {
     
     printf("  > [解密] 恢复的文件内容: \"%s\"\n", (char*)decrypted_file_content);
 
-    // [COMMITTEE FIX] 使用恒定时间的 sodium_memcmp 替换 strcmp，以防御计时攻击。
-    // 1. 首先比较长度是否一致
-    // 2. 如果长度一致，再进行恒定时间的内容比较
     if (actual_dec_file_len == file_content_len &&
         sodium_memcmp(file_content, decrypted_file_content, file_content_len) == 0) 
     {
@@ -212,12 +205,10 @@ int main() {
 
 cleanup:
     printf("\n--- 清理所有资源 ---\n");
-    // PEM 字符串使用标准 free
     free(ca_cert_pem);
     free(alice_cert_pem);
     hsc_free_master_key_pair(&alice_mkp);
     
-    // [FIX]: 使用 hsc_secure_free 释放敏感缓冲区
     if (encrypted_file) hsc_secure_free(encrypted_file);
     if (encapsulated_session_key) hsc_secure_free(encapsulated_session_key);
     if (decrypted_session_key) hsc_secure_free(decrypted_session_key);

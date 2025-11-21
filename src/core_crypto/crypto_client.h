@@ -1,3 +1,5 @@
+/* --- START OF FILE src/core_crypto/crypto_client.h --- */
+
 #ifndef CRYPTO_CLIENT_H
 #define CRYPTO_CLIENT_H
 
@@ -185,46 +187,43 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
 
 
 /**
- * @brief 规范 4 - 阶段三 - 4: 封装会话密钥 (非对称加密)
- *        使用我方的私钥和接收者的公钥，加密一个会话密钥
- *        输出格式为 [nonce || encrypted_key]，其中 nonce 长度为 crypto_box_NONCEBYTES
- * 
- *        [修复] 参数更新:
- *        @param my_sign_sk 现已弃用，应传入明确的 encryption_sk
+ * @brief 规范 4 - 阶段三 - 4: 封装会话密钥 (Ephemeral KEM)
+ *        [FIX: PFS] 关键更新:
+ *        使用一次性临时密钥对 (Ephemeral Keypair) 进行加密，实现前向保密。
+ *        不再使用发送者的长期私钥。
+ *        
+ *        输出格式变更: [Nonce (24)] || [Ephemeral_PK (32)] || [MAC (16) + Ciphertext]
  *
  * @param encrypted_output (输出) 存放加密结果的缓冲区
  * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度
  * @param session_key 要加密的会话密钥明文
  * @param session_key_len 会话密钥的长度
  * @param recipient_sign_pk 接收者的 Ed25519 主公钥 (函数内部会处理到 X25519 的转换)
- * @param my_enc_sk 我方（发送者）的 X25519 加密私钥 (对应 master_key_pair.encryption_sk)
  * @return 成功返回 0，失败返回 -1
  */
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
-                            const unsigned char* recipient_sign_pk,
-                            const unsigned char* my_enc_sk);
+                            const unsigned char* recipient_sign_pk);
 
 /**
- * @brief 解封装会话密钥 (非对称解密)
- *        使用我方的私钥和发送者的公钥，解密一个会话密钥
- *        输入数据格式应为 [nonce || encrypted_key]
+ * @brief 解封装会话密钥 (Ephemeral KEM)
+ *        [FIX: PFS] 关键更新:
+ *        从 encrypted_input 中提取 Ephemeral_PK，结合我方私钥进行解密。
+ *        不再验证发送者的身份 (匿名解密)。
  * 
- *        [修复] 参数更新:
- *        @param my_sign_sk 现已弃用，应传入明确的 encryption_sk
+ *        输入格式要求: [Nonce (24)] || [Ephemeral_PK (32)] || [MAC (16) + Ciphertext]
  *
- * @param decrypted_output (输出) 存放解密后的会-话密钥的缓冲区
+ * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区
  * @param encrypted_input 要解密的封装数据
  * @param encrypted_input_len 封装数据的长度
- * @param sender_sign_pk 发送者的 Ed25519 主公钥 (函数内部会处理到 X25519 的转换)
  * @param my_enc_sk 我方（接收者）的 X25519 加密私钥 (对应 master_key_pair.encryption_sk)
  * @return 成功返回 0，失败（如验证失败）返回 -1
  */
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
-                            const unsigned char* sender_sign_pk,
                             const unsigned char* my_enc_sk);
 
 
 #endif // CRYPTO_CLIENT_H
+/* --- END OF FILE src/core_crypto/crypto_client.h --- */

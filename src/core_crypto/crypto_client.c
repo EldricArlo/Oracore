@@ -33,7 +33,6 @@ static int hex_char_to_int(char c) {
 
 /**
  * @brief [内部] 加载并验证全局胡椒。
- *        [FIX]: 支持显式传入或从环境变量回退。
  */
 static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "Loading global cryptographic pepper...");
@@ -57,8 +56,6 @@ static int _load_pepper(const char* explicit_hex) {
     size_t hex_len = strlen(pepper_hex);
     if (hex_len != REQUIRED_PEPPER_BYTES * 2) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper must be exactly %zu hex characters long, but got %zu.", REQUIRED_PEPPER_BYTES * 2, hex_len);
-        // [FIX]: Finding #1 - 不再尝试擦除环境变量，因为可能导致段错误。
-        // 如果长度错误，直接返回错误即可。
         return -1;
     }
 
@@ -72,14 +69,10 @@ static int _load_pepper(const char* explicit_hex) {
         int high = hex_char_to_int(pepper_hex[2 * i]);
         int low = hex_char_to_int(pepper_hex[2 * i + 1]);
         
-        // [FIX]: Finding #3 - 消除未定义行为 (UB)
-        // 必须在执行位移操作 (high << 4) 之前检查 high 是否为 -1。
-        // 在 C 语言中，对负数进行左移位是未定义行为。
         if (high == -1 || low == -1) {
             secure_free(g_internal_pepper);
             g_internal_pepper = NULL;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper contains invalid non-hexadecimal characters.");
-            // [FIX]: Finding #1 - 同样，不再尝试擦除环境变量。
             return -1;
         }
         
@@ -89,10 +82,6 @@ static int _load_pepper(const char* explicit_hex) {
     g_internal_pepper_len = REQUIRED_PEPPER_BYTES;
     _hsc_log(HSC_LOG_LEVEL_INFO, "  > Successfully loaded and validated the %zu-byte global pepper.", g_internal_pepper_len);
 
-    // [FIX]: Finding #1 Remediation
-    // 移除了对 getenv 返回指针的 sodium_memzero 调用。
-    // 修改环境变量内存属于未定义行为，可能导致程序崩溃 (Crash)。
-    // 安全性依赖于操作系统的进程隔离。
     if (is_from_env) {
         _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Note: Sensitive pepper loaded from environment. Ensure process environment is isolated.");
     }
@@ -137,7 +126,6 @@ void crypto_config_load_from_env() {
     }
 }
 
-// [FIX]: 更新签名以接收显式 Pepper
 int crypto_client_init(const char* explicit_pepper_hex) {
     if (sodium_init() < 0) return -1;
     if (_load_pepper(explicit_pepper_hex) != 0) return -1;
@@ -158,37 +146,31 @@ const unsigned char* get_global_pepper(size_t* out_len) {
     return g_internal_pepper;
 }
 
-// [修复] 重构：分别分配和生成身份密钥与加密密钥
 int generate_master_key_pair(master_key_pair* kp) {
     if (kp == NULL) return -1;
     
-    // 1. 初始化指针为 NULL，方便 cleanup 处理
     kp->identity_sk = NULL;
     kp->encryption_sk = NULL;
 
-    // 2. 分配身份私钥内存
+    // 分配身份私钥内存
     kp->identity_sk = secure_alloc(crypto_sign_SECRETKEYBYTES);
     if (kp->identity_sk == NULL) goto cleanup;
 
-    // 3. 分配加密私钥内存
+    // 分配加密私钥内存
     kp->encryption_sk = secure_alloc(crypto_box_SECRETKEYBYTES);
     if (kp->encryption_sk == NULL) goto cleanup;
 
-    // 4. 生成 Ed25519 身份密钥对
+    // 生成 Ed25519 身份密钥对
     if (crypto_sign_keypair(kp->identity_pk, kp->identity_sk) != 0) {
         goto cleanup;
     }
 
-    // 5. [关键修复] 立即派生并隔离加密密钥
-    // 虽然这里仍是数学转换，但我们将转换后的结果存储在独立的 encryption_* 字段中。
-    // 之后的加密操作将只引用 encryption_sk，不再接触 identity_sk。
-    
-    // 5a. 转换公钥: Ed25519 PK -> X25519 PK
+    // 派生并隔离加密密钥 (Ed25519 -> X25519)
+    // 注意：未来版本应在此处改为生成独立的密钥对，但为保持兼容性暂用派生
     if (crypto_sign_ed25519_pk_to_curve25519(kp->encryption_pk, kp->identity_pk) != 0) {
         goto cleanup;
     }
 
-    // 5b. 转换私钥: Ed25519 SK -> X25519 SK
     if (crypto_sign_ed25519_sk_to_curve25519(kp->encryption_sk, kp->identity_sk) != 0) {
         goto cleanup;
     }
@@ -196,7 +178,6 @@ int generate_master_key_pair(master_key_pair* kp) {
     return 0;
 
 cleanup:
-    // 如果任何一步失败，释放所有已分配的内存
     if (kp->identity_sk) secure_free(kp->identity_sk);
     if (kp->encryption_sk) secure_free(kp->encryption_sk);
     kp->identity_sk = NULL;
@@ -204,7 +185,6 @@ cleanup:
     return -1;
 }
 
-// [修复] 重构：分别释放两个私钥
 void free_master_key_pair(master_key_pair* kp) {
     if (kp != NULL) {
         if (kp->identity_sk != NULL) {
@@ -364,47 +344,62 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
     return 0;
 }
 
-// [修复] 重构：使用传入的 dedicated encryption key，不再进行临时转换
+// [FIX]: 重构：Ephemeral KEM (前向保密实现)
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
-                            const unsigned char* recipient_sign_pk,
-                            const unsigned char* my_enc_sk) {
+                            const unsigned char* recipient_sign_pk) {
     
-    if (encrypted_output == NULL || encrypted_output_len == NULL || session_key == NULL || recipient_sign_pk == NULL || my_enc_sk == NULL) {
+    if (encrypted_output == NULL || encrypted_output_len == NULL || session_key == NULL || recipient_sign_pk == NULL) {
         return -1;
     }
 
     // 1. 转换接收者的公钥 (Ed25519 PK -> X25519 PK)
-    //    这是必要的，因为我们通常只知道接收者的身份公钥（例如来自证书）。
-    //    这个操作是公钥到公钥的转换，不涉及私钥，是安全的。
     unsigned char recipient_encrypt_pk[crypto_box_PUBLICKEYBYTES];
     if (crypto_sign_ed25519_pk_to_curve25519(recipient_encrypt_pk, recipient_sign_pk) != 0) {
         return -1;
     }
 
-    // 2. [关键变更] 不再在这里将 my_sign_sk 转换为临时私钥。
-    //    直接使用传入的 my_enc_sk (X25519 key)。
-    
-    // [FIX]: Audit Finding #1 - 必须使用 XChaCha20 专用常量
-    // 之前使用的是 crypto_box_NONCEBYTES (可能指向 XSalsa20 的常量)
+    // 2. [PFS 核心变更] 生成临时密钥对 (Ephemeral Key Pair)
+    unsigned char ephem_pk[crypto_box_PUBLICKEYBYTES];
+    unsigned char ephem_sk[crypto_box_SECRETKEYBYTES];
+    // 使用 sodium 的安全随机数生成器
+    crypto_box_keypair(ephem_pk, ephem_sk);
+
+    // 3. 准备输出结构
+    // [FIX] 使用 XChaCha20 专用 Nonce 大小
     unsigned char nonce[crypto_box_curve25519xchacha20poly1305_NONCEBYTES];
     randombytes_buf(nonce, sizeof(nonce));
 
-    // [FIX]: Audit Finding #1 - 使用 XChaCha20 专用 nonce 长度来计算指针偏移
-    unsigned char* ciphertext_ptr = encrypted_output + crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
+    // 计算指针偏移：
+    // Output Format: [Nonce (24)] || [Ephemeral_PK (32)] || [Ciphertext + MAC]
+    unsigned char* out_nonce_ptr = encrypted_output;
+    unsigned char* out_ephem_pk_ptr = encrypted_output + sizeof(nonce);
+    unsigned char* out_ciphertext_ptr = out_ephem_pk_ptr + crypto_box_PUBLICKEYBYTES;
+
+    // 4. 执行匿名加密 (Ephemeral SK -> Recipient Static PK)
+    // [FIX] 强制使用 XChaCha20Poly1305
+    int result = crypto_box_curve25519xchacha20poly1305_easy(
+                    out_ciphertext_ptr,
+                    session_key, session_key_len,
+                    nonce,
+                    recipient_encrypt_pk,
+                    ephem_sk); // 使用临时私钥
     
-    // 3. 使用 Box 算法进行非对称加密
-    // [FIX]: Audit Finding #1 - 强制替换为 crypto_box_curve25519xchacha20poly1305_easy
-    // 之前使用的是 crypto_box_easy (基于 XSalsa20)
-    int result = crypto_box_curve25519xchacha20poly1305_easy(ciphertext_ptr, session_key, session_key_len,
-                                 nonce,
-                                 recipient_encrypt_pk, my_enc_sk);
-    
+    // 5. 立即擦除临时私钥 (关键安全步骤)
+    sodium_memzero(ephem_sk, sizeof(ephem_sk));
+
     if (result == 0) {
-        memcpy(encrypted_output, nonce, sizeof(nonce));
-        // [FIX]: Audit Finding #1 - 修正输出长度计算，使用 XChaCha20 专用常量
-        *encrypted_output_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + session_key_len + crypto_box_curve25519xchacha20poly1305_MACBYTES;
+        // 组装头部
+        memcpy(out_nonce_ptr, nonce, sizeof(nonce));
+        memcpy(out_ephem_pk_ptr, ephem_pk, sizeof(ephem_pk));
+        
+        // 计算总长度
+        // Nonce + EphemeralPK + CiphertextLength (Plaintext + MAC)
+        *encrypted_output_len = sizeof(nonce) + 
+                                sizeof(ephem_pk) + 
+                                session_key_len + 
+                                crypto_box_curve25519xchacha20poly1305_MACBYTES;
     } else {
         *encrypted_output_len = 0;
     }
@@ -412,38 +407,42 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     return result;
 }
 
-// [修复] 重构：使用传入的 dedicated encryption key，不再进行临时转换
+// [FIX]: 重构：Ephemeral KEM 解封装
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
-                            const unsigned char* sender_sign_pk,
                             const unsigned char* my_enc_sk) {
 
-    if (decrypted_output == NULL || encrypted_input == NULL || sender_sign_pk == NULL || my_enc_sk == NULL) {
+    if (decrypted_output == NULL || encrypted_input == NULL || my_enc_sk == NULL) {
         return -1;
     }
 
-    // [FIX]: Audit Finding #1 - 使用 XChaCha20 专用常量检查长度
-    if (encrypted_input_len < crypto_box_curve25519xchacha20poly1305_NONCEBYTES) {
+    // 1. 验证最小长度
+    size_t min_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + 
+                     crypto_box_PUBLICKEYBYTES + 
+                     crypto_box_curve25519xchacha20poly1305_MACBYTES;
+                     
+    if (encrypted_input_len < min_len) {
         return -1;
     }
-    
+
+    // 2. 解析输入结构
+    // Format: [Nonce (24)] || [Ephemeral_PK (32)] || [Ciphertext + MAC]
     const unsigned char* nonce = encrypted_input;
-    // [FIX]: Audit Finding #1 - 使用 XChaCha20 专用 nonce 长度计算指针
-    const unsigned char* actual_ciphertext = encrypted_input + crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
-    const size_t actual_ciphertext_len = encrypted_input_len - crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
+    const unsigned char* ephem_pk = encrypted_input + crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
+    const unsigned char* ciphertext = ephem_pk + crypto_box_PUBLICKEYBYTES;
+    
+    size_t ciphertext_len = encrypted_input_len - 
+                            crypto_box_curve25519xchacha20poly1305_NONCEBYTES - 
+                            crypto_box_PUBLICKEYBYTES;
 
-    // 1. 转换发送者的公钥 (Ed25519 PK -> X25519 PK)
-    //    我们需要知道是谁发的（从证书提取的Sign PK），然后转换成Encrypt PK来验证和解密。
-    unsigned char sender_encrypt_pk[crypto_box_PUBLICKEYBYTES];
-    if (crypto_sign_ed25519_pk_to_curve25519(sender_encrypt_pk, sender_sign_pk) != 0) {
-        return -1;
-    }
-
-    // 2. [关键变更] 直接使用 my_enc_sk 进行解密
-    // [FIX]: Audit Finding #1 - 强制替换为 crypto_box_curve25519xchacha20poly1305_open_easy
-    int result = crypto_box_curve25519xchacha20poly1305_open_easy(decrypted_output, actual_ciphertext, actual_ciphertext_len,
-                                      nonce,
-                                      sender_encrypt_pk, my_enc_sk);
+    // 3. 执行解密 (My Static SK, Sender Ephemeral PK)
+    // 使用 open_easy 验证并解密
+    int result = crypto_box_curve25519xchacha20poly1305_open_easy(
+                    decrypted_output,
+                    ciphertext, ciphertext_len,
+                    nonce,
+                    ephem_pk,  // 发送者的临时公钥
+                    my_enc_sk); // 我的静态私钥
 
     return result;
 }

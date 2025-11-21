@@ -43,7 +43,6 @@
 #define HSC_SESSION_KEY_BYTES       32
 
 // [FIX]: Finding #2 - 修正 KDF 盐值长度以匹配 Libsodium 的 Argon2id 实现 (crypto_pwhash_SALTBYTES)
-// 之前定义的 32 字节会导致底层静默截断后 16 字节。
 #define HSC_KDF_SALT_BYTES          16 
 
 // 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
@@ -57,12 +56,13 @@
 #define HSC_AEAD_OVERHEAD_BYTES (HSC_AEAD_NONCE_BYTES + HSC_AEAD_TAG_BYTES)
 
 // 为密钥封装提供的开销常量
-// [FIX]: Audit Finding #1 - 语义更新
-// 这些常量现在明确对应 crypto_box_curve25519xchacha20poly1305_*
-// 数值 (24, 16) 与原 XSalsa20 版一致，但语义已强制锁定为 XChaCha20。
+// [FIX]: Audit Finding #1 - Ephemeral KEM 协议变更
+// 新格式: [Nonce (24)] + [Ephemeral_PK (32)] + [MAC (16)] = 72 bytes overhead
+// 之前版本只有 Nonce + MAC。现在必须包含临时公钥以便接收方计算共享密钥。
 #define HSC_BOX_NONCE_BYTES     24
 #define HSC_BOX_MAC_BYTES       16
-#define HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES (HSC_BOX_NONCE_BYTES + HSC_BOX_MAC_BYTES)
+#define HSC_EPHEMERAL_PK_BYTES  32
+#define HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES (HSC_BOX_NONCE_BYTES + HSC_EPHEMERAL_PK_BYTES + HSC_BOX_MAC_BYTES)
 
 // 为解封装的会话密钥长度提供一个安全、合理的上限
 #define HSC_MAX_ENCAPSULATED_KEY_SIZE (HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES)
@@ -127,14 +127,26 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem,
                                      unsigned char* public_key_out);
 
 // --- 核心API函数：密钥封装 (非对称) ---
+
+/**
+ * @brief [PFS修复] 封装会话密钥 (Ephemeral KEM)
+ *        不再需要发送者的私钥。函数内部会生成一个一次性的临时密钥对 (Ephemeral Keypair)。
+ * 
+ * @param my_kp **[已移除]** 发送者私钥不再用于加密，确保前向保密性。
+ */
 int hsc_encapsulate_session_key(unsigned char* encrypted_output,
                                 size_t* encrypted_output_len,
                                 const unsigned char* session_key, size_t session_key_len,
-                                const unsigned char* recipient_pk,
-                                const hsc_master_key_pair* my_kp);
+                                const unsigned char* recipient_pk);
+
+/**
+ * @brief [PFS修复] 解封装会话密钥 (Ephemeral KEM)
+ *        不再需要发送者的公钥。解密所需的临时公钥已包含在 encrypted_input 中。
+ * 
+ * @param sender_pk **[已移除]** 解密过程现在是匿名的 (Anonymous Decryption)。
+ */
 int hsc_decapsulate_session_key(unsigned char* decrypted_output,
                                 const unsigned char* encrypted_input, size_t encrypted_input_len,
-                                const unsigned char* sender_pk,
                                 const hsc_master_key_pair* my_kp);
 
 // --- 核心API函数：流式加解密 (适用于大文件) ---
@@ -145,14 +157,14 @@ int hsc_crypto_stream_push(hsc_crypto_stream_state* state, unsigned char* out, u
 int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, unsigned char* tag, const unsigned char* in, size_t in_len);
 
 // --- 核心API函数：高级混合加解密 (原始密钥模式) ---
+// [FIX]: API 更新 - 移除 sender_kp/sender_pk，因为底层使用了 Ephemeral KEM
 int hsc_hybrid_encrypt_stream_raw(const char* output_path,
                                     const char* input_path,
-                                    const unsigned char* recipient_pk,
-                                    const hsc_master_key_pair* sender_kp);
+                                    const unsigned char* recipient_pk); // Removed sender_kp
+
 int hsc_hybrid_decrypt_stream_raw(const char* output_path,
                                     const char* input_path,
-                                    const unsigned char* sender_pk,
-                                    const hsc_master_key_pair* recipient_kp);
+                                    const hsc_master_key_pair* recipient_kp); // Removed sender_pk
 
 
 // --- 核心API函数：单次对称加解密 (适用于小数据) ---
@@ -174,58 +186,26 @@ void hsc_set_log_callback(hsc_log_callback callback);
 
 // =======================================================================
 // --- 专家级API (EXPERT-LEVEL APIS) ---
-// 警告：以下函数为高级用户设计，需要调用者对密码学概念有深入理解。
-//      不当使用这些函数可能导致严重的安全漏洞。
 // =======================================================================
 
 /**
  * @brief [专家级] 从用户密码和盐安全地派生密钥。
- *        此函数使用库内部配置的、经过安全基线验证的 Argon2id 参数。
- *        它会自动处理内部的全局胡椒，用户无需也无法干预此过程。
- * @param derived_key (输出) 存储派生密钥的缓冲区。
- * @param derived_key_len 期望派生的密钥长度。
- * @param password 用户提供的密码字符串。
- * @param salt 一个唯一的、针对此密码的盐值 (建议使用 hsc_random_bytes 生成，
- *             长度应为 HSC_KDF_SALT_BYTES)。
- * @return 成功返回 HSC_OK，失败返回相应的错误码。
  */
 int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_len,
                                    const char* password, const unsigned char* salt);
 
 /**
  * @brief [专家级] 将一个Ed25519公钥 (用于签名) 转换为X25519公钥 (用于密钥交换)。
- * @param x25519_pk_out (输出) 存储转换后X25519公钥的缓冲区。
- *                      大小必须为 32 字节 (crypto_box_PUBLICKEYBYTES)。
- * @param ed25519_pk_in (输入) 原始的Ed25519公钥。
- *                      大小必须为 32 字节 (crypto_sign_PUBLICKEYBYTES)。
- * @return 成功返回 HSC_OK，如果转换失败则返回 HSC_ERROR_CRYPTO_OPERATION。
  */
 int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsigned char* ed25519_pk_in);
 
 /**
  * @brief [专家级] 将一个Ed25519私钥 (用于签名) 转换为X25519私钥 (用于密钥交换)。
- * @param x25519_sk_out (输出) 存储转换后X25519私钥的缓冲区。
- *                      **警告**: 此密钥为敏感数据，建议存储在安全内存中，并在用后立即擦除。
- *                      大小必须为 32 字节 (crypto_box_SECRETKEYBYTES)。
- * @param ed25519_sk_in (输入) 原始的Ed25519私钥。
- *                      大小必须为 64 字节 (crypto_sign_SECRETKEYBYTES)。
- * @return 成功返回 HSC_OK，如果转换失败则返回 HSC_ERROR_CRYPTO_OPERATION。
  */
 int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsigned char* ed25519_sk_in);
 
 /**
  * @brief [专家级] [推荐] [分离模式] 安全地使用AEAD (XChaCha20-Poly1305) 对称加密数据。
- *        此版本在内部安全地生成一个唯一的Nonce，并将其与密文分开返回，从根本上避免了Nonce重用风险。
- * 
- * @param ciphertext (输出) 加密后的数据缓冲区 (仅包含纯密文)。
- * @param tag_out (输出) 生成的16字节认证标签 (HSC_AEAD_TAG_BYTES)。
- * @param nonce_out (输出) 存储由函数内部生成的24字节唯一Nonce的缓冲区 (HSC_AEAD_NONCE_BYTES)。
- * @param message 要加密的明文。
- * @param message_len 明文的长度。
- * @param additional_data (可选) 附加验证数据 (AD)，如果不需要则为 NULL。
- * @param ad_len 附加数据的长度，如果 AD 为 NULL 则为 0。
- * @param key 加密密钥 (HSC_SESSION_KEY_BYTES)。
- * @return 成功返回 HSC_OK，失败返回 HSC_ERROR_CRYPTO_OPERATION。
  */
 int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag_out, unsigned char* nonce_out,
                                    const unsigned char* message, size_t message_len,
@@ -235,15 +215,6 @@ int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag
 
 /**
  * @brief [专家级] [分离模式] 使用AEAD (XChaCha20-Poly1305) 对称解密数据。
- * @param decrypted_message (输出) 解密后的明文缓冲区。
- * @param ciphertext 要解密的纯密文。
- * @param ciphertext_len 纯密文的长度。
- * @param tag (输入) 与密文关联的16字节认证标签 (HSC_AEAD_TAG_BYTES)。
- * @param additional_data (可选) 附加验证数据 (AD)。
- * @param ad_len 附加数据的长度。
- * @param nonce (输入) 用于加密的24字节Nonce (HSC_AEAD_NONCE_BYTES)。
- * @param key 解密密钥 (HSC_SESSION_KEY_BYTES)。
- * @return 成功返回 HSC_OK，如果认证失败或解密失败则返回 HSC_ERROR_CRYPTO_OPERATION。
  */
 int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
                               const unsigned char* ciphertext, size_t ciphertext_len,
