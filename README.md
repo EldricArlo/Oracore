@@ -186,6 +186,15 @@ The project is designed to be highly portable and avoids platform-specific hardc
 
 This section provides a complete, self-contained workflow demonstrating how two users, Alice and Bob, can perform a secure file exchange using the provided command-line tools.
 
+> **⚠️ CRITICAL: OFFLINE ENVIRONMENTS & NETWORK REQUIREMENTS**
+>
+> This tool enforces a strict **"Fail-Closed"** security policy regarding certificate revocation. **Every time** you verify a certificate (or encrypt to a certificate), the tool attempts to contact the Issuing CA's OCSP server to ensure the certificate is still valid.
+>
+> *   **If you are offline:** The operation will **FAIL** immediately (Error Code: `-13` or `-12`).
+> *   **If the OCSP server is blocked:** The operation will **FAIL**.
+>
+> **Planning:** Ensure your environment has outbound network access to the OCSP URLs defined in your certificates. This tool is **not designed for air-gapped (offline) systems** unless you use the "Direct Key" mode (Option C) or configure a local OCSP responder.
+
 **Tool Roles:**
 *   `./bin/test_ca_util`: A helper utility that simulates a Certificate Authority (CA), responsible for generating a root certificate and signing user certificates.
 *   `./bin/hsc_cli`: The core client tool for key generation, CSR creation, certificate validation, and file encryption/decryption.
@@ -311,7 +320,7 @@ This section provides a complete, self-contained workflow demonstrating how two 
     // ... (encryption logic is the same as in the example) ...
 
     // 3. Verify the recipient's (Bob's) certificate
-    if (hsc_verify_user_certificate(bob_cert_pem, ca_pem, "bob@example.com") != HSC_OK) {
+    if (hsc_verify_user_certificate(bob_cert_pem, ca_pem, "bob@example.com" ) != HSC_OK) {
         // Certificate is invalid, abort! The library will log details via your callback.
     }
 

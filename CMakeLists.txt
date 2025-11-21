@@ -2,11 +2,11 @@
 # CMakeLists.txt for Oracipher Core
 #
 # Reviewed and Updated by the Oracipher Core Code Review Committee
-# Version: 2.4 (Integrated Static Analysis)
+# Version: 2.5 (Security Hardening: Fail-Closed on Vulnerable Deps)
 #
 # This file now integrates clang-tidy directly into the build process
-# to provide automated static analysis, improving code quality and
-# catching potential issues early.
+# and enforces strict dependency version checks to prevent building
+# with known CVEs.
 # ==============================================================================
 
 # --- 1. Project Definition and C Standard ---
@@ -69,12 +69,22 @@ if(NOT OPENSSL_VERSION VERSION_GREATER_EQUAL "3.0.7")
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 endif()
 
+# [COMMITTEE FIX] Upgraded to FATAL_ERROR per Review Report Priority #1
+# This strictly prevents building with Libcurl versions vulnerable to
+# the critical SOCKS5 heap overflow (CVE-2023-38545).
 if(NOT CURL_VERSION VERSION_GREATER_EQUAL "8.4.0")
-    message(WARNING "
+    message(FATAL_ERROR "
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!! SECURITY WARNING: Your Libcurl version (${CURL_VERSION}) is older than 8.4.0
-!! and may be vulnerable to the SOCKS5 heap overflow (CVE-2023-38545).
-!! It is STRONGLY recommended to upgrade your Libcurl library.
+!! SECURITY FAILURE: BUILD TERMINATED
+!!
+!! Your Libcurl version (${CURL_VERSION}) is older than 8.4.0.
+!! It contains a known CRITICAL vulnerability:
+!! SOCKS5 heap overflow (CVE-2023-38545).
+!!
+!! Oracipher Core security policy strictly forbids building against
+!! vulnerable dependencies.
+!!
+!! ACTION REQUIRED: Upgrade Libcurl to version 8.4.0 or newer.
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 endif()
 

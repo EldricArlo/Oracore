@@ -1,3 +1,5 @@
+/* --- START OF FILE src/hsc_kernel.c --- */
+
 #include "hsc_kernel.h"
 
 // 包含所有内部模块的头文件
@@ -452,44 +454,31 @@ void hsc_set_log_callback(hsc_log_callback callback) {
     g_log_callback = callback;
 }
 
-// [COMMITTEE FIX] 重构日志函数以使用动态内存分配，防止消息截断和栈溢出风险。
+// 定义日志缓冲区大小为 2KB，足够容纳大多数日志消息，同时在栈上也是安全的。
+#define HSC_LOG_BUFFER_SIZE 2048
+
+// [COMMITTEE FIX] 重构日志函数：
+// 移除动态内存分配 (malloc)，改用固定大小的栈缓冲区。
+// 这种方法确保了在内存极度紧张的情况下（OOM），日志系统本身不会分配失败，
+// 从而保证了错误的可观测性。如果消息过长，vsnprintf 会安全地截断它。
 void _hsc_log(int level, const char* format, ...) {
     if (g_log_callback == NULL) {
         return;
     }
 
-    va_list args_for_size;
-    va_start(args_for_size, format);
-    va_list args_for_print;
-    va_copy(args_for_print, args_for_size);
+    char buffer[HSC_LOG_BUFFER_SIZE];
 
-    // 1. 调用 vsnprintf 获取格式化字符串所需的总长度
-    int needed_size = vsnprintf(NULL, 0, format, args_for_size);
-    va_end(args_for_size);
+    va_list args;
+    va_start(args, format);
 
-    if (needed_size < 0) {
-        // vsnprintf 遇到编码错误
-        va_end(args_for_print);
-        return;
-    }
+    // vsnprintf 保证不会写入超过缓冲区大小的数据（包括终止符）。
+    // 如果消息被截断，它返回“原本应该写入”的长度，但这不影响安全性。
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    
+    va_end(args);
 
-    // 2. 动态分配足够大的缓冲区 (+1 用于空终止符)
-    char* buffer = malloc(needed_size + 1);
-    if (buffer == NULL) {
-        // 内存分配失败，无法记录日志
-        va_end(args_for_print);
-        return;
-    }
-
-    // 3. 再次调用 vsnprintf 将消息格式化到新缓冲区中
-    vsnprintf(buffer, needed_size + 1, format, args_for_print);
-    va_end(args_for_print);
-
-    // 4. 使用格式化后的完整消息调用回调函数
+    // 此时 buffer 一定是以 null 结尾的字符串
     g_log_callback(level, buffer);
-
-    // 5. 释放动态分配的内存
-    free(buffer);
 }
 
 // =======================================================================
@@ -587,3 +576,4 @@ int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
                                                  tag, additional_data, ad_len, nonce, key);
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
+/* --- END OF FILE src/hsc_kernel.c --- */
