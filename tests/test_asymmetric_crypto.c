@@ -4,6 +4,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <sodium.h> // [FIX] 显式引入 sodium.h 以支持 sodium_memcmp
 
 #include "core_crypto/crypto_client.h"
 #include "common/secure_memory.h"
@@ -246,7 +247,8 @@ cleanup:
 
 
 int main() {
-    if (crypto_client_init() != 0) {
+    // [修复] 适配新的 crypto_client_init 签名，传入 NULL 表示使用环境变量并擦除
+    if (crypto_client_init(NULL) != 0) {
         fprintf(stderr, "Fatal: crypto_client_init failed\n");
         return 1;
     }

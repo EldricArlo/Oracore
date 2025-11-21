@@ -53,7 +53,15 @@ extern size_t g_argon2_memlimit;
 // --- 测试用例 ---
 
 void test_initialization() {
-    _verify(crypto_client_init() == 0);
+    // [FIX]: 适配新的 API 签名。
+    // 我们使用显式传递 Pepper 的方式进行测试，验证 API 变更是否生效。
+    const char* test_pepper = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    
+    // 1. 测试显式传入 (应该成功)
+    _verify(crypto_client_init(test_pepper) == 0);
+    
+    // 清理资源以便后续测试
+    crypto_client_cleanup();
 }
 
 void test_key_generation() {

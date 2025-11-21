@@ -701,8 +701,10 @@ cleanup:
 // --- Main 函数 ---
 int main(int argc, char* argv[]) {
     if (argc < 2) { print_usage(argv[0]); return 1; }
-    // [FIX]: API 变更适配 - 传入 NULL 以使用默认的严格安全配置 (Fail-Closed for No OCSP)
-    if (hsc_init(NULL) != HSC_OK) {
+    
+    // [FIX]: API 变更适配 - 显式传递 NULL 以使用默认的严格安全配置 (Fail-Closed for No OCSP)
+    // 同时传递 NULL 给 pepper_hex，触发底层使用环境变量并执行安全擦除 (Env Wiping)
+    if (hsc_init(NULL, NULL) != HSC_OK) {
         fprintf(stderr, "严重错误: 高安全内核库初始化失败！\n"); return 1;
     }
     

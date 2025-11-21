@@ -180,7 +180,8 @@ int test_kdf_rejects_weak_params() {
 }
 
 int main() {
-    if (crypto_client_init() != 0) {
+    // [FIX]: API 签名已变更，传入 NULL 以使用环境变量（测试环境配置）
+    if (crypto_client_init(NULL) != 0) {
         fprintf(stderr, "Fatal: crypto_client_init failed\n");
         return 1;
     }

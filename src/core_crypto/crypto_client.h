@@ -52,11 +52,15 @@ void crypto_config_load_from_env();
 
 /**
  * @brief 初始化密码学库，必须在任何密码学操作前调用。
- *        [关键安全变更] 此函数现在会强制从环境变量 HSC_PEPPER_HEX 加载全局胡椒。
- *        如果加载失败，整个初始化将失败。
+ * 
+ * [FIX]: 更新函数签名以支持显式传入 Pepper。
+ *        如果 explicit_pepper_hex 不为 NULL，则优先使用它。
+ *        如果为 NULL，则回退尝试从环境变量加载，并尝试执行内存擦除。
+ * 
+ * @param explicit_pepper_hex 可选的显式传入的 Pepper 十六进制字符串。
  * @return 成功返回 0，失败返回 -1
  */
-int crypto_client_init();
+int crypto_client_init(const char* explicit_pepper_hex);
 
 /**
  * @brief 清理密码学客户端分配的资源，如全局胡椒。

@@ -222,7 +222,8 @@ cleanup:
 
 
 int main() {
-    if (crypto_client_init() != 0) {
+    // [FIX]: API 变更适配 - 传入 NULL 以使用 CMake 中配置的环境变量
+    if (crypto_client_init(NULL) != 0) {
         fprintf(stderr, "Fatal: crypto_client_init failed\n");
         return 1;
     }

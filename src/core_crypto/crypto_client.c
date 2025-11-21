@@ -30,20 +30,35 @@ static int hex_char_to_int(char c) {
 }
 
 /**
- * @brief [内部] 从环境变量加载并验证全局胡椒。
+ * @brief [内部] 加载并验证全局胡椒。
+ *        [FIX]: 支持显式传入或从环境变量回退。包含内存擦除逻辑。
  */
-static int crypto_config_load_pepper_from_env() {
+static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "Loading global cryptographic pepper...");
 
-    const char* pepper_hex = getenv("HSC_PEPPER_HEX");
-    if (pepper_hex == NULL) {
-        _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Security pepper environment variable 'HSC_PEPPER_HEX' is not set.");
-        return -1;
+    const char* pepper_hex = NULL;
+    bool is_from_env = false;
+
+    if (explicit_hex != NULL) {
+        pepper_hex = explicit_hex;
+        _hsc_log(HSC_LOG_LEVEL_INFO, "  > Using explicitly provided pepper.");
+    } else {
+        pepper_hex = getenv("HSC_PEPPER_HEX");
+        if (pepper_hex == NULL) {
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Security pepper not provided via arguments and 'HSC_PEPPER_HEX' environment variable is not set.");
+            return -1;
+        }
+        is_from_env = true;
+        _hsc_log(HSC_LOG_LEVEL_INFO, "  > Using pepper from environment variable 'HSC_PEPPER_HEX'.");
     }
 
     size_t hex_len = strlen(pepper_hex);
     if (hex_len != REQUIRED_PEPPER_BYTES * 2) {
-        _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: 'HSC_PEPPER_HEX' must be exactly %zu hex characters long, but got %zu.", REQUIRED_PEPPER_BYTES * 2, hex_len);
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper must be exactly %zu hex characters long, but got %zu.", REQUIRED_PEPPER_BYTES * 2, hex_len);
+        // 如果是从 ENV 读取且长度不对，出于安全考虑，仍然尝试擦除部分内容
+        if (is_from_env) {
+             sodium_memzero((void*)pepper_hex, hex_len); 
+        }
         return -1;
     }
 
@@ -59,14 +74,27 @@ static int crypto_config_load_pepper_from_env() {
         if (high == -1 || low == -1) {
             secure_free(g_internal_pepper);
             g_internal_pepper = NULL;
-            _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: 'HSC_PEPPER_HEX' contains invalid non-hexadecimal characters.");
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper contains invalid non-hexadecimal characters.");
+            if (is_from_env) sodium_memzero((void*)pepper_hex, hex_len);
             return -1;
         }
         g_internal_pepper[i] = (unsigned char)((high << 4) | low);
     }
 
     g_internal_pepper_len = REQUIRED_PEPPER_BYTES;
-    _hsc_log(HSC_LOG_LEVEL_INFO, "  > Successfully loaded and validated the %zu-byte global pepper from environment.", g_internal_pepper_len);
+    _hsc_log(HSC_LOG_LEVEL_INFO, "  > Successfully loaded and validated the %zu-byte global pepper.", g_internal_pepper_len);
+
+    // [FIX]: Finding #1 Remediation
+    // 如果 Pepper 来自环境变量，我们在将其转换为安全内存中的二进制格式后，
+    // 立即尝试擦除原始的环境变量内存区域。
+    // 警告：修改 getenv 返回的字符串属于 C 标准中的未定义行为 (UB)。
+    // 但在大多数现代操作系统 (Linux, Windows, macOS) 上，这指向可写的进程环境块。
+    // 这是一个"Best Effort"的安全防御措施。
+    if (is_from_env) {
+        _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Attempting to wipe 'HSC_PEPPER_HEX' from process environment memory...");
+        sodium_memzero((void*)pepper_hex, hex_len);
+        _hsc_log(HSC_LOG_LEVEL_INFO, "  > [SECURITY] Environment variable memory wiped (best effort).");
+    }
     
     return 0;
 }
@@ -108,9 +136,10 @@ void crypto_config_load_from_env() {
     }
 }
 
-int crypto_client_init() {
+// [FIX]: 更新签名以接收显式 Pepper
+int crypto_client_init(const char* explicit_pepper_hex) {
     if (sodium_init() < 0) return -1;
-    if (crypto_config_load_pepper_from_env() != 0) return -1;
+    if (_load_pepper(explicit_pepper_hex) != 0) return -1;
     crypto_config_load_from_env();
     return 0;
 }

@@ -262,8 +262,8 @@ cleanup:
 
 
 int main() {
-    // [FIX]: 适配新的 API 签名，传入 NULL 以使用默认配置
-    if (crypto_client_init() != 0 || pki_init(NULL) != HSC_OK) { 
+    // [FIX]: 适配新的 API 签名，传入 NULL 以使用默认配置 (Env Pepper + Wiping)
+    if (crypto_client_init(NULL) != 0 || pki_init(NULL) != HSC_OK) { 
         fprintf(stderr, "Fatal: Library initialization failed\n");
         return 1;
     }

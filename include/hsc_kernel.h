@@ -21,7 +21,6 @@
 #define HSC_ERROR_CERT_REVOKED                   -12 // 证书已被其颁发机构明确吊销
 #define HSC_ERROR_CERT_OCSP_UNAVAILABLE          -13 // OCSP检查因网络或服务器问题失败 (遵循"故障关闭"原则)
 #define HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN       -14 // OCSP服务器报告该证书状态未知 (根据策略视为吊销)
-// [FIX]: 新增错误码，明确区分“无OCSP信息”的情况
 #define HSC_ERROR_CERT_NO_OCSP_URI               -15 // 证书缺少AIA/OCSP扩展，无法进行吊销检查 (Fail-Closed)
 
 
@@ -72,7 +71,6 @@ extern const uint8_t HSC_STREAM_TAG_FINAL;
 typedef struct hsc_master_key_pair_s hsc_master_key_pair;
 typedef struct hsc_crypto_stream_state_s hsc_crypto_stream_state;
 
-// [FIX]: 引入 PKI 配置结构体，允许在初始化时指定安全策略
 typedef struct hsc_pki_config_s {
     /**
      * @brief 允许"私有PKI模式" (Private PKI Mode)。
@@ -89,13 +87,19 @@ typedef struct hsc_pki_config_s {
  * @brief 初始化 Oracipher Core 库。
  *        必须在任何其他库函数之前调用。
  * 
- * [FIX]: 更新了函数签名，接受配置参数。
+ * [FIX]: 增加了 pepper_hex 参数以修复 Finding #1。
+ *        现在允许调用者显式传递 Pepper，从而避免依赖不安全的环境变量。
  * 
  * @param config 指向配置结构体的指针。
  *               如果传入 NULL，将使用最严格的默认安全配置 (allow_no_ocsp_uri = false)。
+ * @param pepper_hex (可选) 全局安全胡椒 (32字节的十六进制字符串，共64字符)。
+ *                   如果传入 NULL，库将尝试回退读取环境变量 `HSC_PEPPER_HEX`。
+ *                   警告：为了安全性，强烈建议显式传入并在使用后由调用者立即擦除，
+ *                   而不是依赖可能残留的环境变量。
+ * 
  * @return 成功返回 HSC_OK，失败返回错误码。
  */
-int hsc_init(const hsc_pki_config* config);
+int hsc_init(const hsc_pki_config* config, const char* pepper_hex);
 
 void hsc_cleanup();
 void hsc_random_bytes(void* buf, size_t size);

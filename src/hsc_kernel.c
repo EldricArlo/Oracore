@@ -128,9 +128,9 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 
 // --- API 实现：初始化与清理 ---
 
-// [FIX]: 接收配置参数并透传给 pki_init
-int hsc_init(const hsc_pki_config* config) {
-    if (crypto_client_init() != 0) return HSC_ERROR_CRYPTO_OPERATION;
+// [FIX]: 接收配置参数和显式Pepper，透传给 crypto_client_init
+int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
+    if (crypto_client_init(pepper_hex) != 0) return HSC_ERROR_CRYPTO_OPERATION;
     if (pki_init(config) != 0) return HSC_ERROR_PKI_OPERATION;
     return HSC_OK;
 }

@@ -62,8 +62,11 @@ int main() {
     unsigned char* decrypted_file_content = NULL;
 
     // --- 初始化 ---
-    // [FIX]: 适配新的 API，传入 NULL 使用默认严格安全配置
-    if (hsc_init(NULL) != HSC_OK) {
+    // [FIX]: 适配新的 API 签名 (config, pepper_hex)
+    // 传入 NULL, NULL 以使用：
+    // 1. 默认的严格安全配置 (Fail-Closed for No OCSP)
+    // 2. 默认的 ENV Pepper 加载机制 (并触发新增的 ENV 内存擦除逻辑)
+    if (hsc_init(NULL, NULL) != HSC_OK) {
         fprintf(stderr, "错误: 高安全内核库初始化失败！\n");
         goto cleanup;
     }

@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <unistd.h> // For unlink()
+#include <stdbool.h> 
 
 #include "hsc_kernel.h"
 
@@ -234,8 +235,9 @@ void run_all_tests() {
 }
 
 int main() {
-    // [FIX]: 适配 hsc_init(NULL) 以使用默认配置
-    if (hsc_init(NULL) != HSC_OK) {
+    // [FIX]: 适配 hsc_init(config, pepper_hex) API 变更
+    // 传递 NULL, NULL 使用默认配置和环境变量 Pepper
+    if (hsc_init(NULL, NULL) != HSC_OK) {
         printf("Fatal: Could not initialize hsc_kernel for tests.\n");
         return 1;
     }
