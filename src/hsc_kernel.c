@@ -218,8 +218,8 @@ hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_
         return NULL;
     }
 
-    // [PFS FIX Context] 虽然我们移除了混合加密中的 sender_sk 依赖，
-    // 但接收者解密时仍需要 encryption_sk，所以这里仍需加载。
+    // [FIX Context] 我们在加密时重新引入了 sender identity key 的依赖用于签名，
+    // 但解密时接收者仍需要 encryption_sk 来执行 KEM 解封装。
     kp->internal_kp.encryption_sk = secure_alloc(crypto_box_SECRETKEYBYTES);
     if (!kp->internal_kp.encryption_sk) {
          _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to allocate secure memory for encryption private key.");
@@ -246,6 +246,8 @@ int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_
     if (kp == NULL || kp->internal_kp.identity_sk == NULL || pub_key_path == NULL || priv_key_path == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
+    // [AUDIT TODO]: 未来版本应实施私钥加密存储 (P0级重构任务)
+    // 目前仅关注协议层逻辑修复
     if (!write_key_file(pub_key_path, kp->internal_kp.identity_pk, HSC_MASTER_PUBLIC_KEY_BYTES) ||
         !write_key_file(priv_key_path, kp->internal_kp.identity_sk, HSC_MASTER_SECRET_KEY_BYTES)) {
         return HSC_ERROR_FILE_IO;
@@ -289,18 +291,39 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem, unsigned char* p
 
 // --- API 实现：非对称加密 (密钥封装) ---
 
-// [FIX: PFS] 更新封装接口 - 移除 my_kp (发送者密钥)
-int hsc_encapsulate_session_key(unsigned char* encrypted_output, size_t* encrypted_output_len, const unsigned char* session_key, size_t session_key_len, const unsigned char* recipient_pk) {
-    // 注意：recipient_pk 仍是 Ed25519 公钥，内部会转换为 X25519
-    int result = encapsulate_session_key(encrypted_output, encrypted_output_len, session_key, session_key_len, recipient_pk);
+// [FIX: PFS + Auth] 更新封装接口 - 需要 sender_mkp 用于签名
+int hsc_encapsulate_session_key(unsigned char* encrypted_output, size_t* encrypted_output_len, 
+                                const unsigned char* session_key, size_t session_key_len, 
+                                const unsigned char* recipient_pk,
+                                const hsc_master_key_pair* sender_mkp) { // [FIX] Added sender_mkp
+    
+    if (sender_mkp == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+
+    // 将 hsc_master_key_pair 拆包传递给内部函数
+    int result = encapsulate_session_key(encrypted_output, encrypted_output_len, 
+                                         session_key, session_key_len, 
+                                         recipient_pk, 
+                                         &sender_mkp->internal_kp); // 传递内部结构
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
-// [FIX: PFS] 更新解封装接口 - 移除 sender_pk
-int hsc_decapsulate_session_key(unsigned char* decrypted_output, const unsigned char* encrypted_input, size_t encrypted_input_len, const hsc_master_key_pair* my_kp) {
-    if (my_kp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
-    // 传入我方加密私钥
-    int result = decapsulate_session_key(decrypted_output, encrypted_input, encrypted_input_len, my_kp->internal_kp.encryption_sk);
+// [FIX: PFS + Auth] 更新解封装接口 - 需要 sender_pk 用于验签
+int hsc_decapsulate_session_key(unsigned char* decrypted_output, 
+                                const unsigned char* encrypted_input, size_t encrypted_input_len, 
+                                const hsc_master_key_pair* my_kp,
+                                const unsigned char* sender_pk) { // [FIX] Added sender_pk
+    
+    if (my_kp == NULL || sender_pk == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+
+    // 传递我方解密私钥 和 发送方公钥
+    int result = decapsulate_session_key(decrypted_output, 
+                                         encrypted_input, encrypted_input_len, 
+                                         my_kp->internal_kp.encryption_sk,
+                                         sender_pk); // 用于验签
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
@@ -366,12 +389,13 @@ int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, u
 
 // --- API 实现：高级混合加解密 (原始密钥模式) ---
 
-// [FIX: PFS] 更新混合加密 - 移除 sender_kp
+// [FIX: PFS + Auth] 更新混合加密 - 需要 sender_mkp
 int hsc_hybrid_encrypt_stream_raw(const char* output_path,
                                     const char* input_path,
-                                    const unsigned char* recipient_pk)
+                                    const unsigned char* recipient_pk,
+                                    const hsc_master_key_pair* sender_mkp) // [FIX] Added sender_mkp
 {
-    if (output_path == NULL || input_path == NULL || recipient_pk == NULL) {
+    if (output_path == NULL || input_path == NULL || recipient_pk == NULL || sender_mkp == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
     int ret_code = HSC_ERROR_GENERAL;
@@ -383,15 +407,16 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
         ret_code = HSC_ERROR_ALLOCATION_FAILED;
         goto cleanup;
     }
-    // [FIX]: 头部缓冲区大小增加 (包含 Ephemeral PK)
+    // [FIX]: 头部缓冲区大小自动适应新的 HSC_MAX_ENCAPSULATED_KEY_SIZE (包含签名)
     unsigned char encapsulated_key[HSC_MAX_ENCAPSULATED_KEY_SIZE];
     size_t actual_encapsulated_len;
     hsc_random_bytes(session_key, HSC_SESSION_KEY_BYTES);
     
-    // [FIX: PFS] 调用更新后的封装函数，无需 sender_kp
+    // [FIX: PFS + Auth] 调用更新后的封装函数，传递 sender_mkp
     if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len,
                                 session_key, HSC_SESSION_KEY_BYTES,
-                                recipient_pk) != HSC_OK) {
+                                recipient_pk,
+                                sender_mkp) != HSC_OK) {
         ret_code = HSC_ERROR_CRYPTO_OPERATION;
         goto cleanup;
     }
@@ -425,12 +450,13 @@ cleanup:
     return ret_code;
 }
 
-// [FIX: PFS] 更新混合解密 - 移除 sender_pk
+// [FIX: PFS + Auth] 更新混合解密 - 需要 sender_pk
 int hsc_hybrid_decrypt_stream_raw(const char* output_path,
                                     const char* input_path,
-                                    const hsc_master_key_pair* recipient_kp)
+                                    const hsc_master_key_pair* recipient_kp,
+                                    const unsigned char* sender_pk) // [FIX] Added sender_pk
 {
-    if (output_path == NULL || input_path == NULL || recipient_kp == NULL) {
+    if (output_path == NULL || input_path == NULL || recipient_kp == NULL || sender_pk == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
     int ret_code = HSC_ERROR_GENERAL;
@@ -456,8 +482,8 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     dec_session_key = hsc_secure_alloc(HSC_SESSION_KEY_BYTES);
     if (!dec_session_key) { ret_code = HSC_ERROR_ALLOCATION_FAILED; goto cleanup; }
     
-    // [FIX: PFS] 调用更新后的解封装函数，无需 sender_pk
-    if (hsc_decapsulate_session_key(dec_session_key, encapsulated_key, enc_key_len, recipient_kp) != HSC_OK) {
+    // [FIX: PFS + Auth] 调用更新后的解封装函数，传递 sender_pk 用于验签
+    if (hsc_decapsulate_session_key(dec_session_key, encapsulated_key, enc_key_len, recipient_kp, sender_pk) != HSC_OK) {
         ret_code = HSC_ERROR_CRYPTO_OPERATION; goto cleanup;
     }
     unsigned char stream_header[HSC_STREAM_HEADER_BYTES];

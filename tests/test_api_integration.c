@@ -1,9 +1,10 @@
 /* --- START OF FILE tests/test_api_integration.c --- */
 
 // tests/test_api_integration.c
-// [REVISED BY COMMITTEE TO USE PUBLIC API - PFS UPDATE]
+// [REVISED BY COMMITTEE - FIX VERIFICATION]
 // This file tests the high-level public API functions, focusing on the
 // end-to-end hybrid stream encryption/decryption workflow and API robustness.
+// Now enforces Authenticated Encryption (Sign-then-Encrypt).
 
 #include <stdio.h>
 #include <string.h>
@@ -95,31 +96,35 @@ static bool tamper_file(const char* path) {
 }
 
 
-// --- 测试用例 (已修复 PFS 逻辑) ---
+// --- 测试用例 (已修复 Authenticated Encryption 逻辑) ---
 
 void test_hybrid_stream_roundtrip_ok() {
-    // [FIX]: PFS 变更 - 只需要接收者密钥对
+    // 1. 准备双方密钥
     hsc_master_key_pair* recipient_kp = hsc_generate_master_key_pair();
-    _assert(recipient_kp);
+    hsc_master_key_pair* sender_kp = hsc_generate_master_key_pair(); // [FIX] 需要发送方密钥
+    _assert(recipient_kp && sender_kp);
 
-    // 使用新的API函数合法地获取公钥
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
     _assert(hsc_get_master_public_key(recipient_kp, recipient_pk) == HSC_OK);
+
+    unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
+    _assert(hsc_get_master_public_key(sender_kp, sender_pk) == HSC_OK);
 
     const char* original_content = "This is a test of the hybrid streaming encryption. It should work perfectly.";
     _assert(create_temp_file("test_in.txt", original_content));
 
-    // [FIX]: 加密不再需要 sender_kp
-    int res_enc = hsc_hybrid_encrypt_stream_raw("test_out.hsc", "test_in.txt", recipient_pk);
+    // [FIX]: 加密需传入 sender_kp (用于签名)
+    int res_enc = hsc_hybrid_encrypt_stream_raw("test_out.hsc", "test_in.txt", recipient_pk, sender_kp);
     _assert(res_enc == HSC_OK);
 
-    // [FIX]: 解密不再需要 sender_pk
-    int res_dec = hsc_hybrid_decrypt_stream_raw("test_dec.txt", "test_out.hsc", recipient_kp);
+    // [FIX]: 解密需传入 sender_pk (用于验签)
+    int res_dec = hsc_hybrid_decrypt_stream_raw("test_dec.txt", "test_out.hsc", recipient_kp, sender_pk);
     _assert(res_dec == HSC_OK);
 
     _assert(compare_files("test_in.txt", "test_dec.txt"));
 
     hsc_free_master_key_pair(&recipient_kp);
+    hsc_free_master_key_pair(&sender_kp);
     unlink("test_in.txt");
     unlink("test_out.hsc");
     unlink("test_dec.txt");
@@ -127,45 +132,66 @@ void test_hybrid_stream_roundtrip_ok() {
 
 void test_hybrid_stream_decrypt_wrong_key() {
     hsc_master_key_pair* recipient_kp = hsc_generate_master_key_pair();
+    hsc_master_key_pair* sender_kp = hsc_generate_master_key_pair();
     hsc_master_key_pair* attacker_kp = hsc_generate_master_key_pair();
-    _assert(recipient_kp && attacker_kp);
+    _assert(recipient_kp && sender_kp && attacker_kp);
     
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    _assert(hsc_get_master_public_key(recipient_kp, recipient_pk) == HSC_OK);
+    hsc_get_master_public_key(recipient_kp, recipient_pk);
+
+    unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
+    hsc_get_master_public_key(sender_kp, sender_pk);
+
+    unsigned char attacker_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
+    hsc_get_master_public_key(attacker_kp, attacker_pk);
 
     _assert(create_temp_file("test_in.txt", "secret"));
     
-    // 加密给 recipient
-    _assert(hsc_hybrid_encrypt_stream_raw("test_out.hsc", "test_in.txt", recipient_pk) == HSC_OK);
+    // 合法发送: Sender -> Recipient
+    _assert(hsc_hybrid_encrypt_stream_raw("test_out.hsc", "test_in.txt", recipient_pk, sender_kp) == HSC_OK);
 
-    // 尝试用 attacker_kp 解密 (应该失败)
-    int res_dec = hsc_hybrid_decrypt_stream_raw("test_dec.txt", "test_out.hsc", attacker_kp);
-    _assert(res_dec == HSC_ERROR_CRYPTO_OPERATION);
+    // 场景 A: 错误的接收者私钥 (Attacker 尝试解密)
+    // 预期: 失败 (Decrypt Error)
+    int res_dec_1 = hsc_hybrid_decrypt_stream_raw("test_dec_fail1.txt", "test_out.hsc", attacker_kp, sender_pk);
+    _assert(res_dec_1 != HSC_OK);
+
+    // 场景 B: [关键修复验证] 错误的发送者公钥
+    // Recipient 尝试解密，但声称这封信是 Attacker 发的 (提供 Attacker PK 用于验签)
+    // 预期: 失败 (Signature Verification Error)
+    int res_dec_2 = hsc_hybrid_decrypt_stream_raw("test_dec_fail2.txt", "test_out.hsc", recipient_kp, attacker_pk);
+    _assert(res_dec_2 != HSC_OK);
 
     hsc_free_master_key_pair(&recipient_kp);
+    hsc_free_master_key_pair(&sender_kp);
     hsc_free_master_key_pair(&attacker_kp);
     unlink("test_in.txt");
     unlink("test_out.hsc");
-    unlink("test_dec.txt");
+    unlink("test_dec_fail1.txt");
+    unlink("test_dec_fail2.txt");
 }
 
 void test_hybrid_stream_decrypt_tampered_file() {
     hsc_master_key_pair* recipient_kp = hsc_generate_master_key_pair();
-    _assert(recipient_kp);
+    hsc_master_key_pair* sender_kp = hsc_generate_master_key_pair();
+    _assert(recipient_kp && sender_kp);
 
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    _assert(hsc_get_master_public_key(recipient_kp, recipient_pk) == HSC_OK);
+    hsc_get_master_public_key(recipient_kp, recipient_pk);
+
+    unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
+    hsc_get_master_public_key(sender_kp, sender_pk);
 
     _assert(create_temp_file("test_in.txt", "some data that is long enough to be tampered with"));
-    _assert(hsc_hybrid_encrypt_stream_raw("test_out.hsc", "test_in.txt", recipient_pk) == HSC_OK);
+    _assert(hsc_hybrid_encrypt_stream_raw("test_out.hsc", "test_in.txt", recipient_pk, sender_kp) == HSC_OK);
     
     _assert(tamper_file("test_out.hsc"));
 
-    // 篡改后的文件解密应失败
-    int res_dec = hsc_hybrid_decrypt_stream_raw("test_dec.txt", "test_out.hsc", recipient_kp);
-    _assert(res_dec == HSC_ERROR_CRYPTO_OPERATION);
+    // 篡改后的文件解密应失败 (可能是 AEAD Tag 错误，也可能是签名验证错误，取决于篡改位置)
+    int res_dec = hsc_hybrid_decrypt_stream_raw("test_dec.txt", "test_out.hsc", recipient_kp, sender_pk);
+    _assert(res_dec != HSC_OK);
 
     hsc_free_master_key_pair(&recipient_kp);
+    hsc_free_master_key_pair(&sender_kp);
     unlink("test_in.txt");
     unlink("test_out.hsc");
     unlink("test_dec.txt");
@@ -173,22 +199,27 @@ void test_hybrid_stream_decrypt_tampered_file() {
 
 void test_hybrid_stream_empty_file() {
     hsc_master_key_pair* recipient_kp = hsc_generate_master_key_pair();
-    _assert(recipient_kp);
+    hsc_master_key_pair* sender_kp = hsc_generate_master_key_pair();
+    _assert(recipient_kp && sender_kp);
 
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    _assert(hsc_get_master_public_key(recipient_kp, recipient_pk) == HSC_OK);
+    hsc_get_master_public_key(recipient_kp, recipient_pk);
+    
+    unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
+    hsc_get_master_public_key(sender_kp, sender_pk);
 
     _assert(create_temp_file("test_in_empty.txt", ""));
 
-    int res_enc = hsc_hybrid_encrypt_stream_raw("test_out_empty.hsc", "test_in_empty.txt", recipient_pk);
+    int res_enc = hsc_hybrid_encrypt_stream_raw("test_out_empty.hsc", "test_in_empty.txt", recipient_pk, sender_kp);
     _assert(res_enc == HSC_OK);
 
-    int res_dec = hsc_hybrid_decrypt_stream_raw("test_dec_empty.txt", "test_out_empty.hsc", recipient_kp);
+    int res_dec = hsc_hybrid_decrypt_stream_raw("test_dec_empty.txt", "test_out_empty.hsc", recipient_kp, sender_pk);
     _assert(res_dec == HSC_OK);
 
     _assert(compare_files("test_in_empty.txt", "test_dec_empty.txt"));
 
     hsc_free_master_key_pair(&recipient_kp);
+    hsc_free_master_key_pair(&sender_kp);
     unlink("test_in_empty.txt");
     unlink("test_out_empty.hsc");
     unlink("test_dec_empty.txt");
@@ -199,23 +230,24 @@ void test_api_null_arguments() {
     hsc_master_key_pair* dummy_kp = hsc_generate_master_key_pair();
     _assert(dummy_kp);
 
-    // [FIX]: 更新参数检查，移除已被删除的参数
-    // Encrypt: (out, in, recipient_pk)
-    _assert(hsc_hybrid_encrypt_stream_raw(NULL, "in", dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_hybrid_encrypt_stream_raw("out", NULL, dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_hybrid_encrypt_stream_raw("out", "in", NULL) == HSC_ERROR_INVALID_ARGUMENT);
+    // Encrypt: (out, in, recipient_pk, sender_mkp)
+    _assert(hsc_hybrid_encrypt_stream_raw(NULL, "in", dummy_pk, dummy_kp) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_hybrid_encrypt_stream_raw("out", NULL, dummy_pk, dummy_kp) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_hybrid_encrypt_stream_raw("out", "in", NULL, dummy_kp) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_hybrid_encrypt_stream_raw("out", "in", dummy_pk, NULL) == HSC_ERROR_INVALID_ARGUMENT);
     
-    // Decrypt: (out, in, recipient_kp)
-    _assert(hsc_hybrid_decrypt_stream_raw(NULL, "in", dummy_kp) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_hybrid_decrypt_stream_raw("out", NULL, dummy_kp) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_hybrid_decrypt_stream_raw("out", "in", NULL) == HSC_ERROR_INVALID_ARGUMENT);
+    // Decrypt: (out, in, recipient_kp, sender_pk)
+    _assert(hsc_hybrid_decrypt_stream_raw(NULL, "in", dummy_kp, dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_hybrid_decrypt_stream_raw("out", NULL, dummy_kp, dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_hybrid_decrypt_stream_raw("out", "in", NULL, dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_hybrid_decrypt_stream_raw("out", "in", dummy_kp, NULL) == HSC_ERROR_INVALID_ARGUMENT);
 
     hsc_free_master_key_pair(&dummy_kp);
 }
 
 
 void run_all_tests() {
-    printf("--- Running API Integration & Robustness Tests (PFS Enabled) ---\n");
+    printf("--- Running API Integration & Robustness Tests (Authenticated PFS) ---\n");
     RUN_TEST(test_hybrid_stream_roundtrip_ok);
     RUN_TEST(test_hybrid_stream_decrypt_wrong_key);
     RUN_TEST(test_hybrid_stream_decrypt_tampered_file);

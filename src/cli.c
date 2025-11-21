@@ -1,4 +1,4 @@
-/* --- START OF FILE src/main.c --- */
+/* --- START OF FILE src/cli.c --- */
 
 #include <stdio.h>
 #include <string.h>
@@ -21,21 +21,36 @@ void print_hex(const char* label, const unsigned char* data, size_t len) {
 
 // 从文件中读取PEM字符串的辅助函数
 char* read_pem_file(const char* filename) {
+    // [FIX]: Mitigation for Finding #3 - Windows ftell overflow risk
     FILE* f = fopen(filename, "rb");
     if (!f) {
         fprintf(stderr, "\n错误: 无法打开演示所需的PEM文件 '%s'。\n", filename);
         fprintf(stderr, "请确保您已按照README中的说明，使用'test_ca_util'工具生成了所有必需的证书文件。\n");
         return NULL;
     }
+    
     fseek(f, 0, SEEK_END);
-    long length = ftell(f);
+    long long length = 0;
+    #ifdef _WIN32
+        length = _ftelli64(f);
+    #else
+        length = ftell(f);
+    #endif
+    
     fseek(f, 0, SEEK_SET);
-    if (length <= 0) { fclose(f); return NULL; }
+    
+    // [FIX]: Finding #4 - DoS Protection
+    // 限制最大读取大小为 1MB，防止恶意大文件导致 OOM
+    if (length <= 0 || length > 1024 * 1024) { 
+        fprintf(stderr, "错误: 文件大小无效或过大 (DoS 保护限制)。\n");
+        fclose(f); 
+        return NULL; 
+    }
 
-    char* buffer = malloc(length + 1);
+    char* buffer = malloc((size_t)length + 1);
     if (!buffer) { fclose(f); return NULL; }
     
-    if (fread(buffer, 1, length, f) != (size_t)length) {
+    if (fread(buffer, 1, (size_t)length, f) != (size_t)length) {
         fclose(f);
         free(buffer);
         return NULL;
@@ -46,10 +61,10 @@ char* read_pem_file(const char* filename) {
 }
 
 
-// --- 主演示程序 ---
+// --- 主演示程序 (CLI) ---
 int main() {
-    printf("--- Oracipher Core v5.0 (PFS Enabled) 内核库API演示 ---\n");
-    printf("此程序演示了作为库客户端的端到端工作流 (Ephemeral KEM)。\n");
+    printf("--- Oracipher Core v5.1 (Auth+PFS) CLI Demo ---\n");
+    printf("此程序演示了作为库客户端的端到端工作流 (Authenticated Ephemeral KEM)。\n");
     printf("它假定CA证书和用户证书已由一个独立的CA工具生成。\n\n");
     
     int ret = 1;
@@ -133,36 +148,44 @@ int main() {
     print_hex("  > 提取到的接收者公钥", recipient_pk, sizeof(recipient_pk));
     printf("\n");
 
-    // 4. 封装会话密钥 (Ephemeral KEM)
-    printf("4. 为接收者封装会话密钥 (使用 Ephemeral KEM)...\n");
+    // 4. 封装会话密钥 (Authenticated Ephemeral KEM)
+    printf("4. 为接收者封装会话密钥 (使用 Authenticated Ephemeral KEM)...\n");
     size_t encapsulated_key_buf_len = HSC_MAX_ENCAPSULATED_KEY_SIZE;
     
     encapsulated_session_key = hsc_secure_alloc(encapsulated_key_buf_len);
     if (!encapsulated_session_key) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
     
     size_t actual_encapsulated_len;
-    // [FIX]: PFS 变更 - API 不再需要发送者私钥
+    
+    // [FIX]: API Update - 传入 sender_mkp (Alice) 进行签名
     if (hsc_encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len, 
                                     session_key, sizeof(session_key),
-                                    recipient_pk) != HSC_OK) {
+                                    recipient_pk,
+                                    alice_mkp) != HSC_OK) {
         fprintf(stderr, "严重错误: 封装会话密钥失败！\n"); goto cleanup;
     }
-    printf("  > 会话密钥已使用非对称加密封装 (PFS Enabled)。\n\n");
+    printf("  > 会话密钥已使用非对称加密封装，并由发送者签名。\n\n");
     
     // --- 阶段四: 作为接收者解密 ---
     printf("--- 阶段四: 作为接收者 'Alice' 解密文件 ---\n");
 
+    // [模拟] 获取发送者公钥 (Alice 验证 Alice)
+    unsigned char sender_public_key[HSC_MASTER_PUBLIC_KEY_BYTES];
+    if (hsc_extract_public_key_from_cert(alice_cert_pem, sender_public_key) != HSC_OK) {
+        fprintf(stderr, "严重错误: 无法获取发送者公钥！\n"); goto cleanup;
+    }
+
     // 1. 解封装会话密钥
-    printf("1. 解封装会话密钥...\n");
+    printf("1. 解封装会话密钥 (验证签名)...\n");
     decrypted_session_key = hsc_secure_alloc(sizeof(session_key));
     if (!decrypted_session_key) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
 
-    // [FIX]: PFS 变更 - 解密不需要发送者公钥
-    // 接收方只需自己的私钥即可解开临时公钥加密的数据
+    // [FIX]: API Update - 传入 sender_public_key 进行验签
     if (hsc_decapsulate_session_key(decrypted_session_key, 
                                     encapsulated_session_key, actual_encapsulated_len, 
-                                    alice_mkp) != HSC_OK) {
-        fprintf(stderr, "解密错误: 无法解封装会话密钥！\n"); goto cleanup;
+                                    alice_mkp,
+                                    sender_public_key) != HSC_OK) {
+        fprintf(stderr, "解密错误: 无法解封装会话密钥 (签名验证失败？)！\n"); goto cleanup;
     }
     print_hex("  > [解密] 恢复的会话密钥", decrypted_session_key, sizeof(session_key));
 
@@ -215,4 +238,4 @@ cleanup:
 
     return ret;
 }
-/* --- END OF FILE src/main.c --- */
+/* --- END OF FILE src/cli.c --- */

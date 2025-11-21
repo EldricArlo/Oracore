@@ -187,42 +187,45 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
 
 
 /**
- * @brief 规范 4 - 阶段三 - 4: 封装会话密钥 (Ephemeral KEM)
- *        [FIX: PFS] 关键更新:
- *        使用一次性临时密钥对 (Ephemeral Keypair) 进行加密，实现前向保密。
- *        不再使用发送者的长期私钥。
+ * @brief 规范 4 - 阶段三 - 4: 封装会话密钥 (Authenticated Ephemeral KEM)
+ *        [FIX: PFS + Auth] 关键更新:
+ *        实施 Sign-then-Encrypt 模式以修复匿名加密漏洞。
  *        
- *        输出格式变更: [Nonce (24)] || [Ephemeral_PK (32)] || [MAC (16) + Ciphertext]
+ *        输出格式变更: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext(Key+MAC)]
  *
  * @param encrypted_output (输出) 存放加密结果的缓冲区
  * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度
  * @param session_key 要加密的会话密钥明文
  * @param session_key_len 会话密钥的长度
  * @param recipient_sign_pk 接收者的 Ed25519 主公钥 (函数内部会处理到 X25519 的转换)
+ * @param sender_mkp [FIX] 发送者的主密钥对，必须包含有效的 identity_sk 以生成签名。
  * @return 成功返回 0，失败返回 -1
  */
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
-                            const unsigned char* recipient_sign_pk);
+                            const unsigned char* recipient_sign_pk,
+                            const master_key_pair* sender_mkp); // [FIX]: Added sender_mkp
 
 /**
- * @brief 解封装会话密钥 (Ephemeral KEM)
- *        [FIX: PFS] 关键更新:
- *        从 encrypted_input 中提取 Ephemeral_PK，结合我方私钥进行解密。
- *        不再验证发送者的身份 (匿名解密)。
+ * @brief 解封装会话密钥 (Authenticated Ephemeral KEM)
+ *        [FIX: PFS + Auth] 关键更新:
+ *        解密前必须验证签名。
+ *        如果签名与提供的 sender_public_key 不匹配，解密必须失败。
  * 
- *        输入格式要求: [Nonce (24)] || [Ephemeral_PK (32)] || [MAC (16) + Ciphertext]
+ *        输入格式要求: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext(Key+MAC)]
  *
  * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区
  * @param encrypted_input 要解密的封装数据
  * @param encrypted_input_len 封装数据的长度
- * @param my_enc_sk 我方（接收者）的 X25519 加密私钥 (对应 master_key_pair.encryption_sk)
- * @return 成功返回 0，失败（如验证失败）返回 -1
+ * @param my_enc_sk 我方（接收者）的 X25519 加密私钥
+ * @param sender_public_key [FIX] 发送者的 Ed25519 身份公钥，用于验证签名。
+ * @return 成功返回 0，签名验证失败或解密失败返回 -1
  */
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
-                            const unsigned char* my_enc_sk);
+                            const unsigned char* my_enc_sk,
+                            const unsigned char* sender_public_key); // [FIX]: Added sender_pk
 
 
 #endif // CRYPTO_CLIENT_H

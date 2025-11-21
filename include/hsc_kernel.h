@@ -16,6 +16,7 @@
 #define HSC_ERROR_CRYPTO_OPERATION                -5 // 底层密码学操作失败 (Libsodium)
 #define HSC_ERROR_PKI_OPERATION                   -6 // 底层PKI操作失败 (OpenSSL/Libcurl)
 #define HSC_ERROR_INVALID_FORMAT                  -7 // 输入数据格式无效 (例如，无效的PEM证书)
+#define HSC_ERROR_SIGNATURE_VERIFICATION_FAILED   -8 // [FIX] 新增错误码：发送者签名验证失败
 
 // -- 证书验证专用错误码 --
 #define HSC_ERROR_CERT_CHAIN_OR_VALIDITY         -10 // 证书链验证失败或证书已过期/尚未生效
@@ -56,13 +57,14 @@
 #define HSC_AEAD_OVERHEAD_BYTES (HSC_AEAD_NONCE_BYTES + HSC_AEAD_TAG_BYTES)
 
 // 为密钥封装提供的开销常量
-// [FIX]: Audit Finding #1 - Ephemeral KEM 协议变更
-// 新格式: [Nonce (24)] + [Ephemeral_PK (32)] + [MAC (16)] = 72 bytes overhead
-// 之前版本只有 Nonce + MAC。现在必须包含临时公钥以便接收方计算共享密钥。
+// [FIX]: Audit Finding #1 - 协议层修复
+// 新格式: [Nonce (24)] + [Ephemeral_PK (32)] + [Signature (64)] + [MAC (16)]
+// 增加了 Signature (64 bytes) 以绑定发送者身份。
 #define HSC_BOX_NONCE_BYTES     24
 #define HSC_BOX_MAC_BYTES       16
 #define HSC_EPHEMERAL_PK_BYTES  32
-#define HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES (HSC_BOX_NONCE_BYTES + HSC_EPHEMERAL_PK_BYTES + HSC_BOX_MAC_BYTES)
+#define HSC_SIGNATURE_BYTES     64 // [FIX] 新增签名长度常量
+#define HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES (HSC_BOX_NONCE_BYTES + HSC_EPHEMERAL_PK_BYTES + HSC_SIGNATURE_BYTES + HSC_BOX_MAC_BYTES)
 
 // 为解封装的会话密钥长度提供一个安全、合理的上限
 #define HSC_MAX_ENCAPSULATED_KEY_SIZE (HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES)
@@ -129,25 +131,36 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem,
 // --- 核心API函数：密钥封装 (非对称) ---
 
 /**
- * @brief [PFS修复] 封装会话密钥 (Ephemeral KEM)
- *        不再需要发送者的私钥。函数内部会生成一个一次性的临时密钥对 (Ephemeral Keypair)。
+ * @brief [PFS修复] 封装会话密钥 (Authenticated Ephemeral KEM)
+ *        
+ *        [FIX]: Audit Finding #1 - Sender Authentication
+ *        增加了 sender_mkp 参数。
+ *        函数现在会生成 [Nonce] || [Ephemeral_PK] || [Signature] || [Ciphertext]。
+ *        发送者使用其身份私钥对 (Ephemeral_PK + Recipient_PK + Ciphertext) 进行签名，
+ *        确保接收者可以验证数据来源。
  * 
- * @param my_kp **[已移除]** 发送者私钥不再用于加密，确保前向保密性。
+ * @param sender_mkp [FIX] 发送者的主密钥对（用于身份签名）。不可为 NULL。
  */
 int hsc_encapsulate_session_key(unsigned char* encrypted_output,
                                 size_t* encrypted_output_len,
                                 const unsigned char* session_key, size_t session_key_len,
-                                const unsigned char* recipient_pk);
+                                const unsigned char* recipient_pk,
+                                const hsc_master_key_pair* sender_mkp); // [FIX] Added sender_mkp
 
 /**
- * @brief [PFS修复] 解封装会话密钥 (Ephemeral KEM)
- *        不再需要发送者的公钥。解密所需的临时公钥已包含在 encrypted_input 中。
+ * @brief [PFS修复] 解封装会话密钥 (Authenticated Ephemeral KEM)
  * 
- * @param sender_pk **[已移除]** 解密过程现在是匿名的 (Anonymous Decryption)。
+ *        [FIX]: Audit Finding #1 - Sender Authentication
+ *        增加了 sender_public_key 参数。
+ *        解密前，必须验证数据包中的 Signature 是否属于 sender_public_key。
+ *        如果签名无效，解密将拒绝执行并返回错误。
+ * 
+ * @param sender_public_key [FIX] 发送者的身份公钥（用于验签）。不可为 NULL。
  */
 int hsc_decapsulate_session_key(unsigned char* decrypted_output,
                                 const unsigned char* encrypted_input, size_t encrypted_input_len,
-                                const hsc_master_key_pair* my_kp);
+                                const hsc_master_key_pair* recipient_kp,
+                                const unsigned char* sender_public_key); // [FIX] Added sender_pk
 
 // --- 核心API函数：流式加解密 (适用于大文件) ---
 hsc_crypto_stream_state* hsc_crypto_stream_state_new_push(unsigned char* header, const unsigned char* key);
@@ -157,14 +170,17 @@ int hsc_crypto_stream_push(hsc_crypto_stream_state* state, unsigned char* out, u
 int hsc_crypto_stream_pull(hsc_crypto_stream_state* state, unsigned char* out, unsigned long long* out_len, unsigned char* tag, const unsigned char* in, size_t in_len);
 
 // --- 核心API函数：高级混合加解密 (原始密钥模式) ---
-// [FIX]: API 更新 - 移除 sender_kp/sender_pk，因为底层使用了 Ephemeral KEM
+// [FIX]: 重新引入 sender_mkp 以支持认证加密
 int hsc_hybrid_encrypt_stream_raw(const char* output_path,
                                     const char* input_path,
-                                    const unsigned char* recipient_pk); // Removed sender_kp
+                                    const unsigned char* recipient_pk,
+                                    const hsc_master_key_pair* sender_mkp); // [FIX] Added
 
+// [FIX]: 重新引入 sender_pk 以支持认证解密
 int hsc_hybrid_decrypt_stream_raw(const char* output_path,
                                     const char* input_path,
-                                    const hsc_master_key_pair* recipient_kp); // Removed sender_pk
+                                    const hsc_master_key_pair* recipient_kp,
+                                    const unsigned char* sender_pk); // [FIX] Added
 
 
 // --- 核心API函数：单次对称加解密 (适用于小数据) ---

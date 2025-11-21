@@ -166,7 +166,6 @@ int generate_master_key_pair(master_key_pair* kp) {
     }
 
     // 派生并隔离加密密钥 (Ed25519 -> X25519)
-    // 注意：未来版本应在此处改为生成独立的密钥对，但为保持兼容性暂用派生
     if (crypto_sign_ed25519_pk_to_curve25519(kp->encryption_pk, kp->identity_pk) != 0) {
         goto cleanup;
     }
@@ -344,13 +343,15 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
     return 0;
 }
 
-// [FIX]: 重构：Ephemeral KEM (前向保密实现)
+// [FIX]: 重构：Authenticated Ephemeral KEM (Sign-then-Encrypt)
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
-                            const unsigned char* recipient_sign_pk) {
+                            const unsigned char* recipient_sign_pk,
+                            const master_key_pair* sender_mkp) { // [FIX] Added sender_mkp
     
-    if (encrypted_output == NULL || encrypted_output_len == NULL || session_key == NULL || recipient_sign_pk == NULL) {
+    if (encrypted_output == NULL || encrypted_output_len == NULL || session_key == NULL || 
+        recipient_sign_pk == NULL || sender_mkp == NULL || sender_mkp->identity_sk == NULL) {
         return -1;
     }
 
@@ -360,65 +361,89 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         return -1;
     }
 
-    // 2. [PFS 核心变更] 生成临时密钥对 (Ephemeral Key Pair)
+    // 2. 生成临时密钥对 (Ephemeral Key Pair)
     unsigned char ephem_pk[crypto_box_PUBLICKEYBYTES];
     unsigned char ephem_sk[crypto_box_SECRETKEYBYTES];
-    // 使用 sodium 的安全随机数生成器
     crypto_box_keypair(ephem_pk, ephem_sk);
 
-    // 3. 准备输出结构
-    // [FIX] 使用 XChaCha20 专用 Nonce 大小
+    // 3. 生成 Nonce
     unsigned char nonce[crypto_box_curve25519xchacha20poly1305_NONCEBYTES];
     randombytes_buf(nonce, sizeof(nonce));
 
-    // 计算指针偏移：
-    // Output Format: [Nonce (24)] || [Ephemeral_PK (32)] || [Ciphertext + MAC]
-    unsigned char* out_nonce_ptr = encrypted_output;
-    unsigned char* out_ephem_pk_ptr = encrypted_output + sizeof(nonce);
-    unsigned char* out_ciphertext_ptr = out_ephem_pk_ptr + crypto_box_PUBLICKEYBYTES;
-
-    // 4. 执行匿名加密 (Ephemeral SK -> Recipient Static PK)
-    // [FIX] 强制使用 XChaCha20Poly1305
-    int result = crypto_box_curve25519xchacha20poly1305_easy(
-                    out_ciphertext_ptr,
-                    session_key, session_key_len,
-                    nonce,
-                    recipient_encrypt_pk,
-                    ephem_sk); // 使用临时私钥
+    // 4. 执行匿名加密 (使用 Ephemeral SK)
+    // 计算密文长度: Plaintext + MAC
+    size_t ciphertext_len = session_key_len + crypto_box_curve25519xchacha20poly1305_MACBYTES;
     
-    // 5. 立即擦除临时私钥 (关键安全步骤)
-    sodium_memzero(ephem_sk, sizeof(ephem_sk));
+    // 使用安全内存临时存储密文，因为接下来要对其签名
+    unsigned char* ciphertext = secure_alloc(ciphertext_len);
+    if (!ciphertext) {
+        sodium_memzero(ephem_sk, sizeof(ephem_sk));
+        return -1;
+    }
 
-    if (result == 0) {
-        // 组装头部
-        memcpy(out_nonce_ptr, nonce, sizeof(nonce));
-        memcpy(out_ephem_pk_ptr, ephem_pk, sizeof(ephem_pk));
-        
-        // 计算总长度
-        // Nonce + EphemeralPK + CiphertextLength (Plaintext + MAC)
-        *encrypted_output_len = sizeof(nonce) + 
-                                sizeof(ephem_pk) + 
-                                session_key_len + 
-                                crypto_box_curve25519xchacha20poly1305_MACBYTES;
-    } else {
-        *encrypted_output_len = 0;
+    if (crypto_box_curve25519xchacha20poly1305_easy(
+            ciphertext,
+            session_key, session_key_len,
+            nonce,
+            recipient_encrypt_pk,
+            ephem_sk) != 0) {
+        secure_free(ciphertext);
+        sodium_memzero(ephem_sk, sizeof(ephem_sk));
+        return -1;
     }
     
-    return result;
+    // 立即擦除临时私钥
+    sodium_memzero(ephem_sk, sizeof(ephem_sk));
+
+    // 5. [FIX] 签名数据 (Sign-then-Encrypt)
+    // 签名内容: [Nonce] || [Ephemeral_PK] || [Ciphertext]
+    // 这绑定了此次加密会话的参数和内容到发送者身份
+    size_t msg_to_sign_len = sizeof(nonce) + sizeof(ephem_pk) + ciphertext_len;
+    unsigned char* msg_to_sign = secure_alloc(msg_to_sign_len);
+    if (!msg_to_sign) {
+        secure_free(ciphertext);
+        return -1;
+    }
+
+    unsigned char* p_sign = msg_to_sign;
+    memcpy(p_sign, nonce, sizeof(nonce)); p_sign += sizeof(nonce);
+    memcpy(p_sign, ephem_pk, sizeof(ephem_pk)); p_sign += sizeof(ephem_pk);
+    memcpy(p_sign, ciphertext, ciphertext_len);
+
+    unsigned char signature[crypto_sign_BYTES];
+    crypto_sign_detached(signature, NULL, msg_to_sign, msg_to_sign_len, sender_mkp->identity_sk);
+    
+    secure_free(msg_to_sign); // 清理待签名缓冲
+
+    // 6. 组装最终输出
+    // Output Format: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext]
+    unsigned char* p_out = encrypted_output;
+    memcpy(p_out, nonce, sizeof(nonce)); p_out += sizeof(nonce);
+    memcpy(p_out, ephem_pk, sizeof(ephem_pk)); p_out += sizeof(ephem_pk);
+    memcpy(p_out, signature, sizeof(signature)); p_out += sizeof(signature);
+    memcpy(p_out, ciphertext, ciphertext_len);
+    
+    *encrypted_output_len = sizeof(nonce) + sizeof(ephem_pk) + sizeof(signature) + ciphertext_len;
+
+    secure_free(ciphertext);
+    return 0;
 }
 
-// [FIX]: 重构：Ephemeral KEM 解封装
+// [FIX]: 重构：Authenticated Ephemeral KEM 解封装
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
-                            const unsigned char* my_enc_sk) {
+                            const unsigned char* my_enc_sk,
+                            const unsigned char* sender_public_key) { // [FIX] Added sender_pk
 
-    if (decrypted_output == NULL || encrypted_input == NULL || my_enc_sk == NULL) {
+    if (decrypted_output == NULL || encrypted_input == NULL || my_enc_sk == NULL || sender_public_key == NULL) {
         return -1;
     }
 
     // 1. 验证最小长度
+    // Nonce(24) + Ephemeral_PK(32) + Signature(64) + MAC(16) = 136 bytes min
     size_t min_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + 
                      crypto_box_PUBLICKEYBYTES + 
+                     crypto_sign_BYTES + 
                      crypto_box_curve25519xchacha20poly1305_MACBYTES;
                      
     if (encrypted_input_len < min_len) {
@@ -426,24 +451,45 @@ int decapsulate_session_key(unsigned char* decrypted_output,
     }
 
     // 2. 解析输入结构
-    // Format: [Nonce (24)] || [Ephemeral_PK (32)] || [Ciphertext + MAC]
     const unsigned char* nonce = encrypted_input;
-    const unsigned char* ephem_pk = encrypted_input + crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
-    const unsigned char* ciphertext = ephem_pk + crypto_box_PUBLICKEYBYTES;
+    const unsigned char* ephem_pk = nonce + crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
+    const unsigned char* signature = ephem_pk + crypto_box_PUBLICKEYBYTES;
+    const unsigned char* ciphertext = signature + crypto_sign_BYTES;
     
-    size_t ciphertext_len = encrypted_input_len - 
-                            crypto_box_curve25519xchacha20poly1305_NONCEBYTES - 
-                            crypto_box_PUBLICKEYBYTES;
+    size_t ciphertext_len = encrypted_input_len - (ciphertext - encrypted_input);
 
-    // 3. 执行解密 (My Static SK, Sender Ephemeral PK)
-    // 使用 open_easy 验证并解密
-    int result = crypto_box_curve25519xchacha20poly1305_open_easy(
+    // 3. [FIX] 验证签名
+    // 重建被签名的消息: [Nonce] || [Ephemeral_PK] || [Ciphertext]
+    size_t signed_msg_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + 
+                            crypto_box_PUBLICKEYBYTES + 
+                            ciphertext_len;
+                            
+    unsigned char* signed_msg = secure_alloc(signed_msg_len);
+    if (!signed_msg) return -1;
+
+    unsigned char* p_verify = signed_msg;
+    memcpy(p_verify, nonce, crypto_box_curve25519xchacha20poly1305_NONCEBYTES); p_verify += crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
+    memcpy(p_verify, ephem_pk, crypto_box_PUBLICKEYBYTES); p_verify += crypto_box_PUBLICKEYBYTES;
+    memcpy(p_verify, ciphertext, ciphertext_len);
+
+    int verify_ret = crypto_sign_verify_detached(signature, signed_msg, signed_msg_len, sender_public_key);
+    
+    secure_free(signed_msg);
+
+    if (verify_ret != 0) {
+        // 签名验证失败！拒绝解密。
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Security Alert: Sender signature verification failed. Aborting decryption.");
+        return -1;
+    }
+
+    // 4. 执行解密 (My Static SK, Sender Ephemeral PK)
+    int decrypt_ret = crypto_box_curve25519xchacha20poly1305_open_easy(
                     decrypted_output,
                     ciphertext, ciphertext_len,
                     nonce,
                     ephem_pk,  // 发送者的临时公钥
                     my_enc_sk); // 我的静态私钥
 
-    return result;
+    return decrypt_ret;
 }
 /* --- END OF FILE src/core_crypto/crypto_client.c --- */
