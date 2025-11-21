@@ -22,11 +22,12 @@ English | [简体中文](./languages/README_zh_CN.md) | [繁體中文](./languag
     *   [4.1 Dependencies](#41-dependencies)
     *   [4.2 Critical Security Configuration: The Pepper](#42-critical-security-configuration-the-pepper)
     *   [4.3 Compilation & Testing](#43-compilation--testing)
+    *   [4.4 Windows Deployment Security (CRITICAL)](#44-windows-deployment-security-critical)
 5.  [Usage Guide](#5-usage-guide)
     *   [5.1 Using as a Command-Line Tool (`hsc_cli` & `test_ca_util`)](#51-using-as-a-command-line-tool-hsc_cli--test_ca_util)
     *   [5.2 Using as a Library in Your Project](#52-using-as-a-library-in-your-project)
 6.  [Deep Dive: Technical Architecture](#6-deep-dive-technical-architecture)
-7.  [Advanced Configuration: Enhancing Security with Environment Variables](#7-advanced-configuration-enhancing-security-with-environment-variables)
+7.  [Advanced Configuration: Enhancing Security & Network Compatibility](#7-advanced-configuration-enhancing-security--network-compatibility)
 8.  [Advanced Topic: Encryption Mode Comparison](#8-advanced-topic-encryption-mode-comparison)
 9.  [Core API Reference (`include/hsc_kernel.h`)](#9-core-api-reference-includehsc_kernelh)
 10. [Contributing](#10-contributing)
@@ -50,7 +51,8 @@ Our design adheres to the following core security principles:
 
 *   **Robust Hybrid Encryption Model:**
     *   **Symmetric Encryption:** Provides AEAD stream encryption (for large data blocks) and one-shot AEAD encryption (for small data blocks) based on **XChaCha20-Poly1305**.
-    *   **Asymmetric Encryption:** Uses **X25519** (based on Curve2519) for a Key Encapsulation Mechanism (KEM) to wrap the symmetric session key, ensuring only the intended recipient can decrypt it.
+    *   **Asymmetric Encryption:** Uses **X25519** (based on Curve25519) for a Key Encapsulation Mechanism (KEM).
+    *   **[FIX] Ephemeral Session Keys (Sender Compromise Resistance):** The protocol generates a fresh ephemeral key pair for every encryption session. This ensures that even if the **sender's** long-term private key is compromised in the future, past messages sent by them cannot be decrypted (protecting against passive decryption of recorded traffic). *Note: This does not constitute "Perfect Forward Secrecy" in the strictest sense (Double Ratchet), as a compromise of the recipient's long-term key would still allow decryption of past messages.*
 
 *   **Modern Cryptographic Primitive Stack:**
     *   **Key Derivation:** Employs **Argon2id**, the winner of the Password Hashing Competition, to effectively resist GPU and ASIC cracking attempts.
@@ -165,6 +167,22 @@ The project is designed to be highly portable and avoids platform-specific hardc
     ```bash
     make clean
     ```
+
+### 4.4 Windows Deployment Security (CRITICAL)
+
+**[FIX] Core Dump Protection on Windows**
+
+On Linux/Unix systems, this library automatically disables core dumps to prevent sensitive keys from being written to disk during a crash. However, on **Windows**, application-level APIs cannot fully prevent the operating system's "Windows Error Reporting" (WER) service from creating crash dumps (`.dmp` files).
+
+**Action Required for Windows Administrators:**
+To secure your environment, you **must** explicitly disable LocalDumps for this application or globally via the Registry.
+
+1.  Open `regedit`.
+2.  Navigate to: `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
+3.  Create or modify the value `DumpCount` to `0` (DWORD).
+4.  Alternatively, disable WER entirely if your security policy requires strict memory confidentiality.
+
+**Failure to do this may result in decrypted session keys or private keys persisting on the physical disk after an application crash.**
 
 ## 5. Usage Guide
 
@@ -283,7 +301,7 @@ This section provides a complete, self-contained workflow demonstrating how two 
 
     int main() {
         // CRITICAL: Ensure HSC_PEPPER_HEX is set in the environment before this call!
-        if (hsc_init() != HSC_OK) {
+        if (hsc_init(NULL, NULL) != HSC_OK) {
             // Handle fatal error
         }
         // Register your logging function with the library
@@ -361,25 +379,31 @@ SENDER (ALICE)                                            RECEIVER (BOB)
        [ Plaintext ]
 ```
 
-## 7. Advanced Configuration: Enhancing Security with Environment Variables
+## 7. Advanced Configuration: Enhancing Security & Network Compatibility
 
-To adapt to future hardware and security needs without code modification, this project supports **increasing** the computational cost of the key derivation function (Argon2id) via environment variables.
+To adapt to future hardware and security needs without code modification, this project supports configuration via environment variables.
 
+### 7.1 Cryptographic Hardening
 *   **`HSC_ARGON2_OPSLIMIT`**: Sets the number of operations (computational rounds) for Argon2id.
 *   **`HSC_ARGON2_MEMLIMIT`**: Sets the memory usage in bytes for Argon2id.
 
 **Important Security Note:** This feature can **only be used to strengthen security parameters**. If the values set in the environment variables are lower than the minimum security baselines built into the project, the program will automatically ignore the insecure values and enforce the built-in minimums.
 
+### 7.2 Internal Network Support (SSRF Protection)
+By default, Oracipher Core strictly blocks OCSP requests to private IP addresses (e.g., `10.x.x.x`, `192.168.x.x`, `127.0.0.1`) to prevent **Server-Side Request Forgery (SSRF)** attacks.
+
+*   **`HSC_PKI_ALLOW_PRIVATE_IP`**: Set this variable to `1` to allow OCSP requests to private IP addresses.
+    *   **Use Case:** Deployment in corporate intranets where private CA/OCSP servers are used.
+    *   **Warning:** Enabling this bypasses a critical security filter. Ensure your environment is trusted.
+
 **Usage Example:**
 
 ```bash
-# Example: Increase ops limit to 10 and memory limit to 512MB.
-# Note: HSC_ARGON2_MEMLIMIT requires the value in bytes.
-# 512 * 1024 * 1024 = 536870912 bytes.
+# Example: Increase ops limit and allow internal OCSP servers.
 export HSC_ARGON2_OPSLIMIT=10
 export HSC_ARGON2_MEMLIMIT=536870912
+export HSC_PKI_ALLOW_PRIVATE_IP=1
 
-# Any program run in a shell with these variables set will automatically use these stronger parameters.
 # Don't forget the mandatory HSC_PEPPER_HEX variable!
 export HSC_PEPPER_HEX=$(openssl rand -hex 32)
 ./bin/hsc_cli gen-keypair my_strong_key
@@ -410,14 +434,14 @@ Oracipher Core provides two distinct hybrid encryption workflows, each with diff
     > *   **Risk of Impersonation:** Using an incorrect or malicious public key will result in the data being encrypted for the wrong party (an attacker) without any warning from the system.
     > *   **The `hsc_cli` tool will force you to acknowledge a detailed security warning before proceeding with this mode.**
 
-*   **When to Use:** **ONLY** in closed systems or specific protocols where public keys have been exchanged and verified through an independent, highly trusted out-of-band mechanism (e.g., keys are baked into the firmware of a secure device, verified in person, or managed by a secure orchestration system like a hardware security module). **If you are unsure, do not use this mode.**
+*   **When to Use:** **ONLY** in closed systems or specific protocols where public keys have been exchanged and verified through an independent, highly trusted out-of-band mechanism.
 
 ## 9. Core API Reference (`include/hsc_kernel.h`)
 
 ### Initialization & Cleanup
 | Function | Description |
 | :--- | :--- |
-| `int hsc_init()` | **(Must be called first)** Initializes the entire library. Requires `HSC_PEPPER_HEX` env var. |
+| `int hsc_init(config, pepper)` | **(Must be called first)** Initializes the entire library. Accepts config & pepper. |
 | `void hsc_cleanup()` | Call before program exit to free global resources. |
 
 ### Key Management
@@ -439,8 +463,8 @@ Oracipher Core provides two distinct hybrid encryption workflows, each with diff
 ### Key Encapsulation (Asymmetric)
 | Function | Description |
 | :--- | :--- |
-| `int hsc_encapsulate_session_key(...)` | Encrypts a session key using the recipient's public key. |
-| `int hsc_decapsulate_session_key(...)` | Decrypts a session key using the recipient's private key. |
+| `int hsc_encapsulate_session_key(...)` | Encrypts a session key using the recipient's public key (Auth KEM). |
+| `int hsc_decapsulate_session_key(...)` | Decrypts a session key using the recipient's private key (Auth KEM). |
 
 ### Stream Encryption (Symmetric, for large files)
 | Function | Description |

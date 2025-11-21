@@ -131,13 +131,16 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem,
 // --- 核心API函数：密钥封装 (非对称) ---
 
 /**
- * @brief [PFS修复] 封装会话密钥 (Authenticated Ephemeral KEM)
+ * @brief [Ephemeral Key] 封装会话密钥 (Authenticated Ephemeral KEM)
  *        
  *        [FIX]: Audit Finding #1 - Sender Authentication
  *        增加了 sender_mkp 参数。
  *        函数现在会生成 [Nonce] || [Ephemeral_PK] || [Signature] || [Ciphertext]。
  *        发送者使用其身份私钥对 (Ephemeral_PK + Recipient_PK + Ciphertext) 进行签名，
  *        确保接收者可以验证数据来源。
+ * 
+ *        [Term Update]: 之前被称为 PFS (Perfect Forward Secrecy)，更准确的描述是
+ *        针对发送方长期密钥泄露的前向安全保护 (Sender Key Compromise Resistance)。
  * 
  * @param sender_mkp [FIX] 发送者的主密钥对（用于身份签名）。不可为 NULL。
  */
@@ -148,7 +151,7 @@ int hsc_encapsulate_session_key(unsigned char* encrypted_output,
                                 const hsc_master_key_pair* sender_mkp); // [FIX] Added sender_mkp
 
 /**
- * @brief [PFS修复] 解封装会话密钥 (Authenticated Ephemeral KEM)
+ * @brief [Ephemeral Key] 解封装会话密钥 (Authenticated Ephemeral KEM)
  * 
  *        [FIX]: Audit Finding #1 - Sender Authentication
  *        增加了 sender_public_key 参数。

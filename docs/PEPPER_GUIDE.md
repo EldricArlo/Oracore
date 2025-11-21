@@ -1,7 +1,8 @@
 # 🔐 Core Secret Operations Guide: HSC_PEPPER_HEX Management Manual
 
-**Applicable Version:** Oracipher Core v1.0+
+**Applicable Version:** Oracipher Core v5.1+
 **Security Level:** Top Secret
+**Last Updated:** 2025-11-21
 
 ---
 
@@ -10,11 +11,11 @@
 Before deploying Oracipher Core, the operations team **must** understand the nature of `HSC_PEPPER_HEX` (Global Pepper):
 
 1.  **Immutability**: Once your system has encrypted data using a specific Pepper, **NEVER CHANGE IT**.
-    *   **Consequence**: Changing the Pepper is equivalent to losing the key. All previously encrypted data (including database fields, encrypted files) will be **permanently undecryptable**, resulting in catastrophic data loss.
+    *   **Consequence**: Changing the Pepper is equivalent to changing the master lock. All previously encrypted data (database fields, files) will be **permanently undecryptable**, resulting in total data loss.
 2.  **Backup Requirement**:
-    *   **Consequence**: If the server crashes and the Pepper is lost, the data is unrecoverable. You must have an off-site cold backup (e.g., a paper backup stored in a safe).
+    *   **Consequence**: If the server crashes and the Pepper is lost, the data is unrecoverable. You must have an off-site cold backup (e.g., a paper backup stored in a physical safe).
 3.  **Confidentiality**:
-    *   **Consequence**: If the Pepper is leaked, attackers can use rainbow tables or FPGA clusters to brute-force your data. Although Argon2id provides protection, a Pepper leak eliminates the extra layer of defense provided by "keyed hashing."
+    *   **Consequence**: If the Pepper is leaked, the defense-in-depth layer provided by "keyed hashing" is removed. Attackers can then use rainbow tables or FPGA clusters to attack the Argon2id hashes more efficiently.
 
 ---
 
@@ -24,8 +25,13 @@ The Pepper must be a **32-byte** high-entropy random number, represented as a **
 
 **Recommended Generation Command (Run in a secure terminal):**
 ```bash
+# Linux / macOS
 openssl rand -hex 32
+
+# Windows (PowerShell)
+-join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Min 0 -Max 256) })
 ```
+
 *Example Output (For reference only, strictly prohibited for production use):*
 `8a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9`
 
@@ -35,9 +41,30 @@ openssl rand -hex 32
 
 It is strictly prohibited to hardcode the Pepper in source code, Dockerfiles, or Git repositories. Please select the following scheme based on your deployment environment.
 
-### 🏛️ Scenario A: Systemd Service (Linux Bare Metal/VM)
+### 💎 Scenario A: Programmatic Injection (Highest Security)
+**Recommended for:** Enterprise apps using HashiCorp Vault, AWS Secrets Manager, or Azure Key Vault.
 
-On traditional Linux servers, do not put environment variables in the global `/etc/environment` or a user's `.bashrc`, as they may be visible to all processes.
+Oracipher Core v5.1+ allows passing the pepper directly to the initialization function. This avoids the risk of environment variables leaking via `/proc/PID/environ` or crash dumps.
+
+```c
+// Fetch secret from your Vault client library into memory
+char* secure_pepper = fetch_secret_from_vault("oracipher/prod/pepper");
+
+// Initialize with the explicit pepper
+// The library will verify length and use it immediately
+if (hsc_init(NULL, secure_pepper) != HSC_OK) {
+    // Handle error
+}
+
+// CRITICAL: Wipe the variable from your application memory immediately after init
+sodium_memzero(secure_pepper, strlen(secure_pepper));
+```
+
+---
+
+### 🏛️ Scenario B: Systemd Service (Linux Bare Metal/VM)
+
+On traditional Linux servers, do not put environment variables in global profiles (`/etc/profile`).
 
 **Steps:**
 
@@ -50,128 +77,121 @@ On traditional Linux servers, do not put environment variables in the global `/e
     ```
 
 2.  **Write the Pepper**:
-    Open the file with an editor and write:
     ```ini
     HSC_PEPPER_HEX=Your64CharacterHexString
     ```
 
 3.  **Configure Systemd Unit File**:
-    Add `EnvironmentFile` to your service file (e.g., `/etc/systemd/system/oracipher-app.service`):
+    Add `EnvironmentFile` to your service definition:
 
     ```ini
-    [Unit]
-    Description=Oracipher Core Application
-    After=network.target
-
     [Service]
-    Type=simple
     User=www-data
     # Load the protected environment variable file
     EnvironmentFile=/etc/oracipher/pepper.env
     ExecStart=/usr/local/bin/your-application
-    Restart=on-failure
-
-    [Install]
-    WantedBy=multi-user.target
     ```
 
 ---
 
-### 🐳 Scenario B: Docker (Docker Compose)
+### 🪟 Scenario C: Windows Server (PowerShell / Service)
 
-Do not use the `ENV` instruction in a `Dockerfile` to set the Pepper. This bakes the key permanently into the image layers, visible to anyone who pulls the image.
+**Method 1: Temporary Session (Manual Run)**
+For manual tasks, set the variable only for the current process scope.
+```powershell
+$env:HSC_PEPPER_HEX = "Your64CharacterHexString"
+.\hsc_cli.exe ...
+# Clear after use
+Remove-Item Env:\HSC_PEPPER_HEX
+```
 
-**Recommended Scheme: Use Docker Secrets (Even in non-Swarm mode)**
+**Method 2: Windows Service (Persistent)**
+**Do not** use `setx` (it writes to the Registry in plaintext readable by users). instead, modify the Service entry in the Registry securely.
 
-1.  **Create the key file (Do not commit to Git)**:
-    Create a file `secrets/pepper_hex.txt` containing only the Pepper string.
+1.  Open `RegEdit`.
+2.  Navigate to `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\YourServiceName`.
+3.  Create/Edit a `Multi-String Value` named `Environment`.
+4.  Add content: `HSC_PEPPER_HEX=Your64CharacterHexString`.
+5.  **Important:** Right-click the key -> Permissions. Remove read access for non-admin users.
 
-2.  **Write `docker-compose.yml`**:
+---
 
+### 🐳 Scenario D: Docker (Docker Compose / Swarm)
+
+**Challenge:** Docker Secrets mount files (e.g., `/run/secrets/my_pepper`), but Oracipher Core expects an Environment Variable or API argument.
+**Solution:** Use an entrypoint script to read the file into the variable.
+
+1.  **docker-compose.yml**:
     ```yaml
-    version: '3.8'
-
     services:
       app:
         image: oracipher-app:latest
-        environment:
-          # Instruct the app to read the file directly, or use a script to read content into env var
-          # If the app supports reading a file as config:
-          # HSC_PEPPER_FILE: /run/secrets/hsc_pepper
-          # If the app only supports env vars, you need to read this in your entrypoint script
-          - ...
+        entrypoint: ["/bin/sh", "/entrypoint.sh"]
         secrets:
-          - hsc_pepper
-
+          - source: hsc_pepper_prod
+            target: hsc_pepper
+    
     secrets:
-      hsc_pepper:
-        file: ./secrets/pepper_hex.txt
+      hsc_pepper_prod:
+        file: ./secrets/prod_pepper.txt
     ```
 
-**Alternative (Only if application strictly mandates environment variables):**
-Inject using an `.env` file in `docker-compose.yml`, but you **MUST ENSURE** the `.env` file is added to `.gitignore`.
-
-```yaml
-services:
-  app:
-    environment:
-      - HSC_PEPPER_HEX=${HSC_PEPPER_HEX}
-```
-*Before running: `export HSC_PEPPER_HEX=...` or create an `.env` file.*
+2.  **entrypoint.sh (Add this to your image)**:
+    ```bash
+    #!/bin/sh
+    # Check if the secret file exists
+    if [ -f /run/secrets/hsc_pepper ]; then
+        # Read file content into the Environment Variable
+        export HSC_PEPPER_HEX=$(cat /run/secrets/hsc_pepper)
+    fi
+    
+    # Execute the main application
+    exec "$@"
+    ```
 
 ---
 
-### ☸️ Scenario C: Kubernetes (K8s)
+### ☸️ Scenario E: Kubernetes (K8s)
 
-In Kubernetes, **ABSOLUTELY NEVER** put the Pepper in a `ConfigMap` or write it directly into the `env` field of a `Deployment` YAML.
+**Warning:** Using `env` in Deployment manifests allows anyone with `kubectl describe pod` permission to see the secret.
 
-**Steps:**
+**Recommended:** Use `Secret` objects mapped to Environment Variables.
 
-1.  **Create a Kubernetes Secret Object**:
-    
+1.  **Create the Secret**:
     ```bash
     kubectl create secret generic oracipher-keys \
-      --from-literal=pepper-hex='Your64CharacterHexString' \
-      --namespace=your-namespace
+      --from-literal=pepper-hex='Your64CharacterHexString'
     ```
-    *(Note: To avoid shell history leaks, it is recommended to create the secret from a file)*
 
-2.  **Mount in Pod/Deployment**:
-
+2.  **Deployment YAML**:
     ```yaml
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: oracipher-app
-    spec:
-      template:
-        spec:
-          containers:
-            - name: app
-              image: oracipher-app:latest
-              env:
-                - name: HSC_PEPPER_HEX
-                  valueFrom:
-                    secretKeyRef:
-                      name: oracipher-keys
-                      key: pepper-hex
+    containers:
+      - name: app
+        env:
+          - name: HSC_PEPPER_HEX
+            valueFrom:
+              secretKeyRef:
+                name: oracipher-keys
+                key: pepper-hex
     ```
 
-**Advanced Security Recommendation**: For high-security requirements, it is recommended to use HashiCorp Vault or AWS Secrets Manager in conjunction with the `ExternalSecrets` Operator to dynamically inject the Pepper into Pods, and enable **Etcd Encryption at Rest** in K8s.
+**Enterprise Recommendation:** Use the **Scenario A (Programmatic Injection)** approach combined with a Sidecar (like Vault Agent) that writes the secret to a shared memory volume, which the app reads and passes to `hsc_init`.
 
 ---
 
 ## 3. Verification and Troubleshooting
 
 1.  **Check Loading Status**:
-    After the application starts, check the logs. `Oracipher Core` will print the loading status:
+    Check application logs (stdout/stderr). `Oracipher Core` will print:
     *   ✅ `INFO: Successfully loaded and validated the 32-byte global pepper...`
-    *   ❌ `FATAL: Security pepper environment variable 'HSC_PEPPER_HEX' is not set.`
+    *   ❌ `FATAL: Security pepper not provided via arguments and 'HSC_PEPPER_HEX' environment variable is not set.`
 
-2.  **Prevent Log Leakage**:
-    It is **strictly prohibited** to print the specific value of `HSC_PEPPER_HEX` into application logs. Oracipher Core has internal masking handling; it only prints "Loaded" and does not print the content.
+2.  **Log Hygiene**:
+    *   The library is designed **NOT** to print the actual pepper value.
+    *   Ensure your own application logic or debuggers do not accidentally dump the `HSC_PEPPER_HEX` variable.
 
 ## 4. Disaster Recovery Plan (DR Plan)
 
-1.  **Paper Backup**: Print the production `HSC_PEPPER_HEX` on paper, place it in an envelope, seal it, and store it in the company safe.
-2.  **Dual Control**: Retrieving the recovery key (paper backup) should require the simultaneous presence of two administrators (if required by security policy).
+1.  **Physical Backup**: Print the production `HSC_PEPPER_HEX` on paper (QR code or Hex text).
+2.  **Storage**: Seal it in an opaque envelope and store it in a fireproof company safe.
+3.  **Recovery Drill**: Once a year, test if you can start a "Disaster Recovery" instance of the application using the key typed manually from the paper backup.
