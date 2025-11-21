@@ -5,6 +5,15 @@
 #include <stdint.h>
 #include <errno.h>
 
+// 引入环境检测头文件
+#if defined(_WIN32) || defined(__WIN32__)
+    #include <io.h>
+    #define isatty _isatty
+    #define fileno _fileno
+#else
+    #include <unistd.h>
+#endif
+
 // 引入 getopt_long 以增强参数解析
 #include <getopt.h>
 // 在某些环境中（如 MinGW），optind 需要手动声明
@@ -392,6 +401,14 @@ static int _prepare_recipient_pk(encrypt_args* args) {
     int ret_code = HSC_ERROR_GENERAL;
 
     if (args->recipient_pk_file) {
+        // [修复] 增加非交互式环境检测，防止脚本误用高风险模式
+        if (!isatty(fileno(stdin))) {
+            fprintf(stderr, "错误: 检测到非交互式环境 (非 TTY)。\n");
+            fprintf(stderr, "为防止误操作，禁止在脚本中通过管道绕过安全确认。\n");
+            fprintf(stderr, "必须在交互式终端中手动输入 'yes' 才能使用此高风险模式。\n");
+            return HSC_ERROR_GENERAL;
+        }
+
         fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
         fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--recipient-pk-file) 进行加密。\n");
         fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证接收者的身份。\n");
@@ -547,6 +564,14 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
 
     if (sender_pk_file) {
+        // [修复] 增加非交互式环境检测，防止脚本误用高风险模式
+        if (!isatty(fileno(stdin))) {
+            fprintf(stderr, "错误: 检测到非交互式环境 (非 TTY)。\n");
+            fprintf(stderr, "为防止误操作，禁止在脚本中通过管道绕过安全确认。\n");
+            fprintf(stderr, "必须在交互式终端中手动输入 'yes' 才能使用此高风险模式。\n");
+            return HSC_ERROR_GENERAL;
+        }
+
         fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
         fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--sender-pk-file) 进行解密。\n");
         fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证发送者的身份。\n");
