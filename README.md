@@ -86,9 +86,11 @@ The project uses a clean, layered directory structure to achieve separation of c
 │   ├── hsc_kernel.c      # [Core] Implementation of the public API
 │   ├── main.c            # API Usage Example: End-to-end demo program
 │   └── cli.c             # API Usage Example: Powerful command-line tool
+├── docs/
+│   └── PEPPER_GUIDE.md   # [Doc] Critical Security Guide for Production Ops
 ├── tests/                # Unit tests and test utilities
 │   ├── test_*.c          # Unit tests for various modules
-│   ├── test_api_integration.c # [New] End-to-end tests for high-level APIs
+│   ├── test_api_integration.c # End-to-end tests for high-level APIs
 │   ├── test_helpers.h/.c # Test helper functions (CA generation, signing)
 │   └── test_ca_util.c    # Source code for the standalone test CA utility
 ├── Makefile              # Build and task management script
@@ -107,32 +109,20 @@ The project uses a clean, layered directory structure to achieve separation of c
 
 **Security Note on Dependencies:** The project's build system (`CMakeLists.txt`) will automatically check the versions of your installed dependencies and issue a **FATAL ERROR** if OpenSSL is older than v3.0, and a **SECURITY WARNING** if OpenSSL or Libcurl have known critical vulnerabilities (e.g., CVE-2023-38545 for Libcurl). **Always pay attention to these warnings and keep your system libraries up to date.**
 
-**Installation on Major Systems:**
-
-*   **Debian/Ubuntu:**
-    ```bash
-    sudo apt-get update
-    sudo apt-get install build-essential libsodium-dev libssl-dev libcurl4-openssl-dev
-    ```
-*   **Fedora/RHEL/CentOS:**
-    ```bash
-    sudo dnf install gcc make libsodium-devel openssl-devel libcurl-devel
-    ```
-*   **macOS (using Homebrew):**
-    ```bash
-    brew install libsodium openssl@3 curl
-    ```
-
 ### 4.2 Critical Security Configuration: The Pepper
 
-> **CRITICAL: The library will not function without this step.**
+> **🚨 CRITICAL PRODUCTION WARNING: READ THIS BEFORE DEPLOYMENT**
+>
+> Oracipher Core enhances the security of its key derivation function (Argon2id) with a system-wide secret known as a "pepper". You **MUST** provide this pepper via an environment variable named `HSC_PEPPER_HEX`.
+>
+> **Failure to manage this secret correctly will lead to TOTAL DATA LOSS.**
+>
+> 👉 **Please read the mandatory operational guide:** [docs/PEPPER_GUIDE.md](./docs/PEPPER_GUIDE.md)
+>
+> This guide covers how to securely inject the pepper in **Systemd, Docker, and Kubernetes** environments.
 
-Oracipher Core enhances the security of its key derivation function (Argon2id) with a system-wide secret known as a "pepper". You **MUST** provide this pepper via an environment variable named `HSC_PEPPER_HEX` before running any application that uses this library. If this variable is not set, the library's initialization (`hsc_init()`) will fail.
-
-The pepper must be a **64-character hexadecimal string**, which represents 32 cryptographically secure random bytes.
-
-**For Development & Testing:**
-You can generate a suitable random pepper and export it to your shell session.
+**For Development & Testing ONLY:**
+You can generate a temporary random pepper for local testing. **DO NOT use this method for production.**
 
 ```bash
 # Generate a random 32-byte pepper and display it as a hex string
@@ -141,10 +131,6 @@ export HSC_PEPPER_HEX=$(openssl rand -hex 32)
 # You can verify that it has been set
 echo $HSC_PEPPER_HEX
 ```
-For convenience during development, you may want to add the `export` line to your shell's startup file (e.g., `~/.bashrc`, `~/.zshrc`).
-
-**For Production Environments:**
-The pepper is a critical secret. It **MUST NOT** be hardcoded in scripts or checked into version control. It should be managed securely using your deployment platform's secret management tools (e.g., Docker secrets, Kubernetes secrets, AWS Secrets Manager, HashiCorp Vault, etc.).
 
 ### 4.3 Compilation & Testing
 

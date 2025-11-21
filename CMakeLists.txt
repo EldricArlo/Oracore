@@ -2,11 +2,11 @@
 # CMakeLists.txt for Oracipher Core
 #
 # Reviewed and Updated by the Oracipher Core Code Review Committee
-# Version: 2.5 (Security Hardening: Fail-Closed on Vulnerable Deps)
+# Version: 2.6 (Refactored: Conditional Installation of Dev Tools)
 #
-# This file now integrates clang-tidy directly into the build process
-# and enforces strict dependency version checks to prevent building
-# with known CVEs.
+# This file now integrates clang-tidy directly into the build process,
+# enforces strict dependency version checks, and prevents test utilities
+# from being installed by default.
 # ==============================================================================
 
 # --- 1. Project Definition and C Standard ---
@@ -15,6 +15,10 @@ project(OracipherCore VERSION 1.0 LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+
+# [COMMITTEE CONFIG] New option to control the installation of development tools.
+# Defaults to OFF to ensure test_ca_util is not deployed to production.
+option(INSTALL_DEV_TOOLS "Install development and testing tools (like test_ca_util)" OFF)
 
 
 # --- 2. Compiler Settings and Warnings ---
@@ -177,12 +181,24 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-install(TARGETS hsc_kernel hsc_cli hsc_demo test_ca_util
+# [COMMITTEE FIX] Production artifacts: Always install these
+install(TARGETS hsc_kernel hsc_cli hsc_demo
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
 )
 install(FILES include/hsc_kernel.h DESTINATION include)
+
+# [COMMITTEE FIX] Development artifacts: Only install if requested
+# This prevents 'test_ca_util' from polluting production environments.
+if(INSTALL_DEV_TOOLS)
+    message(STATUS "NOTE: Development tools (test_ca_util) WILL be installed.")
+    install(TARGETS test_ca_util
+        RUNTIME DESTINATION bin
+    )
+else()
+    message(STATUS "NOTE: Development tools (test_ca_util) will NOT be installed. (Use -DINSTALL_DEV_TOOLS=ON to enable)")
+endif()
 
 
 # --- 8. Optional Developer Tools Integration ---
