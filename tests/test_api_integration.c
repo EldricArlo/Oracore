@@ -234,7 +234,8 @@ void run_all_tests() {
 }
 
 int main() {
-    if (hsc_init() != HSC_OK) {
+    // [FIX]: 适配 hsc_init(NULL) 以使用默认配置
+    if (hsc_init(NULL) != HSC_OK) {
         printf("Fatal: Could not initialize hsc_kernel for tests.\n");
         return 1;
     }

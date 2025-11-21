@@ -176,7 +176,8 @@ void run_all_tests() {
 }
 
 int main() {
-    if (hsc_init() != HSC_OK) {
+    // [FIX]: 适配新的 API，传入 NULL 以使用默认配置
+    if (hsc_init(NULL) != HSC_OK) {
         printf("Fatal: Could not initialize hsc_kernel for tests.\n");
         return 1;
     }

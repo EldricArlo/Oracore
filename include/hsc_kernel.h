@@ -21,6 +21,8 @@
 #define HSC_ERROR_CERT_REVOKED                   -12 // 证书已被其颁发机构明确吊销
 #define HSC_ERROR_CERT_OCSP_UNAVAILABLE          -13 // OCSP检查因网络或服务器问题失败 (遵循"故障关闭"原则)
 #define HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN       -14 // OCSP服务器报告该证书状态未知 (根据策略视为吊销)
+// [FIX]: 新增错误码，明确区分“无OCSP信息”的情况
+#define HSC_ERROR_CERT_NO_OCSP_URI               -15 // 证书缺少AIA/OCSP扩展，无法进行吊销检查 (Fail-Closed)
 
 
 // --- 旧版证书验证返回码 (为保持向后兼容性) ---
@@ -30,8 +32,7 @@
 #define HSC_VERIFY_ERROR_SUBJECT_MISMATCH HSC_ERROR_CERT_SUBJECT_MISMATCH
 #define HSC_VERIFY_ERROR_REVOKED HSC_ERROR_CERT_REVOKED
 #define HSC_VERIFY_ERROR_OCSP_UNAVAILABLE HSC_ERROR_CERT_OCSP_UNAVAILABLE
-#define HSC_VERIFY_ERROR_OCSP_STATUS_UNKNOWN HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN // 为旧宏添加新错误码
-// [COMMITTEE NOTE] 保留旧宏以兼容可能依赖它的代码，但指向一个更具体的错误
+#define HSC_VERIFY_ERROR_OCSP_STATUS_UNKNOWN HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN 
 #define HSC_VERIFY_ERROR_REVOKED_OR_OCSP_FAILED HSC_ERROR_CERT_OCSP_UNAVAILABLE
 
 
@@ -44,7 +45,6 @@
 // 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
 #define HSC_STREAM_TAG_BYTES      16 // The size of the authentication tag
-// 修正了此处宏定义的拼写错误
 #define HSC_STREAM_CHUNK_OVERHEAD (HSC_STREAM_TAG_BYTES)
 
 // 为单次 AEAD 加密提供的开销常量
@@ -72,9 +72,31 @@ extern const uint8_t HSC_STREAM_TAG_FINAL;
 typedef struct hsc_master_key_pair_s hsc_master_key_pair;
 typedef struct hsc_crypto_stream_state_s hsc_crypto_stream_state;
 
+// [FIX]: 引入 PKI 配置结构体，允许在初始化时指定安全策略
+typedef struct hsc_pki_config_s {
+    /**
+     * @brief 允许"私有PKI模式" (Private PKI Mode)。
+     *        如果设置为 true，当证书缺少 OCSP URI (AIA扩展) 时，验证将不会失败。
+     *        默认 (false): 严格模式。如果证书没有 OCSP URI，视为验证失败 (HSC_ERROR_CERT_NO_OCSP_URI)。
+     */
+    bool allow_no_ocsp_uri;
+} hsc_pki_config;
+
 
 // --- 核心API函数：初始化与密钥管理 ---
-int hsc_init();
+
+/**
+ * @brief 初始化 Oracipher Core 库。
+ *        必须在任何其他库函数之前调用。
+ * 
+ * [FIX]: 更新了函数签名，接受配置参数。
+ * 
+ * @param config 指向配置结构体的指针。
+ *               如果传入 NULL，将使用最严格的默认安全配置 (allow_no_ocsp_uri = false)。
+ * @return 成功返回 HSC_OK，失败返回错误码。
+ */
+int hsc_init(const hsc_pki_config* config);
+
 void hsc_cleanup();
 void hsc_random_bytes(void* buf, size_t size);
 hsc_master_key_pair* hsc_generate_master_key_pair();
@@ -178,11 +200,6 @@ int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out, const unsi
  * @return 成功返回 HSC_OK，如果转换失败则返回 HSC_ERROR_CRYPTO_OPERATION。
  */
 int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out, const unsigned char* ed25519_sk_in);
-
-
-// [FIX]: 已根据 P0 级安全审计建议，移除了 hsc_aead_encrypt_detached 接口。
-//        该接口因允许手动管理 Nonce 而被视为具有不可接受的风险。
-
 
 /**
  * @brief [专家级] [推荐] [分离模式] 安全地使用AEAD (XChaCha20-Poly1305) 对称加密数据。

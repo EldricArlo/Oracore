@@ -316,6 +316,11 @@ int handle_verify_cert(int argc, char* argv[]) {
         case HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN:
             fprintf(stderr, "\033[31m[失败]\033[0m OCSP服务器报告此证书状态未知！根据安全策略，这被视为证书无效。\n");
             break;
+        // [FIX]: 处理新增的 NO_OCSP_URI 错误码
+        case HSC_ERROR_CERT_NO_OCSP_URI:
+            fprintf(stderr, "\033[31m[失败]\033[0m 证书缺少 OCSP URI (AIA扩展)，无法检查吊销状态。\n");
+            fprintf(stderr, "           当前安全策略 (Fail-Closed) 禁止信任此类证书。\n");
+            break;
         case HSC_ERROR_INVALID_FORMAT:
             fprintf(stderr, "\033[31m[失败]\033[0m 无法解析证书文件，请检查是否为有效的PEM格式。\n"); 
             break;
@@ -458,6 +463,9 @@ static int _prepare_recipient_pk(encrypt_args* args) {
             int verify_result = hsc_verify_user_certificate((const char*)recipient_cert_pem, (const char*)ca_cert_pem, args->user_cn);
             if (verify_result != HSC_OK) {
                 fprintf(stderr, "错误: 接收者证书验证失败 (代码: %d)。加密操作已中止。\n", verify_result);
+                if (verify_result == HSC_ERROR_CERT_NO_OCSP_URI) {
+                    fprintf(stderr, "      原因: 证书缺少 OCSP 信息 (AIA)，安全策略拒绝放行。\n");
+                }
                 ret_code = verify_result;
                 goto cleanup;
             }
@@ -646,6 +654,9 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
             
             if (verify_result != HSC_OK) {
                 fprintf(stderr, "\033[31m[致命错误]\033[0m 发送者证书验证失败 (代码: %d)！\n", verify_result);
+                if (verify_result == HSC_ERROR_CERT_NO_OCSP_URI) {
+                     fprintf(stderr, "           原因: 证书缺少 OCSP URI (AIA扩展)，且策略设置为严格模式。\n");
+                }
                 fprintf(stderr, "可能原因: 证书过期、已被吊销、非受信任CA签发或用户名不匹配。\n");
                 fprintf(stderr, "为保障安全，解密操作已中止。\n");
                 goto cleanup; // Fail-Closed
@@ -690,7 +701,8 @@ cleanup:
 // --- Main 函数 ---
 int main(int argc, char* argv[]) {
     if (argc < 2) { print_usage(argv[0]); return 1; }
-    if (hsc_init() != HSC_OK) {
+    // [FIX]: API 变更适配 - 传入 NULL 以使用默认的严格安全配置 (Fail-Closed for No OCSP)
+    if (hsc_init(NULL) != HSC_OK) {
         fprintf(stderr, "严重错误: 高安全内核库初始化失败！\n"); return 1;
     }
     

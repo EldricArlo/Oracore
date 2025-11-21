@@ -62,7 +62,8 @@ int main() {
     unsigned char* decrypted_file_content = NULL;
 
     // --- 初始化 ---
-    if (hsc_init() != HSC_OK) {
+    // [FIX]: 适配新的 API，传入 NULL 使用默认严格安全配置
+    if (hsc_init(NULL) != HSC_OK) {
         fprintf(stderr, "错误: 高安全内核库初始化失败！\n");
         goto cleanup;
     }

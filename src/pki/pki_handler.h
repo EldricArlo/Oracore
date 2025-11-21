@@ -15,9 +15,12 @@ typedef struct master_key_pair_s master_key_pair;
 /**
  * @brief 初始化 PKI 子系统。必须在使用任何 PKI 功能前调用。
  *        主要作用是为 OpenSSL 3+ 加载算法提供者 (provider) 并初始化 libcurl。
+ * 
+ * [FIX]: 更新签名以接收 PKI 配置。
+ * @param config 安全配置结构体，定义了如是否允许跳过 OCSP 等策略。
  * @return 成功返回 0, 失败返回 -1。
  */
-int pki_init();
+int pki_init(const hsc_pki_config* config);
 
 /**
  * @brief 规范 4 - 阶段一 - 4: 生成证书签名请求 (CSR)。
