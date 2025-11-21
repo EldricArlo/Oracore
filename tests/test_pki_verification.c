@@ -13,11 +13,14 @@
 static int test_csr_generation() {
     printf("  Running test: test_csr_generation...\n");
     int ret = -1;
-    master_key_pair mkp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair mkp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     char* csr_pem = NULL;
 
     if (generate_master_key_pair(&mkp) != 0) goto cleanup;
-    if (generate_csr(&mkp, "csr.user@test.com", &csr_pem) != HSC_OK) goto cleanup; // [修改]
+    if (generate_csr(&mkp, "csr.user@test.com", &csr_pem) != HSC_OK) goto cleanup; 
     if (csr_pem == NULL) goto cleanup;
     
     ret = 0;
@@ -35,17 +38,22 @@ cleanup:
 static int test_public_key_extraction() {
     printf("  Running test: test_public_key_extraction...\n");
     int ret = -1;
-    master_key_pair mkp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair mkp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     char* csr_pem = NULL, *ca_key = NULL, *ca_cert = NULL, *user_cert = NULL;
     unsigned char extracted_pk[MASTER_PUBLIC_KEY_BYTES];
 
     if (generate_master_key_pair(&mkp) != 0) goto cleanup;
-    if (generate_csr(&mkp, "pk.user@test.com", &csr_pem) != HSC_OK) goto cleanup; // [修改]
+    if (generate_csr(&mkp, "pk.user@test.com", &csr_pem) != HSC_OK) goto cleanup; 
     if (generate_test_ca(&ca_key, &ca_cert, 0xAA) != 0) goto cleanup;
     if (sign_csr_with_ca(&user_cert, csr_pem, ca_key, ca_cert, 0, 31536000L) != 0) goto cleanup;
 
-    if (extract_public_key_from_cert(user_cert, extracted_pk) != HSC_OK) goto cleanup; // [修改]
-    if (sodium_memcmp(mkp.pk, extracted_pk, MASTER_PUBLIC_KEY_BYTES) != 0) goto cleanup;
+    if (extract_public_key_from_cert(user_cert, extracted_pk) != HSC_OK) goto cleanup; 
+    
+    // [修复] 比较提取的公钥与本地生成的 Identity PK (Ed25519)
+    if (sodium_memcmp(mkp.identity_pk, extracted_pk, MASTER_PUBLIC_KEY_BYTES) != 0) goto cleanup;
 
     ret = 0;
     printf("    ... PASSED\n");
@@ -67,18 +75,20 @@ cleanup:
 static int test_verification_successful_path() {
     printf("  Running test: test_verification_successful_path...\n");
     int ret = -1;
-    master_key_pair user_kp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair user_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     char* ca_key = NULL, *ca_cert = NULL, *user_csr = NULL, *user_cert = NULL;
     const char* username = "valid.user@test.com";
 
     if (generate_test_ca(&ca_key, &ca_cert, 0xBB) != 0) goto cleanup;
     if (generate_master_key_pair(&user_kp) != 0) goto cleanup;
-    if (generate_csr(&user_kp, username, &user_csr) != HSC_OK) goto cleanup; // [修改]
+    if (generate_csr(&user_kp, username, &user_csr) != HSC_OK) goto cleanup; 
     if (sign_csr_with_ca(&user_cert, user_csr, ca_key, ca_cert, 0, 31536000L) != 0) goto cleanup;
 
     int res = verify_user_certificate(user_cert, ca_cert, username);
-    // [COMMITTEE FIX] 更新测试断言以使用新的、正确的错误码。
-    // 测试的意图是验证 OCSP 服务器不可达的情况，因此应检查 HSC_ERROR_CERT_OCSP_UNAVAILABLE。
+    
     if (res != HSC_ERROR_CERT_OCSP_UNAVAILABLE) {
         fprintf(stderr, "    > FAILED: Verification must fail with OCSP error (%d), but got %d\n", HSC_ERROR_CERT_OCSP_UNAVAILABLE, res);
         goto cleanup;
@@ -102,7 +112,10 @@ cleanup:
 static int test_verification_untrusted_ca() {
     printf("  Running test: test_verification_untrusted_ca...\n");
     int ret = -1;
-    master_key_pair user_kp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair user_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     char* trusted_ca_key = NULL, *trusted_ca_cert = NULL;
     char* untrusted_ca_key = NULL, *untrusted_ca_cert = NULL;
     char* user_csr = NULL, *user_cert = NULL;
@@ -112,14 +125,14 @@ static int test_verification_untrusted_ca() {
     if (generate_test_ca(&untrusted_ca_key, &untrusted_ca_cert, 0xDD) != 0) goto cleanup;
     
     if (generate_master_key_pair(&user_kp) != 0) goto cleanup;
-    if (generate_csr(&user_kp, "user.untrusted@test.com", &user_csr) != HSC_OK) goto cleanup; // [修改]
+    if (generate_csr(&user_kp, "user.untrusted@test.com", &user_csr) != HSC_OK) goto cleanup; 
     
     // 使用“不受信任”的 CA 签署证书
     if (sign_csr_with_ca(&user_cert, user_csr, untrusted_ca_key, untrusted_ca_cert, 0, 31536000L) != 0) goto cleanup;
 
     // 使用“受信任”的 CA 进行验证，预期失败
     int res = verify_user_certificate(user_cert, trusted_ca_cert, "user.untrusted@test.com");
-    // [修改] 使用新的错误码宏进行断言
+    
     if (res != HSC_ERROR_CERT_CHAIN_OR_VALIDITY) {
         fprintf(stderr, "    > FAILED: Verification with untrusted CA must fail with error (%d), but got %d\n", HSC_ERROR_CERT_CHAIN_OR_VALIDITY, res);
         goto cleanup;
@@ -143,18 +156,21 @@ cleanup:
 static int test_verification_subject_mismatch() {
     printf("  Running test: test_verification_subject_mismatch...\n");
     int ret = -1;
-    master_key_pair user_kp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair user_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     char* ca_key = NULL, *ca_cert = NULL, *user_csr = NULL, *user_cert = NULL;
     const char* actual_username = "alice@test.com";
     const char* expected_username = "bob@test.com";
 
     if (generate_test_ca(&ca_key, &ca_cert, 0xEE) != 0) goto cleanup;
     if (generate_master_key_pair(&user_kp) != 0) goto cleanup;
-    if (generate_csr(&user_kp, actual_username, &user_csr) != HSC_OK) goto cleanup; // [修改]
+    if (generate_csr(&user_kp, actual_username, &user_csr) != HSC_OK) goto cleanup; 
     if (sign_csr_with_ca(&user_cert, user_csr, ca_key, ca_cert, 0, 31536000L) != 0) goto cleanup;
 
     int res = verify_user_certificate(user_cert, ca_cert, expected_username);
-    // [修改] 使用新的错误码宏进行断言
+    
     if (res != HSC_ERROR_CERT_SUBJECT_MISMATCH) {
         fprintf(stderr, "    > FAILED: Verification with wrong subject must fail with error (%d), but got %d\n", HSC_ERROR_CERT_SUBJECT_MISMATCH, res);
         goto cleanup;
@@ -176,19 +192,22 @@ cleanup:
 static int test_verification_expired_cert() {
     printf("  Running test: test_verification_expired_cert...\n");
     int ret = -1;
-    master_key_pair user_kp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair user_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     char* ca_key = NULL, *ca_cert = NULL, *user_csr = NULL, *user_cert = NULL;
     const char* username = "expired.user@test.com";
 
     if (generate_test_ca(&ca_key, &ca_cert, 0xFF) != 0) goto cleanup;
     if (generate_master_key_pair(&user_kp) != 0) goto cleanup;
-    if (generate_csr(&user_kp, username, &user_csr) != HSC_OK) goto cleanup; // [修改]
+    if (generate_csr(&user_kp, username, &user_csr) != HSC_OK) goto cleanup; 
     
     // 签发一个在2秒前生效，1秒前就已过期的证书
     if (sign_csr_with_ca(&user_cert, user_csr, ca_key, ca_cert, -2, -1) != 0) goto cleanup;
 
     int res = verify_user_certificate(user_cert, ca_cert, username);
-    // [修改] 使用新的错误码宏进行断言
+    
     if (res != HSC_ERROR_CERT_CHAIN_OR_VALIDITY) {
         fprintf(stderr, "    > FAILED: Verification of expired cert must fail with error (%d), but got %d\n", HSC_ERROR_CERT_CHAIN_OR_VALIDITY, res);
         goto cleanup;
@@ -210,19 +229,22 @@ cleanup:
 static int test_verification_not_yet_valid_cert() {
     printf("  Running test: test_verification_not_yet_valid_cert...\n");
     int ret = -1;
-    master_key_pair user_kp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair user_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     char* ca_key = NULL, *ca_cert = NULL, *user_csr = NULL, *user_cert = NULL;
     const char* username = "future.user@test.com";
 
     if (generate_test_ca(&ca_key, &ca_cert, 0x11) != 0) goto cleanup;
     if (generate_master_key_pair(&user_kp) != 0) goto cleanup;
-    if (generate_csr(&user_kp, username, &user_csr) != HSC_OK) goto cleanup; // [修改]
+    if (generate_csr(&user_kp, username, &user_csr) != HSC_OK) goto cleanup; 
     
     // 签发一个1小时后才生效的证书
     if (sign_csr_with_ca(&user_cert, user_csr, ca_key, ca_cert, 3600, 3600 + 31536000L) != 0) goto cleanup;
 
     int res = verify_user_certificate(user_cert, ca_cert, username);
-    // [修改] 使用新的错误码宏进行断言
+    
     if (res != HSC_ERROR_CERT_CHAIN_OR_VALIDITY) {
         fprintf(stderr, "    > FAILED: Verification of not-yet-valid cert must fail with error (%d), but got %d\n", HSC_ERROR_CERT_CHAIN_OR_VALIDITY, res);
         goto cleanup;
@@ -240,7 +262,7 @@ cleanup:
 
 
 int main() {
-    if (crypto_client_init() != 0 || pki_init() != HSC_OK) { // [修改]
+    if (crypto_client_init() != 0 || pki_init() != HSC_OK) { 
         fprintf(stderr, "Fatal: Library initialization failed\n");
         return 1;
     }

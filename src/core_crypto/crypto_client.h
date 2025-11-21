@@ -7,11 +7,32 @@
 
 // --- 数据结构定义 ---
 
-// [修复] 为主密钥对结构体添加了标签名 `master_key_pair_s`，以便进行前向声明。
+/**
+ * @brief 主密钥对结构体 (重构版: 强制密钥分离)
+ * 
+ * [安全修复说明 - 密钥分离原则]
+ * 原始设计中，同一个密钥同时用于 Ed25519 签名和 X25519 加密。
+ * 现在的设计将它们在内存中强制隔离：
+ * 1. Identity Key (Ed25519): 仅用于签署 CSR、证书验证等身份操作。
+ * 2. Encryption Key (X25519): 仅用于密钥封装 (Key Encapsulation)。
+ * 
+ * [当前实现的限制与风险警告]
+ * 虽然实现了内存隔离，但为了保持与现有 X.509 PKI 基础设施的兼容性，
+ * encryption_sk 目前仍是在加载时通过数学转换从 identity_sk 派生的。
+ * 这意味着如果 identity_sk 泄露，encryption_sk 也会泄露（缺乏完全的前向保密性）。
+ * 未来的版本应考虑通过签名机制分发独立的、可轮换的加密子密钥。
+ */
 typedef struct master_key_pair_s {
-    unsigned char pk[MASTER_PUBLIC_KEY_BYTES];
-    // 使用 `secure_alloc` 分配，确保私钥在受保护的内存中
-    unsigned char* sk; 
+    // --- 1. 身份与签名密钥 (Ed25519) ---
+    unsigned char identity_pk[MASTER_PUBLIC_KEY_BYTES];
+    // [敏感数据] 指向安全内存，仅用于 crypto_sign 操作
+    unsigned char* identity_sk; 
+
+    // --- 2. 数据加密密钥 (X25519) ---
+    // 注意：在当前版本中，这是从 Identity Key 转换而来的。
+    unsigned char encryption_pk[crypto_box_PUBLICKEYBYTES];
+    // [敏感数据] 指向安全内存，仅用于 crypto_box/seal 操作
+    unsigned char* encryption_sk; 
 } master_key_pair;
 
 // [修复] 为恢复密钥结构体添加了标签名 `recovery_key_s`，以保持一致性。
@@ -51,7 +72,8 @@ void crypto_client_cleanup();
 const unsigned char* get_global_pepper(size_t* out_len);
 
 /**
- * @brief 生成一个全新的主密钥对 (公钥 + 私钥)
+ * @brief 生成一个全新的主密钥对
+ *        [变更] 此函数现在会同时生成 Identity Key，并派生出隔离的 Encryption Key。
  * @param kp 指向 master_key_pair 结构体的指针，用于存储生成的密钥对
  * @return 成功返回 0，失败返回 -1。私钥存储在安全内存中
  */
@@ -59,6 +81,7 @@ int generate_master_key_pair(master_key_pair* kp);
 
 /**
  * @brief 释放主密钥对占用的安全内存
+ *        [变更] 会分别擦除 identity_sk 和 encryption_sk
  * @param kp 指向要释放的密钥对结构体
  */
 void free_master_key_pair(master_key_pair* kp);
@@ -161,38 +184,43 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
  * @brief 规范 4 - 阶段三 - 4: 封装会话密钥 (非对称加密)
  *        使用我方的私钥和接收者的公钥，加密一个会话密钥
  *        输出格式为 [nonce || encrypted_key]，其中 nonce 长度为 crypto_box_NONCEBYTES
+ * 
+ *        [修复] 参数更新:
+ *        @param my_sign_sk 现已弃用，应传入明确的 encryption_sk
  *
- * @param encrypted_output (输出) 存放加密结果的缓冲区。其大小必须至少为
- *                       crypto_box_NONCEBYTES + session_key_len + crypto_box_MACBYTES
+ * @param encrypted_output (输出) 存放加密结果的缓冲区
  * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度
  * @param session_key 要加密的会话密钥明文
  * @param session_key_len 会话密钥的长度
- * @param recipient_sign_pk 接收者的 Ed25519 主公钥
- * @param my_sign_sk 我方（发送者）的 Ed25519 主私钥
+ * @param recipient_sign_pk 接收者的 Ed25519 主公钥 (函数内部会处理到 X25519 的转换)
+ * @param my_enc_sk 我方（发送者）的 X25519 加密私钥 (对应 master_key_pair.encryption_sk)
  * @return 成功返回 0，失败返回 -1
  */
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
                             const unsigned char* recipient_sign_pk,
-                            const unsigned char* my_sign_sk);
+                            const unsigned char* my_enc_sk);
 
 /**
  * @brief 解封装会话密钥 (非对称解密)
  *        使用我方的私钥和发送者的公钥，解密一个会话密钥
  *        输入数据格式应为 [nonce || encrypted_key]
+ * 
+ *        [修复] 参数更新:
+ *        @param my_sign_sk 现已弃用，应传入明确的 encryption_sk
  *
  * @param decrypted_output (输出) 存放解密后的会-话密钥的缓冲区
  * @param encrypted_input 要解密的封装数据
  * @param encrypted_input_len 封装数据的长度
- * @param sender_sign_pk 发送者的 Ed25519 主公钥
- * @param my_sign_sk 我方（接收者）的 Ed25519 主私钥
+ * @param sender_sign_pk 发送者的 Ed25519 主公钥 (函数内部会处理到 X25519 的转换)
+ * @param my_enc_sk 我方（接收者）的 X25519 加密私钥 (对应 master_key_pair.encryption_sk)
  * @return 成功返回 0，失败（如验证失败）返回 -1
  */
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
                             const unsigned char* sender_sign_pk,
-                            const unsigned char* my_sign_sk);
+                            const unsigned char* my_enc_sk);
 
 
 #endif // CRYPTO_CLIENT_H

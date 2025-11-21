@@ -9,8 +9,6 @@
 #include <curl/curl.h>
 
 #include "pki_handler.h"
-// [修复] 在此实现文件中包含了 crypto_client.h 以获取 master_key_pair 结构体的完整定义。
-// 这是必要的，因为我们需要访问其内部成员，如 mkp->sk。
 #include "../core_crypto/crypto_client.h" 
 #include "../common/secure_memory.h"
 #include "../../include/hsc_kernel.h"
@@ -34,8 +32,6 @@
 
 /**
  * @brief 内部辅助函数，用于将 OpenSSL 的错误队列内容路由到日志系统。
- *        它会遍历所有待处理的 OpenSSL 错误，并将它们格式化为字符串，
- *        然后通过 _hsc_log 发送出去，而不是直接打印到 stderr。
  */
 static void _hsc_log_openssl_error_queue() {
     unsigned long err_code;
@@ -46,7 +42,6 @@ static void _hsc_log_openssl_error_queue() {
     }
 }
 
-// 重新定义错误宏，以使用新的日志系统
 #define LOG_PKI_ERROR(msg) do { \
     _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: %s", msg); \
     _hsc_log_openssl_error_queue(); \
@@ -84,12 +79,12 @@ void free_csr_pem(char* csr_pem) {
 }
 
 int generate_csr(const master_key_pair* mkp, const char* username, char** out_csr_pem) {
-    if (mkp == NULL || mkp->sk == NULL || username == NULL || out_csr_pem == NULL) {
+    if (mkp == NULL || mkp->identity_sk == NULL || username == NULL || out_csr_pem == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
     *out_csr_pem = NULL;
 
-    int ret = HSC_ERROR_PKI_OPERATION; // 默认返回 PKI 操作失败
+    int ret = HSC_ERROR_PKI_OPERATION;
     EVP_PKEY* pkey = NULL;
     X509_REQ* req = NULL;
     BIO* bio = NULL;
@@ -103,11 +98,10 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
         goto cleanup; 
     }
     
-    crypto_sign_ed25519_sk_to_seed(private_seed, mkp->sk);
+    crypto_sign_ed25519_sk_to_seed(private_seed, mkp->identity_sk);
     
     pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_seed, crypto_sign_SEEDBYTES);
     
-    // [修复建议已采纳] 立即清理敏感的种子数据，缩短其在内存中的生命周期。
     OPENSSL_cleanse(private_seed, crypto_sign_SEEDBYTES);
     secure_free(private_seed);
     private_seed = NULL;
@@ -141,7 +135,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
         if (*out_csr_pem) {
             memcpy(*out_csr_pem, mem->data, mem->length);
             (*out_csr_pem)[mem->length] = '\0';
-            ret = HSC_OK; // 成功
+            ret = HSC_OK;
         } else {
              _hsc_log(HSC_LOG_LEVEL_ERROR, "malloc failed for CSR PEM string.");
              ret = HSC_ERROR_ALLOCATION_FAILED;
@@ -149,10 +143,12 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     }
     
 cleanup:
-    // private_seed 相关的清理已提前完成。
     BIO_free(bio);
     X509_REQ_free(req);
     EVP_PKEY_free(pkey);
+    
+    ERR_clear_error();
+    
     return ret;
 }
 
@@ -173,7 +169,6 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
     size_t realsize = size * nmemb;
     struct memory_chunk* mem = (struct memory_chunk*)userp;
 
-    // 虽然 libcurl 会提前中止，但这层检查作为深度防御依然保留。
     if (mem->size + realsize > MAX_OCSP_RESPONSE_SIZE) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: Response exceeds the maximum allowed size of %d MB. Aborting.", MAX_OCSP_RESPONSE_SIZE / (1024*1024));
         return 0; 
@@ -187,13 +182,9 @@ static size_t write_callback(void* contents, size_t size, size_t nmemb, void* us
             new_capacity = MAX_OCSP_RESPONSE_SIZE;
         }
 
-        // [COMMITTEE FIX] 使用临时指针安全地调用 realloc，防止内存泄漏。
-        // 只有在 realloc 成功后才更新原始指针。
         char* new_ptr = realloc(mem->memory, new_capacity);
         if (new_ptr == NULL) {
             _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: not enough memory (realloc returned NULL)");
-            // 此时不应 free(mem->memory)，因为原始内存块仍然有效，
-            // 只是无法扩展。直接返回错误，让调用者处理。
             return 0;
         }
         mem->memory = new_ptr;
@@ -220,6 +211,21 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, OCSP_HTTP_CONNECT_TIMEOUT_SECONDS);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, OCSP_HTTP_TOTAL_TIMEOUT_SECONDS);
         curl_easy_setopt(curl, CURLOPT_URL, url);
+        
+        // [FIX]: 严格防御 SSRF (服务端请求伪造) 攻击，并处理版本兼容性
+        // 恶意证书可能会在 AIA 扩展中包含 file://, gopher://, ftp:// 等危险协议
+        // 导致服务器读取本地文件或扫描内网。
+        
+        #if LIBCURL_VERSION_NUM >= 0x075500 // 7.85.0
+            // 新版 Libcurl 使用字符串 API
+            curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+            curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+        #else
+            // 旧版 Libcurl 使用位掩码 API (已废弃但对于旧版是必须的)
+            curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+            curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+        #endif
+        
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
@@ -229,13 +235,10 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         
-        // [修复] 利用 libcurl 的内置功能来防御资源耗尽攻击。
-        // 这会告诉 libcurl 在下载的数据量超过 MAX_OCSP_RESPONSE_SIZE 时立即中止传输。
         curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)MAX_OCSP_RESPONSE_SIZE);
         
         res = curl_easy_perform(curl);
 
-        // [修复] 明确检查是否因为文件过大而失败。
         if (res == CURLE_FILESIZE_EXCEEDED) {
             _hsc_log(HSC_LOG_LEVEL_ERROR, "OCSP Error: Response from server exceeded the maximum allowed size of %d MB.", MAX_OCSP_RESPONSE_SIZE / (1024*1024));
             free(chunk.memory);

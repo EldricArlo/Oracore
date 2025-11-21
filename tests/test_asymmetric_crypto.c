@@ -20,21 +20,31 @@
 int test_key_generation() {
     printf("  Running test: test_key_generation...\n");
     int ret = -1; // [修改] 默认为失败
-    master_key_pair mkp = { .sk = NULL };
+    
+    // [修复] 初始化新的结构体成员
+    master_key_pair mkp = { .identity_sk = NULL, .encryption_sk = NULL };
 
     if (generate_master_key_pair(&mkp) != 0) {
         fprintf(stderr, "TEST FAILED: generate_master_key_pair should succeed (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
-    if (mkp.sk == NULL) {
-        fprintf(stderr, "TEST FAILED: Secret key pointer should not be NULL (%s:%d)\n", __FILE__, __LINE__);
+    
+    // [修复] 验证两个私钥都已分配
+    if (mkp.identity_sk == NULL) {
+        fprintf(stderr, "TEST FAILED: Identity secret key pointer should not be NULL (%s:%d)\n", __FILE__, __LINE__);
+        goto cleanup;
+    }
+    if (mkp.encryption_sk == NULL) {
+        fprintf(stderr, "TEST FAILED: Encryption secret key pointer should not be NULL (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
 
     // 释放并验证
     free_master_key_pair(&mkp);
-    if (mkp.sk != NULL) {
-        fprintf(stderr, "TEST FAILED: Secret key pointer should be NULL after free (%s:%d)\n", __FILE__, __LINE__);
+    
+    // [修复] 验证两个私钥都已置空
+    if (mkp.identity_sk != NULL || mkp.encryption_sk != NULL) {
+        fprintf(stderr, "TEST FAILED: Secret key pointers should be NULL after free (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
     
@@ -53,8 +63,11 @@ cleanup:
 int test_key_encapsulation_roundtrip() {
     printf("  Running test: test_key_encapsulation_roundtrip...\n");
     int ret = -1; // [修改]
-    master_key_pair alice_kp = { .sk = NULL };
-    master_key_pair bob_kp = { .sk = NULL };
+    
+    // [修复] 初始化
+    master_key_pair alice_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    master_key_pair bob_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     unsigned char* encapsulated_key = NULL;
     unsigned char* decrypted_session_key = NULL;
 
@@ -77,8 +90,13 @@ int test_key_encapsulation_roundtrip() {
         goto cleanup;
     }
 
+    // [修复] 参数映射:
+    // recipient_pk -> bob_kp.identity_pk (函数内部会转换为 X25519)
+    // sender_sk    -> alice_kp.encryption_sk (直接使用加密私钥)
     size_t encapsulated_len;
-    if (encapsulate_session_key(encapsulated_key, &encapsulated_len, session_key, sizeof(session_key), bob_kp.pk, alice_kp.sk) != 0) {
+    if (encapsulate_session_key(encapsulated_key, &encapsulated_len, 
+                                session_key, sizeof(session_key), 
+                                bob_kp.identity_pk, alice_kp.encryption_sk) != 0) {
         fprintf(stderr, "TEST FAILED: encapsulate_session_key should succeed (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
@@ -89,7 +107,11 @@ int test_key_encapsulation_roundtrip() {
         goto cleanup;
     }
 
-    if (decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, alice_kp.pk, bob_kp.sk) != 0) {
+    // [修复] 参数映射:
+    // sender_pk    -> alice_kp.identity_pk (函数内部会转换为 X25519)
+    // recipient_sk -> bob_kp.encryption_sk (直接使用加密私钥)
+    if (decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, 
+                                alice_kp.identity_pk, bob_kp.encryption_sk) != 0) {
         fprintf(stderr, "TEST FAILED: decapsulate_session_key should succeed (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
@@ -116,9 +138,12 @@ cleanup:
 int test_decapsulation_wrong_recipient() {
     printf("  Running test: test_decapsulation_wrong_recipient...\n");
     int ret = -1; // [修改]
-    master_key_pair alice_kp = { .sk = NULL };
-    master_key_pair bob_kp = { .sk = NULL };
-    master_key_pair eve_kp = { .sk = NULL };
+    
+    // [修复] 初始化
+    master_key_pair alice_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    master_key_pair bob_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    master_key_pair eve_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     unsigned char* encapsulated_key = NULL;
     unsigned char* decrypted_session_key = NULL;
 
@@ -135,12 +160,17 @@ int test_decapsulation_wrong_recipient() {
     if (!encapsulated_key) goto cleanup;
 
     size_t encapsulated_len;
-    encapsulate_session_key(encapsulated_key, &encapsulated_len, session_key, sizeof(session_key), bob_kp.pk, alice_kp.sk);
+    // [修复] 使用新的成员变量
+    encapsulate_session_key(encapsulated_key, &encapsulated_len, 
+                            session_key, sizeof(session_key), 
+                            bob_kp.identity_pk, alice_kp.encryption_sk);
 
     decrypted_session_key = secure_alloc(sizeof(session_key));
     if (!decrypted_session_key) goto cleanup;
 
-    int res_dec = decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, alice_kp.pk, eve_kp.sk);
+    // [修复] 使用 Eve 的 encryption_sk 进行解密，预期失败
+    int res_dec = decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, 
+                                          alice_kp.identity_pk, eve_kp.encryption_sk);
     if (res_dec != -1) {
         fprintf(stderr, "TEST FAILED: Decapsulation with wrong recipient key must fail (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
@@ -164,9 +194,12 @@ cleanup:
 int test_decapsulation_wrong_sender() {
     printf("  Running test: test_decapsulation_wrong_sender...\n");
     int ret = -1; // [修改]
-    master_key_pair alice_kp = { .sk = NULL };
-    master_key_pair bob_kp = { .sk = NULL };
-    master_key_pair eve_kp = { .sk = NULL };
+    
+    // [修复] 初始化
+    master_key_pair alice_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    master_key_pair bob_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    master_key_pair eve_kp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     unsigned char* encapsulated_key = NULL;
     unsigned char* decrypted_session_key = NULL;
 
@@ -183,12 +216,17 @@ int test_decapsulation_wrong_sender() {
     if (!encapsulated_key) goto cleanup;
 
     size_t encapsulated_len;
-    encapsulate_session_key(encapsulated_key, &encapsulated_len, session_key, sizeof(session_key), bob_kp.pk, alice_kp.sk);
+    // [修复] 使用新的成员变量
+    encapsulate_session_key(encapsulated_key, &encapsulated_len, 
+                            session_key, sizeof(session_key), 
+                            bob_kp.identity_pk, alice_kp.encryption_sk);
 
     decrypted_session_key = secure_alloc(sizeof(session_key));
     if (!decrypted_session_key) goto cleanup;
 
-    int res_dec = decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, eve_kp.pk, bob_kp.sk);
+    // [修复] 告诉接收者这是 Eve 发的 (Eve's identity_pk)，预期失败
+    int res_dec = decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, 
+                                          eve_kp.identity_pk, bob_kp.encryption_sk);
     if (res_dec != -1) {
         fprintf(stderr, "TEST FAILED: Decapsulation with wrong sender key must fail (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;

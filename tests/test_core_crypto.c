@@ -57,9 +57,14 @@ void test_initialization() {
 }
 
 void test_key_generation() {
-    master_key_pair mkp;
+    // [修复] 初始化新的结构体成员，确保指针为 NULL
+    master_key_pair mkp = { .identity_sk = NULL, .encryption_sk = NULL };
+    
     _verify(generate_master_key_pair(&mkp) == 0);
-    _verify(mkp.sk != NULL);
+    
+    // [修复] 验证两个私钥都已分配
+    _verify(mkp.identity_sk != NULL);
+    _verify(mkp.encryption_sk != NULL);
 
     recovery_key rk;
     _verify(generate_recovery_key(&rk) == 0);

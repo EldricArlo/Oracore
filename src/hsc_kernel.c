@@ -135,7 +135,6 @@ int hsc_init() {
 }
 
 void hsc_cleanup() {
-    // 调用底层密码学模块的清理函数以释放胡椒。
     crypto_client_cleanup();
     curl_global_cleanup();
 }
@@ -150,20 +149,19 @@ hsc_master_key_pair* hsc_generate_master_key_pair() {
     hsc_master_key_pair* kp = malloc(sizeof(hsc_master_key_pair));
     if (!kp) return NULL;
     
-    // 初始化内部指针，这对 hsc_free_master_key_pair 在出错时是至关重要的
-    kp->internal_kp.sk = NULL;
+    // [修复] 初始化新的分离指针
+    kp->internal_kp.identity_sk = NULL;
+    kp->internal_kp.encryption_sk = NULL;
 
+    // 调用更新后的底层函数，它会处理内存分配和双密钥生成
     if (generate_master_key_pair(&kp->internal_kp) != 0) {
-        // [修复] 此处的 hsc_free_master_key_pair 调用是安全的，
-        // 因为即使 internal_kp.sk 分配失败，它也会是 NULL。
-        // 而如果 malloc 失败，我们已经提前返回了。
         hsc_free_master_key_pair(&kp);
         return NULL;
     }
     return kp;
 }
 
-// [修复] 重构整个函数以确保在任何失败路径上都能正确清理资源。
+// [修复] 彻底重构加载逻辑以支持密钥分离
 hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_key_path) {
     if (priv_key_path == NULL) return NULL;
     
@@ -173,37 +171,64 @@ hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(const char* priv_
         return NULL;
     }
     
-    // 关键步骤：在进行任何可能失败的操作之前，将内部指针初始化为 NULL。
-    // 这确保了即使后续操作失败，调用 hsc_free_master_key_pair 也是安全的。
-    kp->internal_kp.sk = NULL;
+    // 安全初始化
+    kp->internal_kp.identity_sk = NULL;
+    kp->internal_kp.encryption_sk = NULL;
 
-    kp->internal_kp.sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
-    if (!kp->internal_kp.sk) {
-        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to allocate secure memory for private key.");
-        // secure_alloc 失败，只需释放外层结构体。
+    // 1. 分配并加载身份私钥 (Identity Key - Ed25519)
+    kp->internal_kp.identity_sk = secure_alloc(HSC_MASTER_SECRET_KEY_BYTES);
+    if (!kp->internal_kp.identity_sk) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to allocate secure memory for identity private key.");
         free(kp);
         return NULL;
     }
 
-    if (!read_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
+    if (!read_key_file(priv_key_path, kp->internal_kp.identity_sk, HSC_MASTER_SECRET_KEY_BYTES)) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to read private key file: %s", priv_key_path);
-        // read_key_file 失败，此时 sk 和 kp 都已分配，
-        // 调用 hsc_free_master_key_pair 会安全地清理两者。
         hsc_free_master_key_pair(&kp);
         return NULL;
     }
 
-    // 所有操作成功，派生公钥并返回。
-    crypto_sign_ed25519_sk_to_pk(kp->internal_kp.pk, kp->internal_kp.sk);
+    // 2. 派生身份公钥
+    if (crypto_sign_ed25519_sk_to_pk(kp->internal_kp.identity_pk, kp->internal_kp.identity_sk) != 0) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to derive identity public key.");
+        hsc_free_master_key_pair(&kp);
+        return NULL;
+    }
+
+    // 3. [关键修复] 分配并派生隔离的加密私钥 (Encryption Key - X25519)
+    // 即使是从磁盘加载，我们也需要在内存中创建第二份独立的密钥材料
+    kp->internal_kp.encryption_sk = secure_alloc(crypto_box_SECRETKEYBYTES);
+    if (!kp->internal_kp.encryption_sk) {
+         _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to allocate secure memory for encryption private key.");
+         hsc_free_master_key_pair(&kp);
+         return NULL;
+    }
+
+    // 执行 Ed25519 SK -> X25519 SK 转换
+    if (crypto_sign_ed25519_sk_to_curve25519(kp->internal_kp.encryption_sk, kp->internal_kp.identity_sk) != 0) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to derive encryption private key.");
+        hsc_free_master_key_pair(&kp);
+        return NULL;
+    }
+
+    // 执行 Ed25519 PK -> X25519 PK 转换 (填充结构体中的 encryption_pk)
+    if (crypto_sign_ed25519_pk_to_curve25519(kp->internal_kp.encryption_pk, kp->internal_kp.identity_pk) != 0) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to derive encryption public key.");
+        hsc_free_master_key_pair(&kp);
+        return NULL;
+    }
+
     return kp;
 }
 
 int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_path, const char* priv_key_path) {
-    if (kp == NULL || kp->internal_kp.sk == NULL || pub_key_path == NULL || priv_key_path == NULL) {
+    // [修复] 使用 identity_sk/pk 进行持久化，保持与现有磁盘格式兼容
+    if (kp == NULL || kp->internal_kp.identity_sk == NULL || pub_key_path == NULL || priv_key_path == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
-    if (!write_key_file(pub_key_path, kp->internal_kp.pk, HSC_MASTER_PUBLIC_KEY_BYTES) ||
-        !write_key_file(priv_key_path, kp->internal_kp.sk, HSC_MASTER_SECRET_KEY_BYTES)) {
+    if (!write_key_file(pub_key_path, kp->internal_kp.identity_pk, HSC_MASTER_PUBLIC_KEY_BYTES) ||
+        !write_key_file(priv_key_path, kp->internal_kp.identity_sk, HSC_MASTER_SECRET_KEY_BYTES)) {
         return HSC_ERROR_FILE_IO;
     }
     return HSC_OK;
@@ -211,7 +236,8 @@ int hsc_save_master_key_pair(const hsc_master_key_pair* kp, const char* pub_key_
 
 void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
     if (kp == NULL || *kp == NULL) return;
-    free_master_key_pair(&(*kp)->internal_kp); // 此函数负责安全释放 internal_kp.sk
+    // 这里的 free_master_key_pair 现在会同时擦除 identity_sk 和 encryption_sk
+    free_master_key_pair(&(*kp)->internal_kp); 
     free(*kp); 
     *kp = NULL;
 }
@@ -220,7 +246,8 @@ int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* publ
     if (kp == NULL || public_key_out == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
-    memcpy(public_key_out, kp->internal_kp.pk, HSC_MASTER_PUBLIC_KEY_BYTES);
+    // 返回身份公钥
+    memcpy(public_key_out, kp->internal_kp.identity_pk, HSC_MASTER_PUBLIC_KEY_BYTES);
     return HSC_OK;
 }
 
@@ -228,6 +255,7 @@ int hsc_get_master_public_key(const hsc_master_key_pair* kp, unsigned char* publ
 
 int hsc_generate_csr(const hsc_master_key_pair* mkp, const char* username, char** out_csr_pem) {
     if (mkp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
+    // PKI 模块需要使用 Identity Key 进行签名
     return generate_csr(&mkp->internal_kp, username, out_csr_pem);
 }
 
@@ -247,13 +275,15 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem, unsigned char* p
 
 int hsc_encapsulate_session_key(unsigned char* encrypted_output, size_t* encrypted_output_len, const unsigned char* session_key, size_t session_key_len, const unsigned char* recipient_pk, const hsc_master_key_pair* my_kp) {
     if (my_kp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
-    int result = encapsulate_session_key(encrypted_output, encrypted_output_len, session_key, session_key_len, recipient_pk, my_kp->internal_kp.sk);
+    // [关键修复] 传入明确的 encryption_sk，不再传入 identity_sk
+    int result = encapsulate_session_key(encrypted_output, encrypted_output_len, session_key, session_key_len, recipient_pk, my_kp->internal_kp.encryption_sk);
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 int hsc_decapsulate_session_key(unsigned char* decrypted_output, const unsigned char* encrypted_input, size_t encrypted_input_len, const unsigned char* sender_pk, const hsc_master_key_pair* my_kp) {
     if (my_kp == NULL) return HSC_ERROR_INVALID_ARGUMENT;
-    int result = decapsulate_session_key(decrypted_output, encrypted_input, encrypted_input_len, sender_pk, my_kp->internal_kp.sk);
+    // [关键修复] 传入明确的 encryption_sk，不再传入 identity_sk
+    int result = decapsulate_session_key(decrypted_output, encrypted_input, encrypted_input_len, sender_pk, my_kp->internal_kp.encryption_sk);
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
@@ -339,6 +369,8 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
     unsigned char encapsulated_key[HSC_SESSION_KEY_BYTES + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES];
     size_t actual_encapsulated_len;
     hsc_random_bytes(session_key, HSC_SESSION_KEY_BYTES);
+    
+    // [修复] API 已经更新，内部会自动使用 encryption_sk，这里无需变更调用，只需确保 hsc_encapsulate_session_key 传递正确
     if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len,
                                 session_key, HSC_SESSION_KEY_BYTES,
                                 recipient_pk, sender_kp) != HSC_OK) {
@@ -405,6 +437,8 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     }
     dec_session_key = hsc_secure_alloc(HSC_SESSION_KEY_BYTES);
     if (!dec_session_key) { ret_code = HSC_ERROR_ALLOCATION_FAILED; goto cleanup; }
+    
+    // [修复] 内部自动使用 encryption_sk 进行解封装
     if (hsc_decapsulate_session_key(dec_session_key, encapsulated_key, enc_key_len, sender_pk, recipient_kp) != HSC_OK) {
         ret_code = HSC_ERROR_CRYPTO_OPERATION; goto cleanup;
     }
@@ -454,13 +488,8 @@ void hsc_set_log_callback(hsc_log_callback callback) {
     g_log_callback = callback;
 }
 
-// 定义日志缓冲区大小为 2KB，足够容纳大多数日志消息，同时在栈上也是安全的。
 #define HSC_LOG_BUFFER_SIZE 2048
 
-// [COMMITTEE FIX] 重构日志函数：
-// 移除动态内存分配 (malloc)，改用固定大小的栈缓冲区。
-// 这种方法确保了在内存极度紧张的情况下（OOM），日志系统本身不会分配失败，
-// 从而保证了错误的可观测性。如果消息过长，vsnprintf 会安全地截断它。
 void _hsc_log(int level, const char* format, ...) {
     if (g_log_callback == NULL) {
         return;
@@ -470,14 +499,9 @@ void _hsc_log(int level, const char* format, ...) {
 
     va_list args;
     va_start(args, format);
-
-    // vsnprintf 保证不会写入超过缓冲区大小的数据（包括终止符）。
-    // 如果消息被截断，它返回“原本应该写入”的长度，但这不影响安全性。
     vsnprintf(buffer, sizeof(buffer), format, args);
-    
     va_end(args);
 
-    // 此时 buffer 一定是以 null 结尾的字符串
     g_log_callback(level, buffer);
 }
 
@@ -485,21 +509,17 @@ void _hsc_log(int level, const char* format, ...) {
 // --- 专家级API实现 ---
 // =======================================================================
 
-// 移除硬编码的胡椒
-// static const unsigned char g_internal_pepper[32] = { ... };
-
 int hsc_derive_key_from_password(unsigned char* derived_key, size_t derived_key_len,
                                    const char* password, const unsigned char* salt) {
     if (derived_key == NULL || password == NULL || salt == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
     
-    // 从底层模块动态获取在初始化时加载的胡椒
     size_t pepper_len = 0;
     const unsigned char* pepper = get_global_pepper(&pepper_len);
     if (pepper == NULL || pepper_len == 0) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "FATAL: Global pepper is not available. Was hsc_init() called and successful?");
-        return HSC_ERROR_GENERAL; // 表示库未正确初始化
+        return HSC_ERROR_GENERAL;
     }
 
     int result = derive_key_from_password(
@@ -545,7 +565,6 @@ int hsc_aead_encrypt_detached(unsigned char* ciphertext, unsigned char* tag_out,
     return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
-// [COMMITTEE FIX] 实现新的、更安全的 detached 加密API
 int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag_out, unsigned char* nonce_out,
                                    const unsigned char* message, size_t message_len,
                                    const unsigned char* additional_data, size_t ad_len,
@@ -554,10 +573,8 @@ int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, unsigned char* tag
         return HSC_ERROR_INVALID_ARGUMENT;
     }
     
-    // 关键步骤：在函数内部安全地生成 nonce
     hsc_random_bytes(nonce_out, HSC_AEAD_NONCE_BYTES);
     
-    // 调用底层的、现有的 detached 加密函数
     int result = encrypt_symmetric_aead_detached(ciphertext, tag_out, message, message_len,
                                                  additional_data, ad_len, nonce_out, key);
 

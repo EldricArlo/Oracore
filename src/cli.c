@@ -54,16 +54,22 @@ static void cli_logger(int level, const char* message) {
 
 // --- 辅助函数 ---
 void print_usage(const char* prog_name) {
-    fprintf(stderr, "高安全性混合加密系统 v4.3 (日志回调版 CLI)\n\n");
+    fprintf(stderr, "高安全性混合加密系统 v4.4 (安全修复版 CLI)\n\n");
     fprintf(stderr, "用法: %s <命令> [参数...]\n\n", prog_name);
     fprintf(stderr, "命令列表:\n");
     fprintf(stderr, "  gen-keypair <basename>\n");
     fprintf(stderr, "  gen-csr <private-key-file> <username>\n");
     fprintf(stderr, "  verify-cert <cert-to-verify> --ca <ca-cert> --user <expected-user>\n");
+    
     fprintf(stderr, "  encrypt <file> --to <recipient-cert.pem> --from <sender.key> --ca <ca.pem> --user <user-cn>\n");
     fprintf(stderr, "               [--no-verify] (危险: 跳过对接收者证书的验证)\n");
+    
     fprintf(stderr, "  (原始密钥模式) encrypt <file> --recipient-pk-file <recipient.pub> --from <sender.key>\n");
-    fprintf(stderr, "  decrypt <file.hsc> --to <recipient.key> --from <sender-cert.pem>\n");
+    
+    // [FIX]: 更新帮助文档，反映 decrypt 命令现在需要 CA 和 User 参数
+    fprintf(stderr, "  decrypt <file.hsc> --to <recipient.key> --from <sender-cert.pem> --ca <ca.pem> --user <sender-cn>\n");
+    fprintf(stderr, "               [--no-verify] (危险: 跳过对发送者证书的验证)\n");
+    
     fprintf(stderr, "  (原始密钥模式) decrypt <file.hsc> --to <recipient.key> --sender-pk-file <sender.pub>\n");
 }
 
@@ -518,7 +524,7 @@ cleanup:
     return ret;
 }
 
-
+// [FIX]: handle_hybrid_decrypt 重构修复，强制执行发送者身份验证
 int handle_hybrid_decrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
     
@@ -526,21 +532,34 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     const char* sender_cert_file = NULL;
     const char* sender_pk_file = NULL;
     const char* recipient_priv_file = NULL;
+    
+    // [FIX]: 新增变量用于存储 CA 和 用户名
+    const char* ca_path = NULL;
+    const char* sender_cn = NULL;
+    bool no_verify_flag = false;
 
     static struct option long_options[] = {
         {"to",             required_argument, 0, 't'},
         {"from",           required_argument, 0, 'f'},
         {"sender-pk-file", required_argument, 0, 's'},
+        // [FIX]: 新增参数选项
+        {"ca",             required_argument, 0, 'c'},
+        {"user",           required_argument, 0, 'u'},
+        {"no-verify",      no_argument,       0, 'n'},
         {0, 0, 0, 0}
     };
     
     int opt;
     optind = 3;
-    while ((opt = getopt_long(argc, argv, "t:f:s:", long_options, NULL)) != -1) {
+    // [FIX]: 更新 getopt_long 格式字符串，包含 c, u, n
+    while ((opt = getopt_long(argc, argv, "t:f:s:c:u:n", long_options, NULL)) != -1) {
         switch (opt) {
             case 't': recipient_priv_file = optarg; break;
             case 'f': sender_cert_file = optarg; break;
             case 's': sender_pk_file = optarg; break;
+            case 'c': ca_path = optarg; break;       // [FIX]
+            case 'u': sender_cn = optarg; break;     // [FIX]
+            case 'n': no_verify_flag = true; break;  // [FIX]
             default: print_usage(argv[0]); return 1;
         }
     }
@@ -553,6 +572,13 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         return 1;
     }
 
+    // [FIX]: 针对证书模式，强制验证参数检查
+    if (sender_cert_file && !no_verify_flag && (!ca_path || !sender_cn)) {
+        fprintf(stderr, "错误: 使用证书解密时，必须提供 --ca 和 --user 参数以验证发送者身份。\n");
+        fprintf(stderr, "      如果您确认要跳过验证（不推荐），请添加 --no-verify 标志。\n");
+        return 1;
+    }
+
     char out_file[FILENAME_MAX];
     if (!create_output_path(out_file, sizeof(out_file), in_file, ".decrypted")) {
         fprintf(stderr, "错误: 生成的输出文件名过长。\n"); return 1;
@@ -560,10 +586,12 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
 
     int ret = 1;
     unsigned char* sender_cert_pem = NULL;
+    unsigned char* ca_cert_pem = NULL; // [FIX]: 用于存储 CA 证书
     hsc_master_key_pair* recipient_kp = NULL;
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
 
     if (sender_pk_file) {
+        // --- 原始公钥模式 (高风险) ---
         // [修复] 增加非交互式环境检测，防止脚本误用高风险模式
         if (!isatty(fileno(stdin))) {
             fprintf(stderr, "错误: 检测到非交互式环境 (非 TTY)。\n");
@@ -595,10 +623,35 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         }
         memcpy(sender_pk, pk_buf, HSC_MASTER_PUBLIC_KEY_BYTES);
         free(pk_buf);
+
     } else {
+        // --- 证书模式 (必须验证) ---
         size_t cert_len;
         sender_cert_pem = read_small_file(sender_cert_file, &cert_len);
         if (!sender_cert_pem) goto cleanup;
+
+        // [FIX]: 执行发送者证书验证
+        if (no_verify_flag) {
+             fprintf(stdout, "\n\033[31m[危险警告] 您已选择 --no-verify 选项。\n           系统将不会验证发送者证书的真实性、有效性或吊销状态。\n           解密后的数据可能来自伪造的发送者。\033[0m\n\n");
+        } else {
+            size_t ca_len;
+            ca_cert_pem = read_small_file(ca_path, &ca_len);
+            if (!ca_cert_pem) { 
+                fprintf(stderr, "错误: 无法读取 CA 证书文件 '%s'\n", ca_path);
+                goto cleanup; 
+            }
+
+            printf("正在验证发送者证书 '%s' ...\n", sender_cert_file);
+            int verify_result = hsc_verify_user_certificate((const char*)sender_cert_pem, (const char*)ca_cert_pem, sender_cn);
+            
+            if (verify_result != HSC_OK) {
+                fprintf(stderr, "\033[31m[致命错误]\033[0m 发送者证书验证失败 (代码: %d)！\n", verify_result);
+                fprintf(stderr, "可能原因: 证书过期、已被吊销、非受信任CA签发或用户名不匹配。\n");
+                fprintf(stderr, "为保障安全，解密操作已中止。\n");
+                goto cleanup; // Fail-Closed
+            }
+            printf("✅ 发送者身份验证成功。\n");
+        }
 
         if (hsc_extract_public_key_from_cert((const char*)sender_cert_pem, sender_pk) != HSC_OK) {
             fprintf(stderr, "错误: 无法从发送者证书 '%s' 中提取公钥。\n", sender_cert_file);
@@ -628,6 +681,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
 
 cleanup:
     free(sender_cert_pem);
+    free(ca_cert_pem); // [FIX]: 释放 CA 证书内存
     hsc_free_master_key_pair(&recipient_kp);
     if (ret != 0) remove(out_file);
     return ret;
