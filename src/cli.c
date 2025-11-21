@@ -26,6 +26,11 @@ extern int optind;
 
 #include "hsc_kernel.h"
 
+// --- 全局配置 ---
+// [FIX]: Finding #4 - 新增全局标志，用于控制是否强制允许非交互模式
+static bool g_force_non_interactive = false;
+
+
 // --- 日志回调实现 ---
 
 /**
@@ -54,8 +59,13 @@ static void cli_logger(int level, const char* message) {
 
 // --- 辅助函数 ---
 void print_usage(const char* prog_name) {
-    fprintf(stderr, "高安全性混合加密系统 v4.4 (安全修复版 CLI)\n\n");
+    fprintf(stderr, "高安全性混合加密系统 v4.5 (CI/CD 增强版 CLI)\n\n");
     fprintf(stderr, "用法: %s <命令> [参数...]\n\n", prog_name);
+    
+    // [FIX]: 文档更新
+    fprintf(stderr, "全局选项:\n");
+    fprintf(stderr, "  --force-non-interactive  允许在非 TTY 环境(如脚本)中使用高风险模式 (慎用!)\n\n");
+
     fprintf(stderr, "命令列表:\n");
     fprintf(stderr, "  gen-keypair <basename>\n");
     fprintf(stderr, "  gen-csr <private-key-file> <username>\n");
@@ -66,7 +76,6 @@ void print_usage(const char* prog_name) {
     
     fprintf(stderr, "  (原始密钥模式) encrypt <file> --recipient-pk-file <recipient.pub> --from <sender.key>\n");
     
-    // [FIX]: 更新帮助文档，反映 decrypt 命令现在需要 CA 和 User 参数
     fprintf(stderr, "  decrypt <file.hsc> --to <recipient.key> --from <sender-cert.pem> --ca <ca.pem> --user <sender-cn>\n");
     fprintf(stderr, "               [--no-verify] (危险: 跳过对发送者证书的验证)\n");
     
@@ -74,7 +83,6 @@ void print_usage(const char* prog_name) {
 }
 
 // [修复] 为文件读取定义一个统一、合理的上限，防止资源耗尽攻击。
-// 10MB 对于证书、密钥或小型配置文件来说是足够大的。
 #define MAX_READ_FILE_SIZE (10 * 1024 * 1024)
 
 unsigned char* read_small_file(const char* filename, size_t* out_len) {
@@ -94,7 +102,6 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         size_t bytes_read;
         while ((bytes_read = fread(buffer + size, 1, capacity - size, f)) > 0) {
             size += bytes_read;
-            // [修复] 检查读取的总大小是否已超过设定的硬性上限。
             if (size >= MAX_READ_FILE_SIZE) {
                 fprintf(stderr, "错误: 从标准输入读取的数据超过了 %d MB 的上限\n", MAX_READ_FILE_SIZE / (1024 * 1024));
                 free(buffer);
@@ -102,20 +109,25 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
             }
 
             if (size == capacity) {
-                // [修复] 在进行乘法运算前，检查是否会导致 size_t 溢出。
-                // 这是防止整数溢出攻击的关键步骤。
+                // [FIX]: Finding #3 - 优化整数溢出防御逻辑 (保留上次修复)
+                size_t next_capacity;
                 if (capacity > SIZE_MAX / 2) {
-                    fprintf(stderr, "错误: 输入数据流过大，无法安全地扩展缓冲区。\n");
+                    next_capacity = SIZE_MAX;
+                } else {
+                    next_capacity = capacity * 2;
+                }
+
+                if (next_capacity > MAX_READ_FILE_SIZE) {
+                    next_capacity = MAX_READ_FILE_SIZE;
+                }
+
+                if (next_capacity <= size) {
+                    fprintf(stderr, "错误: 输入数据流过大，无法安全地扩展缓冲区 (超过 %d MB)。\n", MAX_READ_FILE_SIZE / (1024 * 1024));
                     free(buffer);
                     return NULL;
                 }
-                capacity *= 2;
-                
-                // [修复] 确保新的容量不会超过我们的硬性上限。
-                if (capacity > MAX_READ_FILE_SIZE) {
-                    capacity = MAX_READ_FILE_SIZE;
-                }
 
+                capacity = next_capacity;
                 unsigned char* new_buffer = realloc(buffer, capacity);
                 if (!new_buffer) {
                     fprintf(stderr, "错误: 内存重分配失败\n");
@@ -125,7 +137,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
                 buffer = new_buffer;
             }
         }
-        buffer[size] = '\0'; // 尽管是二进制读取，为字符串使用保留空字符
+        buffer[size] = '\0';
         *out_len = size;
         return buffer;
 
@@ -140,15 +152,12 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         long file_size_long = ftell(f);
         fseek(f, 0, SEEK_SET);
 
-        // [COMMITTEE FIX] 采用更健壮的两步检查，以消除32位系统下的模糊性。
-        // 1. 首先，检查 ftell 是否返回任何错误（或在32位系统上文件 > 2GB）。
         if (file_size_long < 0) {
-            fprintf(stderr, "错误: 无法确定文件大小或文件超过2GB (在32位系统上): %s\n", filename);
+            fprintf(stderr, "错误: 无法确定文件大小或文件超过2GB: %s\n", filename);
             fclose(f);
             return NULL;
         }
 
-        // 2. 既然我们知道它是一个非负数，就可以安全地进行转换并与上限进行比较。
         size_t file_size = (size_t)file_size_long;
         if (file_size >= MAX_READ_FILE_SIZE) { 
             fprintf(stderr, "错误: 文件大小 (%zu bytes) 超过了允许的上限 (%d MB): %s\n", file_size, MAX_READ_FILE_SIZE / (1024 * 1024), filename);
@@ -172,7 +181,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         }
         
         fclose(f);
-        buffer[bytes_read] = '\0'; // 同样，为字符串使用保留空字符
+        buffer[bytes_read] = '\0';
         *out_len = bytes_read;
         return buffer;
     }
@@ -208,8 +217,12 @@ bool create_output_path(char* out_buf, size_t out_buf_size, const char* in_path,
 // --- 命令处理函数 ---
 
 int handle_gen_keypair(int argc, char* argv[]) {
-    if (argc != 3) { print_usage(argv[0]); return 1; }
-    const char* basename = argv[2];
+    // Skip checking argc rigidly here because global flags might shift indices
+    // We trust getopt/manual parsing logic in main or specific handlers
+    // For simplicity in this legacy handler, we just check the last 2 args
+    if (argc < 3) { print_usage(argv[0]); return 1; }
+    
+    const char* basename = argv[optind]; // Use optind from main
     char pub_path[FILENAME_MAX], priv_path[FILENAME_MAX];
     
     snprintf(pub_path, sizeof(pub_path), "%s.pub", basename);
@@ -232,8 +245,10 @@ int handle_gen_keypair(int argc, char* argv[]) {
 }
 
 int handle_gen_csr(int argc, char* argv[]) {
-    if (argc != 4) { print_usage(argv[0]); return 1; }
-    const char* priv_path = argv[2]; const char* user_cn = argv[3];
+    if (argc < 4) { print_usage(argv[0]); return 1; }
+    const char* priv_path = argv[optind]; 
+    const char* user_cn = argv[optind + 1];
+    
     char csr_path[FILENAME_MAX];
     
     if (!create_output_path(csr_path, sizeof(csr_path), priv_path, ".csr")) {
@@ -263,26 +278,41 @@ cleanup:
 }
 
 int handle_verify_cert(int argc, char* argv[]) {
-    if (argc < 3) { print_usage(argv[0]); return 1; }
+    // optind is set by main's getopt_long
+    if (argc - optind < 1) { print_usage(argv[0]); return 1; }
 
-    const char* cert_path = argv[2];
+    const char* cert_path = argv[optind];
     const char* ca_path = NULL;
     const char* user_cn = NULL;
 
     static struct option long_options[] = {
         {"ca",   required_argument, 0, 'c'},
         {"user", required_argument, 0, 'u'},
+        {"force-non-interactive", no_argument, 0, 'F'}, // Allow explicit ignore
         {0, 0, 0, 0}
     };
 
     int opt;
-    optind = 3;
-    while ((opt = getopt_long(argc, argv, "c:u:", long_options, NULL)) != -1) {
+    // Reset optind for this function's parsing, but we need to handle the fact
+    // that main already parsed global options.
+    // In this simple CLI structure, we'll re-parse or just parse remaining.
+    // Actually, handle_* functions are receiving the full argv.
+    // Let's use a local loop that skips the first command argument.
+    
+    optind = 2; // Skip prog_name and command
+    while ((opt = getopt_long(argc, argv, "c:u:F", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c': ca_path = optarg; break;
             case 'u': user_cn = optarg; break;
-            default: print_usage(argv[0]); return 1;
+            case 'F': g_force_non_interactive = true; break;
+            default: break; // Ignore unknown or handled by main
         }
+    }
+    // Update cert_path to be the first non-option argument
+    if (optind < argc) {
+        cert_path = argv[optind];
+    } else {
+        print_usage(argv[0]); return 1;
     }
 
     if (!cert_path || !ca_path || !user_cn) { print_usage(argv[0]); return 1; }
@@ -316,7 +346,6 @@ int handle_verify_cert(int argc, char* argv[]) {
         case HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN:
             fprintf(stderr, "\033[31m[失败]\033[0m OCSP服务器报告此证书状态未知！根据安全策略，这被视为证书无效。\n");
             break;
-        // [FIX]: 处理新增的 NO_OCSP_URI 错误码
         case HSC_ERROR_CERT_NO_OCSP_URI:
             fprintf(stderr, "\033[31m[失败]\033[0m 证书缺少 OCSP URI (AIA扩展)，无法检查吊销状态。\n");
             fprintf(stderr, "           当前安全策略 (Fail-Closed) 禁止信任此类证书。\n");
@@ -336,9 +365,6 @@ cleanup:
 // --- REFACTORED: handle_hybrid_encrypt and its new helper functions ---
 // ====================================================================================
 
-/**
- * @brief A structure to hold all parsed arguments for the encrypt command.
- */
 typedef struct {
     const char* in_file;
     const char* recipient_cert_file;
@@ -350,15 +376,11 @@ typedef struct {
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
 } encrypt_args;
 
-/**
- * @brief Parses command line arguments for the encrypt command into the args struct.
- * @return Returns true on success, false on parsing errors or invalid combinations.
- */
 static bool _parse_encrypt_args(int argc, char* argv[], encrypt_args* args) {
-    // Initialize args with default values
     memset(args, 0, sizeof(encrypt_args));
-    args->in_file = argv[2];
-
+    
+    // We need to find the input file, which is a positional argument
+    // Let's use getopt to parse flags first.
     static struct option long_options[] = {
         {"to",                required_argument, 0, 't'},
         {"from",              required_argument, 0, 'f'},
@@ -366,12 +388,13 @@ static bool _parse_encrypt_args(int argc, char* argv[], encrypt_args* args) {
         {"ca",                required_argument, 0, 'c'},
         {"user",              required_argument, 0, 'u'},
         {"no-verify",         no_argument,       0, 'n'},
+        {"force-non-interactive", no_argument, 0, 'F'},
         {0, 0, 0, 0}
     };
     
     int opt;
-    optind = 3; // Start parsing after "hsc_cli encrypt"
-    while ((opt = getopt_long(argc, argv, "t:f:r:c:u:n", long_options, NULL)) != -1) {
+    optind = 2; // Start after 'encrypt'
+    while ((opt = getopt_long(argc, argv, "t:f:r:c:u:nF", long_options, NULL)) != -1) {
         switch (opt) {
             case 't': args->recipient_cert_file = optarg; break;
             case 'f': args->sender_priv_file = optarg; break;
@@ -379,11 +402,17 @@ static bool _parse_encrypt_args(int argc, char* argv[], encrypt_args* args) {
             case 'c': args->ca_path = optarg; break;
             case 'u': args->user_cn = optarg; break;
             case 'n': args->no_verify_flag = true; break;
-            default: return false; // Unrecognized option
+            case 'F': g_force_non_interactive = true; break;
+            default: return false;
         }
     }
 
-    // --- Validate argument combinations ---
+    if (optind < argc) {
+        args->in_file = argv[optind];
+    } else {
+        return false;
+    }
+
     if (!args->in_file || !args->sender_priv_file || (!args->recipient_cert_file && !args->recipient_pk_file)) {
         fprintf(stderr, "错误: 缺少必要的加密参数。\n");
         return false;
@@ -401,39 +430,40 @@ static bool _parse_encrypt_args(int argc, char* argv[], encrypt_args* args) {
     return true;
 }
 
-/**
- * @brief Handles recipient key preparation for both raw key and certificate modes.
- * @param args The parsed command line arguments.
- * @return HSC_OK on success, or a specific HSC error code on failure.
- */
 static int _prepare_recipient_pk(encrypt_args* args) {
     unsigned char* recipient_cert_pem = NULL;
     unsigned char* ca_cert_pem = NULL;
     int ret_code = HSC_ERROR_GENERAL;
 
     if (args->recipient_pk_file) {
-        // [修复] 增加非交互式环境检测，防止脚本误用高风险模式
+        // [FIX]: Finding #4 - 支持 --force-non-interactive 绕过 TTY 检查
         if (!isatty(fileno(stdin))) {
-            fprintf(stderr, "错误: 检测到非交互式环境 (非 TTY)。\n");
-            fprintf(stderr, "为防止误操作，禁止在脚本中通过管道绕过安全确认。\n");
-            fprintf(stderr, "必须在交互式终端中手动输入 'yes' 才能使用此高风险模式。\n");
-            return HSC_ERROR_GENERAL;
+            if (g_force_non_interactive) {
+                fprintf(stderr, "\n\033[1;33m[警告] 检测到非交互式环境，但已设置 --force-non-interactive。\n");
+                fprintf(stderr, "       正在绕过 TTY 安全检查。请确保您知晓 '原始公钥模式' 的风险！\033[0m\n");
+            } else {
+                fprintf(stderr, "错误: 检测到非交互式环境 (非 TTY)。\n");
+                fprintf(stderr, "为防止误操作，默认禁止在脚本中通过管道使用此高风险模式。\n");
+                fprintf(stderr, "若需在 CI/CD 中使用，请显式添加全局标志 --force-non-interactive\n");
+                return HSC_ERROR_GENERAL;
+            }
+        } else {
+            // 交互式环境：仍然需要手动确认
+            fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
+            fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--recipient-pk-file) 进行加密。\n");
+            fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证接收者的身份。\n");
+            fprintf(stderr, "如果您使用的公钥文件来源不可靠（例如，来自一个被篡改的网站），\n");
+            fprintf(stderr, "您的数据将被加密给 \033[1;31m攻击者\033[0m。\n");
+            fprintf(stderr, "请再次确认您绝对信任公钥文件 '%s' 的来源。\033[0m\n\n", args->recipient_pk_file);
+            fprintf(stderr, "要继续此高风险操作，请输入 'yes': ");
+            
+            char confirmation[10] = {0};
+            if (fgets(confirmation, sizeof(confirmation), stdin) == NULL || strncmp(confirmation, "yes\n", 4) != 0) {
+                fprintf(stderr, "\n操作已由用户取消。加密中止。\n");
+                return HSC_ERROR_GENERAL;
+            }
+            fprintf(stderr, "\n");
         }
-
-        fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
-        fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--recipient-pk-file) 进行加密。\n");
-        fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证接收者的身份。\n");
-        fprintf(stderr, "如果您使用的公钥文件来源不可靠（例如，来自一个被篡改的网站），\n");
-        fprintf(stderr, "您的数据将被加密给 \033[1;31m攻击者\033[0m。\n");
-        fprintf(stderr, "请再次确认您绝对信任公钥文件 '%s' 的来源。\033[0m\n\n", args->recipient_pk_file);
-        fprintf(stderr, "要继续此高风险操作，请输入 'yes': ");
-        
-        char confirmation[10] = {0};
-        if (fgets(confirmation, sizeof(confirmation), stdin) == NULL || strncmp(confirmation, "yes\n", 4) != 0) {
-            fprintf(stderr, "\n操作已由用户取消。加密中止。\n");
-            return HSC_ERROR_GENERAL;
-        }
-        fprintf(stderr, "\n");
         
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(args->recipient_pk_file, &pk_len);
@@ -486,9 +516,6 @@ cleanup:
     return ret_code;
 }
 
-/**
- * @brief Main handler for the 'encrypt' command. Now acts as a high-level coordinator.
- */
 int handle_hybrid_encrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
 
@@ -532,16 +559,13 @@ cleanup:
     return ret;
 }
 
-// [FIX]: handle_hybrid_decrypt 重构修复，强制执行发送者身份验证
 int handle_hybrid_decrypt(int argc, char* argv[]) {
     if (argc < 3) { print_usage(argv[0]); return 1; }
     
-    const char* in_file = argv[2];
+    const char* in_file = NULL;
     const char* sender_cert_file = NULL;
     const char* sender_pk_file = NULL;
     const char* recipient_priv_file = NULL;
-    
-    // [FIX]: 新增变量用于存储 CA 和 用户名
     const char* ca_path = NULL;
     const char* sender_cn = NULL;
     bool no_verify_flag = false;
@@ -550,26 +574,32 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         {"to",             required_argument, 0, 't'},
         {"from",           required_argument, 0, 'f'},
         {"sender-pk-file", required_argument, 0, 's'},
-        // [FIX]: 新增参数选项
         {"ca",             required_argument, 0, 'c'},
         {"user",           required_argument, 0, 'u'},
         {"no-verify",      no_argument,       0, 'n'},
+        {"force-non-interactive", no_argument, 0, 'F'},
         {0, 0, 0, 0}
     };
     
     int opt;
-    optind = 3;
-    // [FIX]: 更新 getopt_long 格式字符串，包含 c, u, n
-    while ((opt = getopt_long(argc, argv, "t:f:s:c:u:n", long_options, NULL)) != -1) {
+    optind = 2; 
+    while ((opt = getopt_long(argc, argv, "t:f:s:c:u:nF", long_options, NULL)) != -1) {
         switch (opt) {
             case 't': recipient_priv_file = optarg; break;
             case 'f': sender_cert_file = optarg; break;
             case 's': sender_pk_file = optarg; break;
-            case 'c': ca_path = optarg; break;       // [FIX]
-            case 'u': sender_cn = optarg; break;     // [FIX]
-            case 'n': no_verify_flag = true; break;  // [FIX]
-            default: print_usage(argv[0]); return 1;
+            case 'c': ca_path = optarg; break;
+            case 'u': sender_cn = optarg; break;
+            case 'n': no_verify_flag = true; break;
+            case 'F': g_force_non_interactive = true; break;
+            default: break;
         }
+    }
+    
+    if (optind < argc) {
+        in_file = argv[optind];
+    } else {
+        print_usage(argv[0]); return 1;
     }
     
     if (!in_file || !recipient_priv_file || (!sender_cert_file && !sender_pk_file)) {
@@ -580,7 +610,6 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         return 1;
     }
 
-    // [FIX]: 针对证书模式，强制验证参数检查
     if (sender_cert_file && !no_verify_flag && (!ca_path || !sender_cn)) {
         fprintf(stderr, "错误: 使用证书解密时，必须提供 --ca 和 --user 参数以验证发送者身份。\n");
         fprintf(stderr, "      如果您确认要跳过验证（不推荐），请添加 --no-verify 标志。\n");
@@ -594,33 +623,37 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
 
     int ret = 1;
     unsigned char* sender_cert_pem = NULL;
-    unsigned char* ca_cert_pem = NULL; // [FIX]: 用于存储 CA 证书
+    unsigned char* ca_cert_pem = NULL;
     hsc_master_key_pair* recipient_kp = NULL;
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
 
     if (sender_pk_file) {
-        // --- 原始公钥模式 (高风险) ---
-        // [修复] 增加非交互式环境检测，防止脚本误用高风险模式
+        // [FIX]: Finding #4 - 支持 --force-non-interactive
         if (!isatty(fileno(stdin))) {
-            fprintf(stderr, "错误: 检测到非交互式环境 (非 TTY)。\n");
-            fprintf(stderr, "为防止误操作，禁止在脚本中通过管道绕过安全确认。\n");
-            fprintf(stderr, "必须在交互式终端中手动输入 'yes' 才能使用此高风险模式。\n");
-            return HSC_ERROR_GENERAL;
+            if (g_force_non_interactive) {
+                fprintf(stderr, "\n\033[1;33m[警告] 检测到非交互式环境，但已设置 --force-non-interactive。\n");
+                fprintf(stderr, "       正在绕过 TTY 安全检查。解密操作将继续！\033[0m\n");
+            } else {
+                fprintf(stderr, "错误: 检测到非交互式环境 (非 TTY)。\n");
+                fprintf(stderr, "为防止误操作，默认禁止在脚本中通过管道使用此高风险模式。\n");
+                fprintf(stderr, "若需在 CI/CD 中使用，请显式添加全局标志 --force-non-interactive\n");
+                return HSC_ERROR_GENERAL;
+            }
+        } else {
+            fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
+            fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--sender-pk-file) 进行解密。\n");
+            fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证发送者的身份。\n");
+            fprintf(stderr, "这意味着您无法确定加密文件的真实来源，它可能来自一个 \033[1;31m伪造的发送者\033[0m。\n");
+            fprintf(stderr, "请再次确认您绝对信任公钥文件 '%s' 的来源。\033[0m\n\n", sender_pk_file);
+            fprintf(stderr, "要继续此高风险操作，请输入 'yes': ");
+            
+            char confirmation[10] = {0};
+            if (fgets(confirmation, sizeof(confirmation), stdin) == NULL || strncmp(confirmation, "yes\n", 4) != 0) {
+                fprintf(stderr, "\n操作已由用户取消。解密中止。\n");
+                return HSC_ERROR_GENERAL;
+            }
+            fprintf(stderr, "\n");
         }
-
-        fprintf(stderr, "\n\033[1;31m*** 严重安全警告 ***\033[0m\n");
-        fprintf(stderr, "\033[33m您正在使用“原始公钥模式”(--sender-pk-file) 进行解密。\n");
-        fprintf(stderr, "此模式 \033[1;31m不会\033[0m 通过证书来验证发送者的身份。\n");
-        fprintf(stderr, "这意味着您无法确定加密文件的真实来源，它可能来自一个 \033[1;31m伪造的发送者\033[0m。\n");
-        fprintf(stderr, "请再次确认您绝对信任公钥文件 '%s' 的来源。\033[0m\n\n", sender_pk_file);
-        fprintf(stderr, "要继续此高风险操作，请输入 'yes': ");
-        
-        char confirmation[10] = {0};
-        if (fgets(confirmation, sizeof(confirmation), stdin) == NULL || strncmp(confirmation, "yes\n", 4) != 0) {
-            fprintf(stderr, "\n操作已由用户取消。解密中止。\n");
-            return HSC_ERROR_GENERAL;
-        }
-        fprintf(stderr, "\n");
         
         size_t pk_len;
         unsigned char* pk_buf = read_small_file(sender_pk_file, &pk_len);
@@ -633,12 +666,11 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         free(pk_buf);
 
     } else {
-        // --- 证书模式 (必须验证) ---
+        // --- Certificate Mode ---
         size_t cert_len;
         sender_cert_pem = read_small_file(sender_cert_file, &cert_len);
         if (!sender_cert_pem) goto cleanup;
 
-        // [FIX]: 执行发送者证书验证
         if (no_verify_flag) {
              fprintf(stdout, "\n\033[31m[危险警告] 您已选择 --no-verify 选项。\n           系统将不会验证发送者证书的真实性、有效性或吊销状态。\n           解密后的数据可能来自伪造的发送者。\033[0m\n\n");
         } else {
@@ -692,7 +724,7 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
 
 cleanup:
     free(sender_cert_pem);
-    free(ca_cert_pem); // [FIX]: 释放 CA 证书内存
+    free(ca_cert_pem);
     hsc_free_master_key_pair(&recipient_kp);
     if (ret != 0) remove(out_file);
     return ret;
@@ -700,10 +732,19 @@ cleanup:
 
 // --- Main 函数 ---
 int main(int argc, char* argv[]) {
+    // [FIX]: Finding #4 - 全局解析 --force-non-interactive
+    // 简单的预解析：如果 argv 中包含该标志，则设置全局变量
+    // 注意：这里的简单循环是为了确保它在任何子命令处理之前生效。
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--force-non-interactive") == 0) {
+            g_force_non_interactive = true;
+            break;
+        }
+    }
+
     if (argc < 2) { print_usage(argv[0]); return 1; }
     
-    // [FIX]: API 变更适配 - 显式传递 NULL 以使用默认的严格安全配置 (Fail-Closed for No OCSP)
-    // 同时传递 NULL 给 pepper_hex，触发底层使用环境变量并执行安全擦除 (Env Wiping)
+    // 初始化库
     if (hsc_init(NULL, NULL) != HSC_OK) {
         fprintf(stderr, "严重错误: 高安全内核库初始化失败！\n"); return 1;
     }
@@ -712,6 +753,10 @@ int main(int argc, char* argv[]) {
 
     const char* command = argv[1];
     int ret = 1;
+    
+    // 重置 optind，因为我们在 main 和 helper 函数中都会使用 getopt
+    optind = 1; 
+
     if (strcmp(command, "gen-keypair") == 0) {
         ret = handle_gen_keypair(argc, argv);
     } else if (strcmp(command, "gen-csr") == 0) {
@@ -723,7 +768,12 @@ int main(int argc, char* argv[]) {
     } else if (strcmp(command, "verify-cert") == 0) {
         ret = handle_verify_cert(argc, argv);
     } else {
-        fprintf(stderr, "错误: 未知命令 '%s'\n", command);
+        // 如果第一个参数不是命令（可能是全局 flag），打印帮助
+        if (command[0] == '-') {
+             fprintf(stderr, "错误: 请先指定命令，再使用全局选项。\n");
+        } else {
+             fprintf(stderr, "错误: 未知命令 '%s'\n", command);
+        }
         print_usage(argv[0]);
     }
     hsc_cleanup();

@@ -31,7 +31,7 @@ static int hex_char_to_int(char c) {
 
 /**
  * @brief [内部] 加载并验证全局胡椒。
- *        [FIX]: 支持显式传入或从环境变量回退。包含内存擦除逻辑。
+ *        [FIX]: 支持显式传入或从环境变量回退。
  */
 static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "Loading global cryptographic pepper...");
@@ -55,10 +55,8 @@ static int _load_pepper(const char* explicit_hex) {
     size_t hex_len = strlen(pepper_hex);
     if (hex_len != REQUIRED_PEPPER_BYTES * 2) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper must be exactly %zu hex characters long, but got %zu.", REQUIRED_PEPPER_BYTES * 2, hex_len);
-        // 如果是从 ENV 读取且长度不对，出于安全考虑，仍然尝试擦除部分内容
-        if (is_from_env) {
-             sodium_memzero((void*)pepper_hex, hex_len); 
-        }
+        // [FIX]: Finding #1 - 不再尝试擦除环境变量，因为可能导致段错误。
+        // 如果长度错误，直接返回错误即可。
         return -1;
     }
 
@@ -75,7 +73,7 @@ static int _load_pepper(const char* explicit_hex) {
             secure_free(g_internal_pepper);
             g_internal_pepper = NULL;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper contains invalid non-hexadecimal characters.");
-            if (is_from_env) sodium_memzero((void*)pepper_hex, hex_len);
+            // [FIX]: Finding #1 - 同样，不再尝试擦除环境变量。
             return -1;
         }
         g_internal_pepper[i] = (unsigned char)((high << 4) | low);
@@ -85,15 +83,11 @@ static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "  > Successfully loaded and validated the %zu-byte global pepper.", g_internal_pepper_len);
 
     // [FIX]: Finding #1 Remediation
-    // 如果 Pepper 来自环境变量，我们在将其转换为安全内存中的二进制格式后，
-    // 立即尝试擦除原始的环境变量内存区域。
-    // 警告：修改 getenv 返回的字符串属于 C 标准中的未定义行为 (UB)。
-    // 但在大多数现代操作系统 (Linux, Windows, macOS) 上，这指向可写的进程环境块。
-    // 这是一个"Best Effort"的安全防御措施。
+    // 移除了对 getenv 返回指针的 sodium_memzero 调用。
+    // 修改环境变量内存属于未定义行为，可能导致程序崩溃 (Crash)。
+    // 安全性依赖于操作系统的进程隔离。
     if (is_from_env) {
-        _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Attempting to wipe 'HSC_PEPPER_HEX' from process environment memory...");
-        sodium_memzero((void*)pepper_hex, hex_len);
-        _hsc_log(HSC_LOG_LEVEL_INFO, "  > [SECURITY] Environment variable memory wiped (best effort).");
+        _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Note: Sensitive pepper loaded from environment. Ensure process environment is isolated.");
     }
     
     return 0;

@@ -39,7 +39,10 @@
 #define HSC_MASTER_PUBLIC_KEY_BYTES 32
 #define HSC_MASTER_SECRET_KEY_BYTES 64
 #define HSC_SESSION_KEY_BYTES       32
-#define HSC_KDF_SALT_BYTES          32 // 为新的KDF函数提供一个标准的盐长度
+
+// [FIX]: Finding #2 - 修正 KDF 盐值长度以匹配 Libsodium 的 Argon2id 实现 (crypto_pwhash_SALTBYTES)
+// 之前定义的 32 字节会导致底层静默截断后 16 字节。
+#define HSC_KDF_SALT_BYTES          16 
 
 // 流式加密 (XChaCha20-Poly1305 SecretStream) 相关常量
 #define HSC_STREAM_HEADER_BYTES 24
