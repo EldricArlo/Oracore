@@ -21,6 +21,9 @@
 #ifndef _WIN32
     #include <sys/time.h>
     #include <sys/resource.h>
+#else
+    // [FIX]: Windows 平台头文件引入
+    #include <windows.h>
 #endif
 
 // --- 不透明结构体的内部定义 ---
@@ -141,16 +144,29 @@ int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
     // [FIX]: Mitigation for Finding #2 - 禁用 Core Dumps
     // 在内存中可能包含敏感数据（如 OpenSSL 堆中的私钥副本）的情况下，防止崩溃时数据泄露到磁盘。
     #ifndef _WIN32
-    struct rlimit core_limits;
-    core_limits.rlim_cur = 0;
-    core_limits.rlim_max = 0;
-    if (setrlimit(RLIMIT_CORE, &core_limits) != 0) {
-        // [FIX]: Remediation for Finding #2 (Fail-Closed)
-        // 之前只是打印警告，现在升级为致命错误。
-        // 必须确保环境安全（不产生Core Dump）才能启动，否则视为不安全状态。
-        fprintf(stderr, "[Oracipher Core] FATAL: Failed to disable core dumps (errno=%d). Aborting initialization to protect secrets.\n", errno);
-        return HSC_ERROR_GENERAL; 
-    }
+        struct rlimit core_limits;
+        core_limits.rlim_cur = 0;
+        core_limits.rlim_max = 0;
+        if (setrlimit(RLIMIT_CORE, &core_limits) != 0) {
+            // [FIX]: Remediation for Finding #2 (Fail-Closed)
+            // 之前只是打印警告，现在升级为致命错误。
+            // 必须确保环境安全（不产生Core Dump）才能启动，否则视为不安全状态。
+            fprintf(stderr, "[Oracipher Core] FATAL: Failed to disable core dumps (errno=%d). Aborting initialization to protect secrets.\n", errno);
+            return HSC_ERROR_GENERAL; 
+        }
+    #else
+        // [FIX]: Windows 平台安全增强 (针对漏洞 #2)
+        // 禁止显示关键错误对话框，防止程序在崩溃时挂起等待用户输入。
+        // SEM_FAILCRITICALERRORS: 进程不显示关键错误消息框并将其发送给调用进程。
+        // SEM_NOGPFAULTERRORBOX: 进程不显示一般保护性错误消息框。
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+
+        // 警告：Windows Error Reporting (WER) 可能会生成包含敏感内存的 LocalDumps。
+        // 完全禁用它需要修改注册表（Machine/User Policy），这超出了库函数的权限范围。
+        // 因此，我们必须发出强烈的操作安全警告。
+        fprintf(stderr, "[Oracipher Core] SECURITY WARNING: Running on Windows.\n");
+        fprintf(stderr, "   Ensure Windows Error Reporting (WER) is disabled or configured NOT to save LocalDumps.\n");
+        fprintf(stderr, "   Crash dumps (.dmp files) can leak sensitive decrypted keys present in RAM to disk.\n");
     #endif
 
     if (crypto_client_init(pepper_hex) != 0) return HSC_ERROR_CRYPTO_OPERATION;

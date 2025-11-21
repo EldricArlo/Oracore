@@ -1,3 +1,5 @@
+/* --- START OF FILE src/cli.c --- */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +87,8 @@ void print_usage(const char* prog_name) {
 // [修复] 为文件读取定义一个统一、合理的上限，防止资源耗尽攻击。
 #define MAX_READ_FILE_SIZE (10 * 1024 * 1024)
 
+// [FIX]: 内存安全修复 - read_small_file 现在返回安全内存 (sodium_malloc)
+// 调用者必须使用 hsc_secure_free 释放返回的指针。
 unsigned char* read_small_file(const char* filename, size_t* out_len) {
     FILE* f;
     bool is_stdin = (strcmp(filename, "-") == 0);
@@ -93,9 +97,10 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         f = stdin;
         size_t capacity = 4096;
         size_t size = 0;
-        unsigned char* buffer = malloc(capacity);
+        // [FIX]: 使用安全内存分配初始缓冲区
+        unsigned char* buffer = hsc_secure_alloc(capacity);
         if (!buffer) {
-            fprintf(stderr, "错误: 内存分配失败\n");
+            fprintf(stderr, "错误: 安全内存分配失败\n");
             return NULL;
         }
 
@@ -104,7 +109,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
             size += bytes_read;
             if (size >= MAX_READ_FILE_SIZE) {
                 fprintf(stderr, "错误: 从标准输入读取的数据超过了 %d MB 的上限\n", MAX_READ_FILE_SIZE / (1024 * 1024));
-                free(buffer);
+                hsc_secure_free(buffer);
                 return NULL;
             }
 
@@ -123,21 +128,46 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
 
                 if (next_capacity <= size) {
                     fprintf(stderr, "错误: 输入数据流过大，无法安全地扩展缓冲区 (超过 %d MB)。\n", MAX_READ_FILE_SIZE / (1024 * 1024));
-                    free(buffer);
+                    hsc_secure_free(buffer);
                     return NULL;
                 }
 
                 capacity = next_capacity;
-                unsigned char* new_buffer = realloc(buffer, capacity);
+                
+                // [FIX]: 手动实现安全 realloc
+                // sodium_malloc 不支持 realloc，必须 alloc new -> memcpy -> free old
+                unsigned char* new_buffer = hsc_secure_alloc(capacity);
                 if (!new_buffer) {
-                    fprintf(stderr, "错误: 内存重分配失败\n");
-                    free(buffer);
+                    fprintf(stderr, "错误: 安全内存重分配失败\n");
+                    hsc_secure_free(buffer);
                     return NULL;
                 }
+                // 复制旧数据
+                memcpy(new_buffer, buffer, size);
+                // 安全释放旧数据（自动擦除）
+                hsc_secure_free(buffer);
                 buffer = new_buffer;
             }
         }
-        buffer[size] = '\0';
+        // 确保 null 终止符有空间（虽然对于二进制数据不总是需要，但为了字符串兼容性）
+        // 注意：如果 size == capacity，这里写入可能会越界，但在 secure_alloc 中我们通常不需要强制 +1，
+        // 除非是作为字符串处理。为了安全起见，如果不确定是字符串，不要依赖 null 终止符。
+        // 如果确实需要，应该在上面分配时多留一个字节。
+        // 鉴于 read_small_file 主要用于读取 PEM 或 keys，我们做一次调整：
+        if (size < capacity) {
+             buffer[size] = '\0';
+        } else {
+             // 如果满了，需要扩展 1 字节来放 \0，或者如果在意性能且确认为二进制则忽略。
+             // 这里为了通用性，扩展一下。
+             unsigned char* final_buf = hsc_secure_alloc(size + 1);
+             if(final_buf) {
+                 memcpy(final_buf, buffer, size);
+                 final_buf[size] = '\0';
+                 hsc_secure_free(buffer);
+                 buffer = final_buf;
+             }
+        }
+        
         *out_len = size;
         return buffer;
 
@@ -165,9 +195,10 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
             return NULL;
         }
 
-        unsigned char* buffer = malloc(file_size + 1);
+        // [FIX]: 使用安全内存分配
+        unsigned char* buffer = hsc_secure_alloc(file_size + 1);
         if (!buffer) {
-            fprintf(stderr, "错误: 内存分配失败\n");
+            fprintf(stderr, "错误: 安全内存分配失败\n");
             fclose(f);
             return NULL;
         }
@@ -175,7 +206,7 @@ unsigned char* read_small_file(const char* filename, size_t* out_len) {
         size_t bytes_read = fread(buffer, 1, file_size, f);
         if (bytes_read != file_size) {
             fprintf(stderr, "错误: 读取文件失败: %s\n", filename);
-            free(buffer);
+            hsc_secure_free(buffer);
             fclose(f);
             return NULL;
         }
@@ -358,7 +389,10 @@ int handle_verify_cert(int argc, char* argv[]) {
             break;
     }
 cleanup:
-    free(user_cert_pem); free(ca_cert_pem); return ret;
+    // [FIX]: 使用安全释放
+    if(user_cert_pem) hsc_secure_free(user_cert_pem);
+    if(ca_cert_pem) hsc_secure_free(ca_cert_pem); 
+    return ret;
 }
 
 // ====================================================================================
@@ -469,11 +503,12 @@ static int _prepare_recipient_pk(encrypt_args* args) {
         unsigned char* pk_buf = read_small_file(args->recipient_pk_file, &pk_len);
         if (!pk_buf || pk_len != HSC_MASTER_PUBLIC_KEY_BYTES) {
             fprintf(stderr, "错误: 读取或验证接收者公钥文件 '%s' 失败。\n", args->recipient_pk_file);
-            free(pk_buf);
+            // [FIX]: 使用安全释放
+            if(pk_buf) hsc_secure_free(pk_buf);
             return HSC_ERROR_FILE_IO;
         }
         memcpy(args->recipient_pk, pk_buf, HSC_MASTER_PUBLIC_KEY_BYTES);
-        free(pk_buf);
+        hsc_secure_free(pk_buf);
         ret_code = HSC_OK;
 
     } else {
@@ -511,8 +546,9 @@ static int _prepare_recipient_pk(encrypt_args* args) {
     }
 
 cleanup:
-    free(recipient_cert_pem);
-    free(ca_cert_pem);
+    // [FIX]: 使用安全释放
+    if(recipient_cert_pem) hsc_secure_free(recipient_cert_pem);
+    if(ca_cert_pem) hsc_secure_free(ca_cert_pem);
     return ret_code;
 }
 
@@ -659,11 +695,11 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
         unsigned char* pk_buf = read_small_file(sender_pk_file, &pk_len);
         if (!pk_buf || pk_len != HSC_MASTER_PUBLIC_KEY_BYTES) {
             fprintf(stderr, "错误: 读取或验证发送者公钥文件 '%s' 失败。\n", sender_pk_file);
-            free(pk_buf);
+            if(pk_buf) hsc_secure_free(pk_buf);
             goto cleanup;
         }
         memcpy(sender_pk, pk_buf, HSC_MASTER_PUBLIC_KEY_BYTES);
-        free(pk_buf);
+        hsc_secure_free(pk_buf);
 
     } else {
         // --- Certificate Mode ---
@@ -723,8 +759,9 @@ int handle_hybrid_decrypt(int argc, char* argv[]) {
     }
 
 cleanup:
-    free(sender_cert_pem);
-    free(ca_cert_pem);
+    // [FIX]: 使用安全释放
+    if(sender_cert_pem) hsc_secure_free(sender_cert_pem);
+    if(ca_cert_pem) hsc_secure_free(ca_cert_pem);
     hsc_free_master_key_pair(&recipient_kp);
     if (ret != 0) remove(out_file);
     return ret;
@@ -779,3 +816,4 @@ int main(int argc, char* argv[]) {
     hsc_cleanup();
     return ret;
 }
+/* --- END OF FILE src/cli.c --- */

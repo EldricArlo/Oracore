@@ -1,3 +1,5 @@
+/* --- START OF FILE src/pki/pki_handler.c --- */
+
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -208,6 +210,12 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Loopback IP: %s", ip_str);
         }
+        // [FIX]: Audit Finding #1 - 显式拦截 0.0.0.0 (INADDR_ANY)。
+        // 在某些系统上，0.0.0.0 意味着本机，可绕过 127.0.0.0/8 的检查。
+        else if (ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0) {
+            block_connection = true;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to 0.0.0.0 (Localhost alias)");
+        }
         // 2. Block Link-Local (169.254.0.0/16) - ALWAYS BLOCKED (AWS/Cloud Metadata)
         else if (ip[0] == 169 && ip[1] == 254) {
             block_connection = true;
@@ -236,6 +244,12 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
         if (memcmp(ip, loopback_v6, 16) == 0) {
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Loopback IPv6: %s", ip_str);
+        }
+        // [FIX]: Audit Finding #1 - 显式拦截 :: (Unspecified Address)
+        // 同样防止作为本地别名绕过。
+        else if (memcmp(ip, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16) == 0) {
+            block_connection = true;
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Unspecified IPv6 (::)");
         }
         // 2. Block Unique Local (fc00::/7) - CONDITIONALLY BLOCKED
         // fc00:: to fdff:: -> First byte & 0xFE == 0xFC
@@ -673,3 +687,5 @@ cleanup:
     if (cert_bio) BIO_free(cert_bio);
     return ret;
 }
+
+/* --- END OF FILE src/pki/pki_handler.c --- */

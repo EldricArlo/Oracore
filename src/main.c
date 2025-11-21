@@ -1,3 +1,5 @@
+/* --- START OF FILE src/main.c --- */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -18,6 +20,7 @@ void print_hex(const char* label, const unsigned char* data, size_t len) {
 }
 
 // 从文件中读取PEM字符串的辅助函数
+// 注意：证书是公开信息，因此这里使用标准 malloc 是可以接受的。
 char* read_pem_file(const char* filename) {
     FILE* f = fopen(filename, "rb");
     if (!f) {
@@ -107,8 +110,11 @@ int main() {
     
     size_t file_content_len = strlen(file_content);
     size_t enc_file_buf_len = file_content_len + HSC_AEAD_OVERHEAD_BYTES;
-    encrypted_file = malloc(enc_file_buf_len);
-    if (!encrypted_file) { fprintf(stderr, "内存分配失败！\n"); goto cleanup; }
+    
+    // [FIX]: 内存安全修复 - 使用 secure_alloc 替代 malloc
+    // 即使是密文，为了防止侧信道或意外残留，也建议使用安全内存。
+    encrypted_file = hsc_secure_alloc(enc_file_buf_len);
+    if (!encrypted_file) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
     unsigned long long actual_enc_file_len;
     
     if (hsc_aead_encrypt(encrypted_file, &actual_enc_file_len, (unsigned char*)file_content, file_content_len, session_key) != HSC_OK) {
@@ -136,8 +142,10 @@ int main() {
     // 4. 封装会话密钥
     printf("4. 为接收者封装会话密钥...\n");
     size_t encapsulated_key_buf_len = sizeof(session_key) + HSC_ENCAPSULATED_KEY_OVERHEAD_BYTES;
-    encapsulated_session_key = malloc(encapsulated_key_buf_len);
-    if (!encapsulated_session_key) { fprintf(stderr, "内存分配失败！\n"); goto cleanup; }
+    
+    // [FIX]: 内存安全修复 - 使用 secure_alloc
+    encapsulated_session_key = hsc_secure_alloc(encapsulated_key_buf_len);
+    if (!encapsulated_session_key) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
     
     size_t actual_encapsulated_len;
     if (hsc_encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len, session_key, sizeof(session_key),
@@ -172,8 +180,11 @@ int main() {
 
     // 2. 使用恢复的会话密钥解密文件内容
     printf("2. 使用恢复的会话密钥解密文件内容...\n");
-    decrypted_file_content = malloc(file_content_len + 1);
-    if (!decrypted_file_content) { fprintf(stderr, "内存分配失败！\n"); goto cleanup; }
+    
+    // [FIX]: 内存安全修复 - 使用 secure_alloc 存储解密后的明文
+    // 这是最关键的修复点，防止明文被 Swap。
+    decrypted_file_content = hsc_secure_alloc(file_content_len + 1);
+    if (!decrypted_file_content) { fprintf(stderr, "安全内存分配失败！\n"); goto cleanup; }
     unsigned long long actual_dec_file_len;
     
     if (hsc_aead_decrypt(decrypted_file_content, &actual_dec_file_len, encrypted_file, actual_enc_file_len, decrypted_session_key) != HSC_OK) {
@@ -201,17 +212,20 @@ int main() {
 
 cleanup:
     printf("\n--- 清理所有资源 ---\n");
+    // PEM 字符串使用标准 free
     free(ca_cert_pem);
     free(alice_cert_pem);
     hsc_free_master_key_pair(&alice_mkp);
     
-    free(encrypted_file);
-    free(encapsulated_session_key);
-    hsc_secure_free(decrypted_session_key);
-    free(decrypted_file_content);
+    // [FIX]: 使用 hsc_secure_free 释放敏感缓冲区
+    if (encrypted_file) hsc_secure_free(encrypted_file);
+    if (encapsulated_session_key) hsc_secure_free(encapsulated_session_key);
+    if (decrypted_session_key) hsc_secure_free(decrypted_session_key);
+    if (decrypted_file_content) hsc_secure_free(decrypted_file_content);
 
     hsc_cleanup();
     printf("清理完成。\n");
 
     return ret;
 }
+/* --- END OF FILE src/main.c --- */
