@@ -2,7 +2,7 @@
 # CMakeLists.txt for Oracipher Core
 #
 # Reviewed and Updated by the Oracipher Core Code Review Committee
-# Version: 2.7 (Fix: Link against Ws2_32 on Windows for SSRF protection)
+# Version: 2.8 (Security Fixes: Windows Hardening & Linker Flags)
 #
 # This file now integrates clang-tidy directly into the build process,
 # enforces strict dependency version checks, and prevents test utilities
@@ -27,9 +27,16 @@ if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_CLANG)
     add_compile_options(-Wall -Wextra -Werror)
 endif()
 
-# [COMMITTEE FIX] Add platform-specific compile definitions.
+# [COMMITTEE FIX] Platform-specific compile definitions and security hardening.
 if(WIN32)
     add_compile_options(-DWIN32_LEAN_AND_MEAN -DNOCRYPT)
+    
+    # [FIX]: Audit Finding [Build] - Windows Security Hardening
+    # Enforce Control Flow Guard (CFG) and High Entropy ASLR on MSVC
+    if(MSVC)
+        add_compile_options(/guard:cf)
+        add_link_options(/GUARD:CF /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA)
+    endif()
 endif()
 
 # [COMMITTEE FIX] Integrate clang-tidy for static analysis.
@@ -172,6 +179,11 @@ foreach(test_source ${TEST_MAIN_SRCS})
     target_include_directories(${test_name} PRIVATE ${INTERNAL_INCLUDE_DIR})
     
     target_link_libraries(${test_name} PRIVATE hsc_kernel)
+    
+    # [FIX]: Windows 链接修复
+    if(WIN32)
+        target_link_libraries(${test_name} PRIVATE ws2_32)
+    endif()
     
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_tests_properties(${test_name} PROPERTIES

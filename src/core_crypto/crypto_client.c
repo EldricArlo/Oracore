@@ -344,11 +344,13 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
 }
 
 // [FIX]: 重构：Authenticated Ephemeral KEM (Sign-then-Encrypt)
+// [SECURITY FIX 2025]: 修复 Unknown Key Share 漏洞。
+// 将接收方的加密公钥 (recipient_encrypt_pk) 纳入签名上下文，以绑定身份。
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
                             const unsigned char* recipient_sign_pk,
-                            const master_key_pair* sender_mkp) { // [FIX] Added sender_mkp
+                            const master_key_pair* sender_mkp) {
     
     if (encrypted_output == NULL || encrypted_output_len == NULL || session_key == NULL || 
         recipient_sign_pk == NULL || sender_mkp == NULL || sender_mkp->identity_sk == NULL) {
@@ -396,9 +398,9 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     sodium_memzero(ephem_sk, sizeof(ephem_sk));
 
     // 5. [FIX] 签名数据 (Sign-then-Encrypt)
-    // 签名内容: [Nonce] || [Ephemeral_PK] || [Ciphertext]
-    // 这绑定了此次加密会话的参数和内容到发送者身份
-    size_t msg_to_sign_len = sizeof(nonce) + sizeof(ephem_pk) + ciphertext_len;
+    // 签名内容更新: [Nonce] || [Ephemeral_PK] || [Ciphertext] || [Recipient_Encrypt_PK]
+    // 新增 Recipient_Encrypt_PK (32 bytes) 以锁定接收者身份，防止中间人重放。
+    size_t msg_to_sign_len = sizeof(nonce) + sizeof(ephem_pk) + ciphertext_len + sizeof(recipient_encrypt_pk);
     unsigned char* msg_to_sign = secure_alloc(msg_to_sign_len);
     if (!msg_to_sign) {
         secure_free(ciphertext);
@@ -408,7 +410,9 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     unsigned char* p_sign = msg_to_sign;
     memcpy(p_sign, nonce, sizeof(nonce)); p_sign += sizeof(nonce);
     memcpy(p_sign, ephem_pk, sizeof(ephem_pk)); p_sign += sizeof(ephem_pk);
-    memcpy(p_sign, ciphertext, ciphertext_len);
+    memcpy(p_sign, ciphertext, ciphertext_len); p_sign += ciphertext_len;
+    // [FIX] Append recipient PK
+    memcpy(p_sign, recipient_encrypt_pk, sizeof(recipient_encrypt_pk)); 
 
     unsigned char signature[crypto_sign_BYTES];
     crypto_sign_detached(signature, NULL, msg_to_sign, msg_to_sign_len, sender_mkp->identity_sk);
@@ -417,6 +421,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
 
     // 6. 组装最终输出
     // Output Format: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext]
+    // 注意：Output Format 保持不变，增加的 recipient_pk 仅用于签名的计算，不传输（接收方已知）。
     unsigned char* p_out = encrypted_output;
     memcpy(p_out, nonce, sizeof(nonce)); p_out += sizeof(nonce);
     memcpy(p_out, ephem_pk, sizeof(ephem_pk)); p_out += sizeof(ephem_pk);
@@ -433,7 +438,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
 int decapsulate_session_key(unsigned char* decrypted_output,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
                             const unsigned char* my_enc_sk,
-                            const unsigned char* sender_public_key) { // [FIX] Added sender_pk
+                            const unsigned char* sender_public_key) {
 
     if (decrypted_output == NULL || encrypted_input == NULL || my_enc_sk == NULL || sender_public_key == NULL) {
         return -1;
@@ -459,26 +464,41 @@ int decapsulate_session_key(unsigned char* decrypted_output,
     size_t ciphertext_len = encrypted_input_len - (ciphertext - encrypted_input);
 
     // 3. [FIX] 验证签名
-    // 重建被签名的消息: [Nonce] || [Ephemeral_PK] || [Ciphertext]
+    // 重建被签名的消息: [Nonce] || [Ephemeral_PK] || [Ciphertext] || [My_Encrypt_PK]
+    // 接收方需要知道自己的公钥 (X25519) 来验证发送方是否正确锁定了目标。
+    
+    // [FIX] 从私钥 (my_enc_sk) 推导对应的公钥 (my_enc_pk)。
+    // 这样可以避免修改函数签名，同时确保使用实际用于解密的密钥对进行绑定验证。
+    unsigned char my_enc_pk[crypto_box_PUBLICKEYBYTES];
+    crypto_scalarmult_base(my_enc_pk, my_enc_sk);
+
     size_t signed_msg_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + 
                             crypto_box_PUBLICKEYBYTES + 
-                            ciphertext_len;
+                            ciphertext_len +
+                            crypto_box_PUBLICKEYBYTES; // Added Recipient PK length
                             
     unsigned char* signed_msg = secure_alloc(signed_msg_len);
-    if (!signed_msg) return -1;
+    if (!signed_msg) {
+        sodium_memzero(my_enc_pk, sizeof(my_enc_pk));
+        return -1;
+    }
 
     unsigned char* p_verify = signed_msg;
     memcpy(p_verify, nonce, crypto_box_curve25519xchacha20poly1305_NONCEBYTES); p_verify += crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
     memcpy(p_verify, ephem_pk, crypto_box_PUBLICKEYBYTES); p_verify += crypto_box_PUBLICKEYBYTES;
-    memcpy(p_verify, ciphertext, ciphertext_len);
+    memcpy(p_verify, ciphertext, ciphertext_len); p_verify += ciphertext_len;
+    // [FIX] Append my public key for verification
+    memcpy(p_verify, my_enc_pk, crypto_box_PUBLICKEYBYTES);
 
     int verify_ret = crypto_sign_verify_detached(signature, signed_msg, signed_msg_len, sender_public_key);
     
     secure_free(signed_msg);
+    sodium_memzero(my_enc_pk, sizeof(my_enc_pk)); // 清理推导出的公钥（虽然不是敏感数据，但保持干净）
 
     if (verify_ret != 0) {
-        // 签名验证失败！拒绝解密。
-        _hsc_log(HSC_LOG_LEVEL_ERROR, "Security Alert: Sender signature verification failed. Aborting decryption.");
+        // 签名验证失败！
+        // 可能是签名伪造，或者数据包被重放给了错误的接收者（Unknown Key Share 攻击）。
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Security Alert: Sender signature verification failed (Identity Binding Mismatch). Aborting decryption.");
         return -1;
     }
 
