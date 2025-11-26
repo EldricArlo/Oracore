@@ -63,6 +63,7 @@ Our design adheres to the following core security principles:
     *   **Certificate Lifecycle:** Supports the generation of X.509 v3 compliant Certificate Signing Requests (CSRs).
     *   **Strict Certificate Validation:** Provides a standardized certificate validation process, including trust chain, validity period, and subject matching.
     *   **Mandatory Revocation Checking (OCSP):** Features built-in, strict Online Certificate Status Protocol (OCSP) checks with a "fail-closed" policy. If the certificate's good standing cannot be confirmed, the operation is immediately aborted.
+    *   **[NEW] Anti-Replay Protection:** Enforces the use of **Nonces** in OCSP requests/responses to prevent replay attacks.
 
 *   **Rock-Solid Memory Safety:**
     *   Exposes `libsodium`'s secure memory functions through the public API, allowing clients to handle sensitive data (like session keys) safely.
@@ -150,7 +151,7 @@ The project is designed to be highly portable and avoids platform-specific hardc
     ```
     > **Important Note on Expected OCSP Test Behavior**
     >
-    > One test case in `test_pki_verification` intentionally validates a certificate pointing to a non-existent local OCSP server (`http://127.0.0.1:8888`). The network request will fail, at which point the `hsc_verify_user_certificate` function **must** return `-12` (the error code for `HSC_ERROR_CERT_REVOKED_OR_OCSP_FAILED`). The test program asserts this specific return value.
+    > One test case in `test_pki_verification` intentionally validates a certificate pointing to a non-existent local OCSP server (`http://127.0.0.1:8888`). The network request will fail, at which point the `hsc_verify_user_certificate` function **must** return `-13` (the error code for `HSC_ERROR_CERT_OCSP_UNAVAILABLE`). The test program asserts this specific return value.
     >
     > This "failure" is the **expected and correct behavior**, as it perfectly demonstrates that our "fail-closed" security policy is correctly implemented: **if the revocation status of a certificate cannot be confirmed for any reason, it is treated as invalid.**
 
@@ -171,19 +172,21 @@ The project is designed to be highly portable and avoids platform-specific hardc
 
 ### 4.4 Windows Deployment Security (CRITICAL)
 
-**[FIX] Core Dump Protection on Windows**
+**[UPDATED] Core Dump Protection on Windows**
 
-On Linux/Unix systems, this library automatically disables core dumps to prevent sensitive keys from being written to disk during a crash. However, on **Windows**, application-level APIs cannot fully prevent the operating system's "Windows Error Reporting" (WER) service from creating crash dumps (`.dmp` files).
+On Linux/Unix systems, this library automatically disables core dumps to prevent sensitive keys from being written to disk during a crash.
 
-**Action Required for Windows Administrators:**
-To secure your environment, you **must** explicitly disable LocalDumps for this application or globally via the Registry.
+On **Windows**, this library attempts to perform **Active Defense** by programmatically invoking the Windows Error Reporting (WER) API (`WerAddExcludedApplication`) to exclude the current process from crash dumps.
+
+**However, as a Defense-in-Depth measure (Fallback Strategy):**
+To secure your environment against potential API failures or OS-level overrides, you are **STRONGLY ADVISED** to manually configure the Registry:
 
 1.  Open `regedit`.
 2.  Navigate to: `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
 3.  Create or modify the value `DumpCount` to `0` (DWORD).
 4.  Alternatively, disable WER entirely if your security policy requires strict memory confidentiality.
 
-**Failure to do this may result in decrypted session keys or private keys persisting on the physical disk after an application crash.**
+**Failure to ensure these protections may result in decrypted session keys or private keys persisting on the physical disk after an application crash.**
 
 ## 5. Usage Guide
 
@@ -193,10 +196,11 @@ This section provides a complete, self-contained workflow demonstrating how two 
 
 > **⚠️ CRITICAL: OFFLINE ENVIRONMENTS & NETWORK REQUIREMENTS**
 >
-> This tool enforces a strict **"Fail-Closed"** security policy regarding certificate revocation. **Every time** you verify a certificate (or encrypt to a certificate), the tool attempts to contact the Issuing CA's OCSP server to ensure the certificate is still valid.
+> This tool enforces a strict **"Fail-Closed"** security policy regarding certificate revocation. **Every time** you verify a certificate (or encrypt to a certificate), the tool attempts to contact the Issuing CA's OCSP server.
 >
-> *   **If you are offline:** The operation will **FAIL** immediately (Error Code: `-13` or `-12`).
+> *   **If you are offline:** The operation will **FAIL**.
 > *   **If the OCSP server is blocked:** The operation will **FAIL**.
+> *   **[NEW] OCSP Nonce Requirement:** The OCSP Responder **MUST** support the OCSP Nonce extension. If the server response does not contain a matching Nonce, the operation will **FAIL** to prevent Replay Attacks.
 >
 > **Planning:** Ensure your environment has outbound network access to the OCSP URLs defined in your certificates. This tool is **not designed for air-gapped (offline) systems** unless you use the "Direct Key" mode (Option C) or configure a local OCSP responder.
 
@@ -503,7 +507,12 @@ We welcome all forms of contribution! If you find a bug, have a feature suggesti
 
 ## 11. Certificate Notes
 
-This project uses an **X.509 v3** certificate system to bind public keys to user identities (e.g., `alice@example.com`), thereby establishing trust. The certificate validation process includes **signature chain validation**, **validity period checks**, **subject identity verification**, and **revocation status checking (OCSP)**, all under a strict "fail-closed" policy.
+This project uses an **X.509 v3** certificate system to bind public keys to user identities (e.g., `alice@example.com`), thereby establishing trust. The certificate validation process includes:
+*   **Signature Chain Validation**: Verifies trust back to the Root CA.
+*   **Validity Period Checks**: Ensures the certificate is not expired.
+*   **Subject Identity Verification**: Matches the username.
+*   **Strict Revocation Checking (OCSP)**: Checks status with the issuing CA under a "fail-closed" policy.
+*   **Anti-Replay (Nonce) Checks**: Ensures OCSP responses are fresh and generated specifically for the current request.
 
 ## 12. License - Dual-Licensing Model
 

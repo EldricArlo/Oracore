@@ -408,6 +408,16 @@ static OCSP_REQUEST* _create_ocsp_request(X509* user_cert, X509* issuer_cert) {
         return NULL;
     }
 
+    // [FIX]: High Risk #1 (Replay Attack)
+    // 强制向 OCSP 请求添加 Nonce 扩展。
+    // 这要求 OCSP Responder 必须支持 Nonce，否则后续验证将失败。
+    // 这是防止攻击者重放旧的 "Good" 响应的关键缓解措施。
+    if (!OCSP_request_add1_nonce(ocsp_req, NULL, -1)) {
+        LOG_PKI_ERROR("Failed to add Nonce to OCSP request.");
+        OCSP_REQUEST_free(ocsp_req);
+        return NULL;
+    }
+
     return ocsp_req;
 }
 
@@ -452,7 +462,8 @@ cleanup:
     return ocsp_resp;
 }
 
-static int _verify_and_check_status(OCSP_RESPONSE* ocsp_resp, X509_STORE* store, X509* user_cert, X509* issuer_cert) {
+// [FIX]: Updated signature to accept OCSP_REQUEST* for nonce verification
+static int _verify_and_check_status(OCSP_RESPONSE* ocsp_resp, OCSP_REQUEST* ocsp_req, X509_STORE* store, X509* user_cert, X509* issuer_cert) {
     int final_status = -1;
     OCSP_BASICRESP* bresp = NULL;
     OCSP_CERTID* cid = NULL;
@@ -469,6 +480,25 @@ static int _verify_and_check_status(OCSP_RESPONSE* ocsp_resp, X509_STORE* store,
         LOG_PKI_ERROR("OCSP response signature verification failed.");
         goto cleanup;
     }
+
+    // [FIX]: High Risk #1 (Replay Attack) - Verify Nonce
+    // 检查响应中的 Nonce 是否存在且与请求中的一致。
+    // 返回值: 1=匹配, 0=响应中缺失, -1=不匹配
+    int nonce_check = OCSP_check_nonce(ocsp_req, bresp);
+    if (nonce_check <= 0) {
+        if (nonce_check == 0) {
+            // Nonce 缺失。根据 Fail-Closed 高安全策略，要求服务器必须支持 Nonce。
+            // 攻击者可能会剥离 Nonce 并重放不带 Nonce 的旧响应。
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "         > SECURITY FAILURE: OCSP Response is missing the Nonce extension.");
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "         > This suggests the server does not support Nonce, or an attacker has stripped it to replay an old response.");
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "         > Policy: Fail-Closed.");
+        } else {
+            // Nonce 存在但不匹配
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "         > SECURITY CRITICAL: OCSP Nonce mismatch! Potential Replay Attack detected.");
+        }
+        goto cleanup;
+    }
+    _hsc_log(HSC_LOG_LEVEL_INFO, "         > SUCCESS: OCSP Nonce verified. Response is fresh.");
     
     int status, reason;
     ASN1_GENERALIZEDTIME* rev_time = NULL, *this_update = NULL, *next_update = NULL;
@@ -525,15 +555,21 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
 
     // 2. 如果存在 URI，则尝试连接。如果此时失败（网络错误/服务器错误），则必须 Fail-Closed。
     OCSP_RESPONSE* ocsp_resp = _send_and_parse_ocsp_request(user_cert, ocsp_req);
-    OCSP_REQUEST_free(ocsp_req);
+    
+    // [NOTE] Do NOT free ocsp_req yet, we need it for nonce verification
+    
     if (!ocsp_resp) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "         > FAILED: OCSP URI exists, but server is unreachable (or blocked by SSRF protection).");
         _hsc_log(HSC_LOG_LEVEL_ERROR, "         > Security Policy: Fail-Closed enforced.");
+        OCSP_REQUEST_free(ocsp_req); // Free request here as we fail out
         return ret;
     }
 
-    int status = _verify_and_check_status(ocsp_resp, store, user_cert, issuer_cert);
+    // [FIX]: Pass ocsp_req to verification function
+    int status = _verify_and_check_status(ocsp_resp, ocsp_req, store, user_cert, issuer_cert);
+    
     OCSP_RESPONSE_free(ocsp_resp);
+    OCSP_REQUEST_free(ocsp_req); // Clean up request
 
     switch (status) {
         case V_OCSP_CERTSTATUS_GOOD:
@@ -549,7 +585,7 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
             ret = HSC_ERROR_CERT_OCSP_STATUS_UNKNOWN;
             break;
         default:
-             LOG_PKI_ERROR("Unknown or failed OCSP certificate status check.");
+             LOG_PKI_ERROR("Unknown or failed OCSP certificate status check (including Nonce mismatch).");
              ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
              break;
     }

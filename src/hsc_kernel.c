@@ -249,8 +249,71 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 
 // --- API Implementation: Initialization and Cleanup ---
 
+#ifdef _WIN32
+// [FIX]: High Risk #2 (Windows Data Remanence)
+// 定义 WerAddExcludedApplication 函数指针，用于动态加载
+typedef HRESULT (WINAPI *PFN_WerAddExcludedApplication)(PCWSTR, BOOL);
+
+static void _win32_disable_crash_dumps() {
+    // 1. 获取当前可执行文件的名称
+    WCHAR exePath[MAX_PATH];
+    if (GetModuleFileNameW(NULL, exePath, MAX_PATH) == 0) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Win32 Security: Failed to get module filename for dump exclusion.");
+        return;
+    }
+    // 找到最后一个反斜杠以获取文件名
+    WCHAR* exeName = wcsrchr(exePath, L'\\');
+    if (exeName) exeName++; else exeName = exePath;
+
+    // 2. 动态加载 Wer.dll
+    // 动态加载避免了对 SDK 版本的硬性依赖，并允许在旧版 Windows 上降级处理
+    HMODULE hWer = LoadLibraryA("wer.dll");
+    bool exclusion_success = false;
+
+    if (hWer) {
+        // [FIX]: Compiler Compliance
+        // 使用 Pragma 局部抑制 -Wcast-function-type 警告。
+        // 这是 Win32 GetProcAddress 的标准用法，但在严格的警告等级下会报错。
+        #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wcast-function-type"
+        #endif
+
+        PFN_WerAddExcludedApplication pWerAddExcludedApplication =
+            (PFN_WerAddExcludedApplication)GetProcAddress(hWer, "WerAddExcludedApplication");
+        
+        #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC diagnostic pop
+        #endif
+
+        if (pWerAddExcludedApplication) {
+            // 尝试为当前用户排除该应用程序 (bAllUsers = FALSE)
+            // 这样不需要管理员权限也能生效
+            HRESULT hr = pWerAddExcludedApplication(exeName, FALSE);
+            if (SUCCEEDED(hr)) {
+                _hsc_log(HSC_LOG_LEVEL_INFO, "Win32 Security: Application successfully excluded from Windows Error Reporting (No dumps).");
+                exclusion_success = true;
+            } else {
+                _hsc_log(HSC_LOG_LEVEL_WARN, "Win32 Security: WerAddExcludedApplication failed (HRESULT: 0x%x).", hr);
+            }
+        }
+        FreeLibrary(hWer);
+    }
+
+    if (!exclusion_success) {
+        // Fallback Strategy
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Win32 Security: FAILED to programmatically disable crash dumps via WER API.");
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "   > CRITICAL: Please manually set registry 'DumpCount' to 0 in 'HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps'.");
+        
+        // 最后一道防线: 禁用 GP Fault 弹窗，防止用户点击"调试"
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    }
+}
+#endif
+
 int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
 #ifndef _WIN32
+  // Linux/Unix: Disable core dumps via rlimit
   struct rlimit core_limits;
   core_limits.rlim_cur = 0;
   core_limits.rlim_max = 0;
@@ -262,14 +325,8 @@ int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
     return HSC_ERROR_GENERAL;
   }
 #else
-  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-  fprintf(stderr, "[Oracipher Core] SECURITY WARNING: Running on Windows.\n");
-  fprintf(stderr,
-          "   Ensure Windows Error Reporting (WER) is disabled or configured "
-          "NOT to save LocalDumps.\n");
-  fprintf(stderr,
-          "   Crash dumps (.dmp files) can leak sensitive decrypted keys "
-          "present in RAM to disk.\n");
+  // [FIX]: 调用增强的 Windows 防转储函数
+  _win32_disable_crash_dumps();
 #endif
 
   if (crypto_client_init(pepper_hex) != 0) return HSC_ERROR_CRYPTO_OPERATION;
