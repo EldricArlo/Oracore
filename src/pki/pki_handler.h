@@ -1,11 +1,11 @@
 #ifndef PKI_HANDLER_H
 #define PKI_HANDLER_H
 
-// [修复] 移除了对 crypto_client.h 的直接包含，这是解耦的关键步骤。
+// 移除了对 crypto_client.h 的直接包含，这是解耦的关键步骤。
 // #include "../core_crypto/crypto_client.h" 
 #include "../../include/hsc_kernel.h"      // 引入公共定义以保持一致
 
-// [修复] 使用 typedef 进行前向声明。这使得我们可以在不知道
+// 使用 typedef 进行前向声明。这使得我们可以在不知道
 // master_key_pair 结构体完整定义的情况下，声明指向它的指针。
 typedef struct master_key_pair_s master_key_pair;
 
@@ -16,7 +16,7 @@ typedef struct master_key_pair_s master_key_pair;
  * @brief 初始化 PKI 子系统。必须在使用任何 PKI 功能前调用。
  *        主要作用是为 OpenSSL 3+ 加载算法提供者 (provider) 并初始化 libcurl。
  * 
- * [FIX]: 更新签名以接收 PKI 配置。
+ * 更新签名以接收 PKI 配置。
  * @param config 安全配置结构体，定义了如是否允许跳过 OCSP 等策略。
  * @return 成功返回 0, 失败返回 -1。
  */
@@ -72,9 +72,11 @@ int verify_user_certificate(const char* user_cert_pem,
  * @param user_cert_pem 要从中提取公钥的证书 (PEM 格式)。
  * @param public_key_out (输出) 一个缓冲区，用于存储提取出的原始公钥。
  *                       其大小必须至少为 MASTER_PUBLIC_KEY_BYTES。
+ * @param public_key_max_len [FIX] 输出缓冲区的最大容量，用于防止溢出。
  * @return 成功返回 0，失败返回 -1。
  */
 int extract_public_key_from_cert(const char* user_cert_pem,
-                                 unsigned char* public_key_out);
+                                 unsigned char* public_key_out,
+                                 size_t public_key_max_len); // [FIX] Added parameter
 
 #endif // PKI_HANDLER_H

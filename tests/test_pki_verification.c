@@ -50,7 +50,8 @@ static int test_public_key_extraction() {
     if (generate_test_ca(&ca_key, &ca_cert, 0xAA) != 0) goto cleanup;
     if (sign_csr_with_ca(&user_cert, csr_pem, ca_key, ca_cert, 0, 31536000L) != 0) goto cleanup;
 
-    if (extract_public_key_from_cert(user_cert, extracted_pk) != HSC_OK) goto cleanup; 
+    // [FIX]: Updated API call with public_key_max_len to match pki_handler.h
+    if (extract_public_key_from_cert(user_cert, extracted_pk, sizeof(extracted_pk)) != HSC_OK) goto cleanup; 
     
     // [修复] 比较提取的公钥与本地生成的 Identity PK (Ed25519)
     if (sodium_memcmp(mkp.identity_pk, extracted_pk, MASTER_PUBLIC_KEY_BYTES) != 0) goto cleanup;

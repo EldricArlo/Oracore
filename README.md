@@ -67,6 +67,7 @@ Our design adheres to the following core security principles:
 *   **Rock-Solid Memory Safety:**
     *   Exposes `libsodium`'s secure memory functions through the public API, allowing clients to handle sensitive data (like session keys) safely.
     *   **[Securely Documented]** All internal private keys **and other critical secrets (e.g., key seeds, intermediate hash values)** are stored in locked memory, **preventing them from being swapped to disk by the OS**, and are securely zeroed before being freed. Boundaries with third-party libraries (like OpenSSL) are carefully managed. When sensitive data must cross into standard memory regions (e.g., passing a seed to OpenSSL in `generate_csr`), this library employs defense-in-depth techniques (such as immediately clearing memory buffers after use) to mitigate the inherent risks, representing a best-practice approach when interacting with non-secure-memory-aware libraries.
+    *   **[NEW] API Boundary Hardening:** All public APIs now enforce strict output buffer size checks (`_max_len` parameters) to prevent buffer overflows, even if the caller miscalculates allocation sizes.
 
 *   **High-Quality Engineering Practices:**
     *   **Clean API Boundary:** Provides a single public header file, `hsc_kernel.h`, which encapsulates all internal implementation details using opaque pointers, achieving high cohesion and low coupling.
@@ -330,7 +331,9 @@ This section provides a complete, self-contained workflow demonstrating how two 
 
     // 4. Extract Bob's public key from his certificate
     unsigned char bob_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert(bob_cert_pem, bob_pk) != HSC_OK) {
+    
+    // [NEW in v5.2] Pass buffer size for safety
+    if (hsc_extract_public_key_from_cert(bob_cert_pem, bob_pk, sizeof(bob_pk)) != HSC_OK) {
         // Handle extraction error
     }
 
@@ -451,20 +454,20 @@ Oracipher Core provides two distinct hybrid encryption workflows, each with diff
 | `hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(...)` | Loads a private key from a file. |
 | `int hsc_save_master_key_pair(...)` | Saves a key pair to files. |
 | `void hsc_free_master_key_pair(hsc_master_key_pair** kp)` | Securely frees a master key pair. |
-| `int hsc_get_master_public_key(const hsc_master_key_pair* kp, ...)` | **[New]** Extracts the raw public key from a key pair handle. |
+| `int hsc_get_master_public_key(kp, out, max_len)` | **[New]** Extracts the raw public key from a key pair handle. |
 
 ### PKI & Certificates
 | Function | Description |
 | :--- | :--- |
 | `int hsc_generate_csr(...)` | Generates a PEM-formatted Certificate Signing Request (CSR). |
 | `int hsc_verify_user_certificate(...)` | **(Core)** Performs full certificate validation (chain, validity, subject, OCSP). |
-| `int hsc_extract_public_key_from_cert(...)` | Extracts a public key from a verified certificate. |
+| `int hsc_extract_public_key_from_cert(pem, out, max_len)` | Extracts a public key from a verified certificate. |
 
 ### Key Encapsulation (Asymmetric)
 | Function | Description |
 | :--- | :--- |
-| `int hsc_encapsulate_session_key(...)` | Encrypts a session key using the recipient's public key (Auth KEM). |
-| `int hsc_decapsulate_session_key(...)` | Decrypts a session key using the recipient's private key (Auth KEM). |
+| `int hsc_encapsulate_session_key(out, max_len, ...)` | Encrypts a session key using the recipient's public key (Auth KEM). |
+| `int hsc_decapsulate_session_key(out, max_len, ...)` | Decrypts a session key using the recipient's private key (Auth KEM). |
 
 ### Stream Encryption (Symmetric, for large files)
 | Function | Description |
@@ -480,8 +483,8 @@ Oracipher Core provides two distinct hybrid encryption workflows, each with diff
 ### Data Encryption (Symmetric, for small data)
 | Function | Description |
 | :--- | :--- |
-| `int hsc_aead_encrypt(...)` | Performs authenticated encryption on a **small chunk of data** using AEAD. |
-| `int hsc_aead_decrypt(...)` | Decrypts and verifies data encrypted by `hsc_aead_encrypt`. |
+| `int hsc_aead_encrypt(out, max_len, ...)` | Performs authenticated encryption on a **small chunk of data** using AEAD. |
+| `int hsc_aead_decrypt(out, max_len, ...)` | Decrypts and verifies data encrypted by `hsc_aead_encrypt`. |
 
 ### Secure Memory
 | Function | Description |

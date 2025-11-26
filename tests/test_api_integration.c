@@ -1,5 +1,3 @@
-/* --- START OF FILE tests/test_api_integration.c --- */
-
 // tests/test_api_integration.c
 // [REVISED BY COMMITTEE - FIX VERIFICATION]
 // This file tests the high-level public API functions, focusing on the
@@ -105,10 +103,12 @@ void test_hybrid_stream_roundtrip_ok() {
     _assert(recipient_kp && sender_kp);
 
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    _assert(hsc_get_master_public_key(recipient_kp, recipient_pk) == HSC_OK);
+    // [FIX] Updated API call with public_key_max_len
+    _assert(hsc_get_master_public_key(recipient_kp, recipient_pk, sizeof(recipient_pk)) == HSC_OK);
 
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    _assert(hsc_get_master_public_key(sender_kp, sender_pk) == HSC_OK);
+    // [FIX] Updated API call with public_key_max_len
+    _assert(hsc_get_master_public_key(sender_kp, sender_pk, sizeof(sender_pk)) == HSC_OK);
 
     const char* original_content = "This is a test of the hybrid streaming encryption. It should work perfectly.";
     _assert(create_temp_file("test_in.txt", original_content));
@@ -137,13 +137,16 @@ void test_hybrid_stream_decrypt_wrong_key() {
     _assert(recipient_kp && sender_kp && attacker_kp);
     
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_get_master_public_key(recipient_kp, recipient_pk);
+    // [FIX] Updated API call with public_key_max_len
+    hsc_get_master_public_key(recipient_kp, recipient_pk, sizeof(recipient_pk));
 
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_get_master_public_key(sender_kp, sender_pk);
+    // [FIX] Updated API call with public_key_max_len
+    hsc_get_master_public_key(sender_kp, sender_pk, sizeof(sender_pk));
 
     unsigned char attacker_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_get_master_public_key(attacker_kp, attacker_pk);
+    // [FIX] Updated API call with public_key_max_len
+    hsc_get_master_public_key(attacker_kp, attacker_pk, sizeof(attacker_pk));
 
     _assert(create_temp_file("test_in.txt", "secret"));
     
@@ -176,10 +179,12 @@ void test_hybrid_stream_decrypt_tampered_file() {
     _assert(recipient_kp && sender_kp);
 
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_get_master_public_key(recipient_kp, recipient_pk);
+    // [FIX] Updated API call with public_key_max_len
+    hsc_get_master_public_key(recipient_kp, recipient_pk, sizeof(recipient_pk));
 
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_get_master_public_key(sender_kp, sender_pk);
+    // [FIX] Updated API call with public_key_max_len
+    hsc_get_master_public_key(sender_kp, sender_pk, sizeof(sender_pk));
 
     _assert(create_temp_file("test_in.txt", "some data that is long enough to be tampered with"));
     _assert(hsc_hybrid_encrypt_stream_raw("test_out.hsc", "test_in.txt", recipient_pk, sender_kp) == HSC_OK);
@@ -203,10 +208,12 @@ void test_hybrid_stream_empty_file() {
     _assert(recipient_kp && sender_kp);
 
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_get_master_public_key(recipient_kp, recipient_pk);
+    // [FIX] Updated API call with public_key_max_len
+    hsc_get_master_public_key(recipient_kp, recipient_pk, sizeof(recipient_pk));
     
     unsigned char sender_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    hsc_get_master_public_key(sender_kp, sender_pk);
+    // [FIX] Updated API call with public_key_max_len
+    hsc_get_master_public_key(sender_kp, sender_pk, sizeof(sender_pk));
 
     _assert(create_temp_file("test_in_empty.txt", ""));
 
@@ -240,6 +247,7 @@ void test_api_null_arguments() {
     _assert(hsc_hybrid_decrypt_stream_raw(NULL, "in", dummy_kp, dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
     _assert(hsc_hybrid_decrypt_stream_raw("out", NULL, dummy_kp, dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
     _assert(hsc_hybrid_decrypt_stream_raw("out", "in", NULL, dummy_pk) == HSC_ERROR_INVALID_ARGUMENT);
+    // [FIX] Corrected parameter from dummy_kp (struct*) to dummy_pk (unsigned char*)
     _assert(hsc_hybrid_decrypt_stream_raw("out", "in", dummy_kp, NULL) == HSC_ERROR_INVALID_ARGUMENT);
 
     hsc_free_master_key_pair(&dummy_kp);
@@ -272,4 +280,3 @@ int main() {
         return 0;
     }
 }
-/* --- END OF FILE tests/test_api_integration.c --- */

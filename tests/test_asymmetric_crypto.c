@@ -1,5 +1,3 @@
-/* --- START OF FILE tests/test_asymmetric_crypto.c --- */
-
 // tests/test_asymmetric_crypto.c
 
 #include <stdio.h>
@@ -87,8 +85,10 @@ int test_key_encapsulation_roundtrip() {
     }
 
     // [FIX]: Authenticated KEM - Alice 作为发送者，必须提供自己的 MKP 用于签名
+    // [FIX]: Updated API call with encrypted_output_max_len
     size_t encapsulated_len;
-    if (encapsulate_session_key(encapsulated_key, &encapsulated_len, 
+    if (encapsulate_session_key(encapsulated_key, enc_buf_len, 
+                                &encapsulated_len, 
                                 session_key, sizeof(session_key), 
                                 bob_kp.identity_pk,
                                 &alice_kp) != 0) { // Passed sender_mkp
@@ -103,7 +103,9 @@ int test_key_encapsulation_roundtrip() {
     }
 
     // [FIX]: Authenticated KEM - Bob 解密时，必须提供 Alice 的公钥用于验签
-    if (decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, 
+    // [FIX]: Updated API call with decrypted_output_max_len
+    if (decapsulate_session_key(decrypted_session_key, sizeof(session_key),
+                                encapsulated_key, encapsulated_len, 
                                 bob_kp.encryption_sk,
                                 alice_kp.identity_pk) != 0) { // Passed sender_pk
         fprintf(stderr, "TEST FAILED: decapsulate_session_key should succeed (%s:%d)\n", __FILE__, __LINE__);
@@ -154,7 +156,9 @@ int test_decapsulation_wrong_recipient() {
 
     size_t encapsulated_len;
     // Alice encrypts for Bob
-    encapsulate_session_key(encapsulated_key, &encapsulated_len, 
+    // [FIX]: Updated API call with encrypted_output_max_len
+    encapsulate_session_key(encapsulated_key, enc_buf_len, 
+                            &encapsulated_len, 
                             session_key, sizeof(session_key), 
                             bob_kp.identity_pk,
                             &alice_kp); // Sender is Alice
@@ -164,7 +168,9 @@ int test_decapsulation_wrong_recipient() {
 
     // Eve tries to decrypt (Wrong Recipient SK)
     // Note: Sender PK is correct (Alice), but Recipient SK is Eve's.
-    int res_dec = decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, 
+    // [FIX]: Updated API call with decrypted_output_max_len
+    int res_dec = decapsulate_session_key(decrypted_session_key, sizeof(session_key),
+                                          encapsulated_key, encapsulated_len, 
                                           eve_kp.encryption_sk, 
                                           alice_kp.identity_pk);
                                           
@@ -215,7 +221,9 @@ int test_decapsulation_wrong_sender_signature() {
     size_t encapsulated_len;
     
     // 1. Alice 加密给 Bob (使用 Alice 的私钥签名)
-    encapsulate_session_key(encapsulated_key, &encapsulated_len, 
+    // [FIX]: Updated API call with encrypted_output_max_len
+    encapsulate_session_key(encapsulated_key, enc_buf_len, 
+                            &encapsulated_len, 
                             session_key, sizeof(session_key), 
                             bob_kp.identity_pk,
                             &alice_kp); 
@@ -225,7 +233,9 @@ int test_decapsulation_wrong_sender_signature() {
 
     // 2. Bob 尝试解密，但他被误导（或受到攻击），认为发送者是 Eve
     // 他传入了 Eve 的公钥来验证签名
-    int res_dec = decapsulate_session_key(decrypted_session_key, encapsulated_key, encapsulated_len, 
+    // [FIX]: Updated API call with decrypted_output_max_len
+    int res_dec = decapsulate_session_key(decrypted_session_key, sizeof(session_key),
+                                          encapsulated_key, encapsulated_len, 
                                           bob_kp.encryption_sk, // Recipient SK is correct
                                           eve_kp.identity_pk);  // [WRONG] Expected Sender PK
                                           

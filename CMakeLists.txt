@@ -2,7 +2,7 @@
 # CMakeLists.txt for Oracipher Core
 #
 # Reviewed and Updated by the Oracipher Core Code Review Committee
-# Version: 2.8 (Security Fixes: Windows Hardening & Linker Flags)
+# Version: 3.1 (Remediation: Fixed Linker Dependencies for Windows Security Features)
 #
 # This file now integrates clang-tidy directly into the build process,
 # enforces strict dependency version checks, and prevents test utilities
@@ -20,7 +20,6 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Defaults to OFF to ensure test_ca_util is not deployed to production.
 option(INSTALL_DEV_TOOLS "Install development and testing tools (like test_ca_util)" OFF)
 
-
 # --- 2. Compiler Settings and Warnings ---
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_CLANG)
@@ -32,10 +31,15 @@ if(WIN32)
     add_compile_options(-DWIN32_LEAN_AND_MEAN -DNOCRYPT)
     
     # [FIX]: Audit Finding [Build] - Windows Security Hardening
-    # Enforce Control Flow Guard (CFG) and High Entropy ASLR on MSVC
     if(MSVC)
+        # 1. Control Flow Guard (CFG)
+        # 防御内存破坏漏洞（如 vtable 劫持）
         add_compile_options(/guard:cf)
         add_link_options(/GUARD:CF /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA)
+
+        # 2. Spectre Mitigation
+        # [FIX]: 新增 /Qspectre 以缓解推测执行侧信道攻击 (Spectre Variant 1)
+        add_compile_options(/Qspectre)
     endif()
 endif()
 
@@ -49,7 +53,6 @@ if(CLANG_TIDY)
 else()
     message(STATUS "clang-tidy not found. Static analysis will be SKIPPED.")
 endif()
-
 
 # --- 3. Dependency Discovery and Validation (pkg-config) ---
 find_package(PkgConfig REQUIRED)
@@ -101,7 +104,6 @@ endif()
 
 message(STATUS "Dependency version checks passed.")
 
-
 # --- 4. Define the Core Shared Library (`hsc_kernel`) ---
 file(GLOB_RECURSE KERNEL_SRCS
     "src/common/*.c"
@@ -129,12 +131,13 @@ target_link_libraries(hsc_kernel PUBLIC
     ${CURL_LIBRARIES}
 )
 
-# [FIX]: 修复 Windows 下链接错误 (undefined reference to __imp_socket)
-# 因为 pki_handler.c 在 Windows 下使用了 Winsock2 API (socket, inet_ntop) 进行 SSRF 防御
+# [FIX]: 修复 Windows 下链接错误
+# 1. ws2_32: 用于 pki_handler.c 的 Socket SSRF 防御 (getaddrinfo, socket 等)
+# 2. Advapi32: 用于 hsc_kernel.c 的安全描述符函数 (ConvertStringSecurityDescriptorToSecurityDescriptorA)
+# 3. Kernel32: 默认包含，用于 SetProcessMitigationPolicy (P1阶段)
 if(WIN32)
-    target_link_libraries(hsc_kernel PRIVATE ws2_32)
+    target_link_libraries(hsc_kernel PRIVATE ws2_32 Advapi32)
 endif()
-
 
 # --- 5. Define Executable Targets ---
 add_executable(hsc_cli src/cli.c)
@@ -158,9 +161,8 @@ target_link_libraries(test_ca_util PRIVATE
 
 # [FIX]: Windows 下 test_ca_util 也可能间接依赖 socket 符号，安全起见也加上
 if(WIN32)
-    target_link_libraries(test_ca_util PRIVATE ws2_32)
+    target_link_libraries(test_ca_util PRIVATE ws2_32 Advapi32)
 endif()
-
 
 # --- 6. Define Test Suite ---
 enable_testing()
@@ -182,7 +184,7 @@ foreach(test_source ${TEST_MAIN_SRCS})
     
     # [FIX]: Windows 链接修复
     if(WIN32)
-        target_link_libraries(${test_name} PRIVATE ws2_32)
+        target_link_libraries(${test_name} PRIVATE ws2_32 Advapi32)
     endif()
     
     add_test(NAME ${test_name} COMMAND ${test_name})
@@ -190,7 +192,6 @@ foreach(test_source ${TEST_MAIN_SRCS})
         ENVIRONMENT "HSC_PEPPER_HEX=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
     )
 endforeach()
-
 
 # --- 7. Installation and RPATH Rules ---
 message(STATUS "Configuring installation rules...")
@@ -223,7 +224,6 @@ else()
     message(STATUS "NOTE: Development tools (test_ca_util) will NOT be installed. (Use -DINSTALL_DEV_TOOLS=ON to enable)")
 endif()
 
-
 # --- 8. Optional Developer Tools Integration ---
 find_program(CLANG_FORMAT clang-format)
 if(CLANG_FORMAT)
@@ -238,7 +238,6 @@ if(CLANG_FORMAT)
 else()
     message(STATUS "clang-format not found. The 'format' target will not be available.")
 endif()
-
 
 message(STATUS "CMake configuration complete. You can now build with 'cmake --build .'")
 message(STATUS "Run tests with 'ctest'.")

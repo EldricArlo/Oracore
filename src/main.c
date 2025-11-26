@@ -155,7 +155,9 @@ int main() {
     }
     unsigned long long actual_enc_file_len;
 
-    if (hsc_aead_encrypt(encrypted_file, &actual_enc_file_len,
+    // [FIX]: Updated API call with ciphertext_max_len
+    if (hsc_aead_encrypt(encrypted_file, enc_file_buf_len, 
+                         &actual_enc_file_len,
                          (unsigned char*)file_content, file_content_len,
                          session_key) != HSC_OK) {
         fprintf(stderr, "Critical Error: Symmetric file encryption failed!\n");
@@ -174,7 +176,9 @@ int main() {
     // 3. Extract Recipient Public Key (for encryption).
     printf("3. Extracting recipient public key from certificate...\n");
     unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert(alice_cert_pem, recipient_pk) != HSC_OK) {
+    
+    // [FIX]: Updated API call with public_key_max_len
+    if (hsc_extract_public_key_from_cert(alice_cert_pem, recipient_pk, sizeof(recipient_pk)) != HSC_OK) {
         fprintf(stderr, "Critical Error: Failed to extract public key from certificate!\n");
         goto cleanup;
     }
@@ -194,7 +198,9 @@ int main() {
     size_t actual_encapsulated_len;
 
     // Pass sender_mkp (Alice) for signing to ensure authenticity.
-    if (hsc_encapsulate_session_key(encapsulated_session_key, &actual_encapsulated_len,
+    // [FIX]: Updated API call with encrypted_output_max_len
+    if (hsc_encapsulate_session_key(encapsulated_session_key, encapsulated_key_buf_len,
+                                    &actual_encapsulated_len,
                                     session_key, sizeof(session_key),
                                     recipient_pk,
                                     alice_mkp) != HSC_OK) {
@@ -210,7 +216,8 @@ int main() {
     // their public key. Here, the sender is Alice herself, so we extract the key
     // from Alice's certificate to verify the signature.
     unsigned char sender_public_key[HSC_MASTER_PUBLIC_KEY_BYTES];
-    if (hsc_extract_public_key_from_cert(alice_cert_pem, sender_public_key) != HSC_OK) {
+    // [FIX]: Updated API call with public_key_max_len
+    if (hsc_extract_public_key_from_cert(alice_cert_pem, sender_public_key, sizeof(sender_public_key)) != HSC_OK) {
         fprintf(stderr, "Critical Error: Failed to retrieve sender public key!\n");
         goto cleanup;
     }
@@ -224,7 +231,8 @@ int main() {
     }
 
     // Pass sender_public_key for signature verification.
-    if (hsc_decapsulate_session_key(decrypted_session_key,
+    // [FIX]: Updated API call with decrypted_output_max_len
+    if (hsc_decapsulate_session_key(decrypted_session_key, sizeof(session_key),
                                     encapsulated_session_key, actual_encapsulated_len,
                                     alice_mkp,
                                     sender_public_key) != HSC_OK) {
@@ -249,7 +257,9 @@ int main() {
     }
     unsigned long long actual_dec_file_len;
 
-    if (hsc_aead_decrypt(decrypted_file_content, &actual_dec_file_len,
+    // [FIX]: Updated API call with decrypted_message_max_len
+    if (hsc_aead_decrypt(decrypted_file_content, file_content_len + 1,
+                         &actual_dec_file_len,
                          encrypted_file, actual_enc_file_len,
                          decrypted_session_key) != HSC_OK) {
         fprintf(stderr, "Decryption Error: Failed to decrypt file content!\n");

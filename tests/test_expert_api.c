@@ -60,9 +60,9 @@ void test_api_key_conversion_validation() {
     unsigned char x25519_sk[crypto_box_SECRETKEYBYTES];
     unsigned char x25519_pk_from_sk[crypto_box_PUBLICKEYBYTES];
 
-    // 调用API进行转换
-    _assert(hsc_convert_ed25519_pk_to_x25519_pk(x25519_pk_from_pk, ed25519_pk) == HSC_OK);
-    _assert(hsc_convert_ed25519_sk_to_x25519_sk(x25519_sk, ed25519_sk) == HSC_OK);
+    // [FIX]: 调用API进行转换，增加 max_len 参数
+    _assert(hsc_convert_ed25519_pk_to_x25519_pk(x25519_pk_from_pk, sizeof(x25519_pk_from_pk), ed25519_pk) == HSC_OK);
+    _assert(hsc_convert_ed25519_sk_to_x25519_sk(x25519_sk, sizeof(x25519_sk), ed25519_sk) == HSC_OK);
 
     // 独立验证：从转换后的X25519私钥推导出其对应的公钥
     _assert(crypto_scalarmult_base(x25519_pk_from_sk, x25519_sk) == 0);
@@ -87,12 +87,22 @@ void test_api_aead_detached_safe_roundtrip() {
     unsigned char tag[HSC_AEAD_TAG_BYTES];
     unsigned char decrypted_message[200];
 
-    // 加密 - 使用新的安全API
-    int res_enc = hsc_aead_encrypt_detached_safe(ciphertext, tag, nonce_out, (unsigned char*)message, message_len, (unsigned char*)ad, ad_len, key);
+    // 加密 - 使用新的安全API，增加 max_len 参数
+    int res_enc = hsc_aead_encrypt_detached_safe(ciphertext, sizeof(ciphertext),
+                                                 tag, sizeof(tag),
+                                                 nonce_out, sizeof(nonce_out),
+                                                 (unsigned char*)message, message_len, 
+                                                 (unsigned char*)ad, ad_len, 
+                                                 key);
     _assert(res_enc == HSC_OK);
 
-    // 解密 - 使用加密时返回的 nonce_out
-    int res_dec = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce_out, key);
+    // 解密 - 使用加密时返回的 nonce_out，增加 max_len 参数
+    int res_dec = hsc_aead_decrypt_detached(decrypted_message, sizeof(decrypted_message),
+                                            ciphertext, message_len, 
+                                            tag, 
+                                            (unsigned char*)ad, ad_len, 
+                                            nonce_out, 
+                                            key);
     _assert(res_dec == HSC_OK);
 
     // 验证
@@ -114,23 +124,44 @@ void test_api_aead_detached_safe_tampered() {
     unsigned char tag[HSC_AEAD_TAG_BYTES];
     unsigned char decrypted_message[200];
     
-    _assert(hsc_aead_encrypt_detached_safe(ciphertext, tag, nonce_out, (unsigned char*)message, message_len, (unsigned char*)ad, ad_len, key) == HSC_OK);
+    // [FIX]: 增加 max_len 参数
+    _assert(hsc_aead_encrypt_detached_safe(ciphertext, sizeof(ciphertext),
+                                           tag, sizeof(tag),
+                                           nonce_out, sizeof(nonce_out),
+                                           (unsigned char*)message, message_len, 
+                                           (unsigned char*)ad, ad_len, 
+                                           key) == HSC_OK);
     
     // 1. 测试篡改密文
     ciphertext[0] ^= 0xFF;
-    int res_dec_tamper_ct = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce_out, key);
+    int res_dec_tamper_ct = hsc_aead_decrypt_detached(decrypted_message, sizeof(decrypted_message),
+                                                      ciphertext, message_len, 
+                                                      tag, 
+                                                      (unsigned char*)ad, ad_len, 
+                                                      nonce_out, 
+                                                      key);
     _assert(res_dec_tamper_ct == HSC_ERROR_CRYPTO_OPERATION);
     ciphertext[0] ^= 0xFF; // 恢复
 
     // 2. 测试篡改认证标签
     tag[0] ^= 0xFF;
-    int res_dec_tamper_tag = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)ad, ad_len, nonce_out, key);
+    int res_dec_tamper_tag = hsc_aead_decrypt_detached(decrypted_message, sizeof(decrypted_message),
+                                                       ciphertext, message_len, 
+                                                       tag, 
+                                                       (unsigned char*)ad, ad_len, 
+                                                       nonce_out, 
+                                                       key);
     _assert(res_dec_tamper_tag == HSC_ERROR_CRYPTO_OPERATION);
     tag[0] ^= 0xFF; // 恢复
 
     // 3. 测试使用错误的附加数据
     const char* bad_ad = "Wrong AD";
-    int res_dec_wrong_ad = hsc_aead_decrypt_detached(decrypted_message, ciphertext, message_len, tag, (unsigned char*)bad_ad, strlen(bad_ad), nonce_out, key);
+    int res_dec_wrong_ad = hsc_aead_decrypt_detached(decrypted_message, sizeof(decrypted_message),
+                                                     ciphertext, message_len, 
+                                                     tag, 
+                                                     (unsigned char*)bad_ad, strlen(bad_ad), 
+                                                     nonce_out, 
+                                                     key);
     _assert(res_dec_wrong_ad == HSC_ERROR_CRYPTO_OPERATION);
 }
 
@@ -144,23 +175,27 @@ void test_api_expert_null_arguments() {
     _assert(hsc_derive_key_from_password(dummy_buf, 32, "pass", NULL) == HSC_ERROR_INVALID_ARGUMENT);
 
     // hsc_convert_ed25519_pk_to_x25519_pk
-    _assert(hsc_convert_ed25519_pk_to_x25519_pk(NULL, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_convert_ed25519_pk_to_x25519_pk(dummy_buf, NULL) == HSC_ERROR_INVALID_ARGUMENT);
+    // [FIX] 增加 max_len 参数
+    _assert(hsc_convert_ed25519_pk_to_x25519_pk(NULL, sizeof(dummy_buf), dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_convert_ed25519_pk_to_x25519_pk(dummy_buf, sizeof(dummy_buf), NULL) == HSC_ERROR_INVALID_ARGUMENT);
     
     // hsc_convert_ed25519_sk_to_x25519_sk
-    _assert(hsc_convert_ed25519_sk_to_x25519_sk(NULL, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_convert_ed25519_sk_to_x25519_sk(dummy_buf, NULL) == HSC_ERROR_INVALID_ARGUMENT);
+    // [FIX] 增加 max_len 参数
+    _assert(hsc_convert_ed25519_sk_to_x25519_sk(NULL, sizeof(dummy_buf), dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_convert_ed25519_sk_to_x25519_sk(dummy_buf, sizeof(dummy_buf), NULL) == HSC_ERROR_INVALID_ARGUMENT);
     
     // [COMMITTEE FIX] Test the new safe API for NULL arguments, remove tests for deprecated API.
     // hsc_aead_encrypt_detached_safe
-    _assert(hsc_aead_encrypt_detached_safe(NULL, dummy_buf, dummy_buf, dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, NULL, dummy_buf, dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, dummy_buf, NULL, dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, dummy_buf, dummy_buf, dummy_buf, 1, NULL, 0, NULL) == HSC_ERROR_INVALID_ARGUMENT);
+    // [FIX] 增加 max_len 参数，保持调用签名一致
+    _assert(hsc_aead_encrypt_detached_safe(NULL, sizeof(dummy_buf), dummy_buf, sizeof(dummy_buf), dummy_buf, sizeof(dummy_buf), dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, sizeof(dummy_buf), NULL, sizeof(dummy_buf), dummy_buf, sizeof(dummy_buf), dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, sizeof(dummy_buf), dummy_buf, sizeof(dummy_buf), NULL, sizeof(dummy_buf), dummy_buf, 1, NULL, 0, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_aead_encrypt_detached_safe(dummy_buf, sizeof(dummy_buf), dummy_buf, sizeof(dummy_buf), dummy_buf, sizeof(dummy_buf), dummy_buf, 1, NULL, 0, NULL) == HSC_ERROR_INVALID_ARGUMENT);
 
     // hsc_aead_decrypt_detached
-    _assert(hsc_aead_decrypt_detached(NULL, dummy_buf, 1, dummy_buf, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
-    _assert(hsc_aead_decrypt_detached(dummy_buf, dummy_buf, 1, NULL, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    // [FIX] 增加 max_len 参数
+    _assert(hsc_aead_decrypt_detached(NULL, sizeof(dummy_buf), dummy_buf, 1, dummy_buf, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
+    _assert(hsc_aead_decrypt_detached(dummy_buf, sizeof(dummy_buf), dummy_buf, 1, NULL, NULL, 0, dummy_buf, dummy_buf) == HSC_ERROR_INVALID_ARGUMENT);
 }
 
 

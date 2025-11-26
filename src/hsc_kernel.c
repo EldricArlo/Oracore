@@ -1,5 +1,3 @@
-/* --- START OF FILE src/hsc_kernel.c --- */
-
 // Copyright 2025 Oracipher. All Rights Reserved.
 //
 // Implementation of the High-Security Core (HSC) kernel.
@@ -15,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// [FIX]: 引入系统级文件控制头文件以修复权限和竞争条件问题
+// 引入系统级文件控制头文件以修复权限和竞争条件问题
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
@@ -25,6 +23,9 @@
 #include <sys/time.h>
 #else
 #include <windows.h>
+#include <io.h>    // _open_osfhandle
+#include <fcntl.h> // _O_RDWR
+#include <sddl.h>  // ConvertStringSecurityDescriptorToSecurityDescriptor
 #endif
 
 #include <curl/curl.h>
@@ -95,7 +96,7 @@ static int _perform_stream_encryption(FILE* f_in, FILE* f_out,
   unsigned long long out_len;
   uint8_t tag;
 
-  // [FIX]: 使用更安全的循环结构，避免 feof 的误用
+  // 使用更安全的循环结构，避免 feof 的误用
   while ((bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in)) > 0) {
     if (ferror(f_in)) {
       return HSC_ERROR_FILE_IO;
@@ -176,17 +177,56 @@ static bool read_key_file(const char* filename, void* buffer,
   return (bytes_read == expected_len);
 }
 
-// [FIX]: Audit Finding #2 - 强制安全文件权限
+// Windows 平台专用安全文件打开辅助函数
+#ifdef _WIN32
+static FILE* _fopen_exclusive_win32(const char* filename) {
+    SECURITY_ATTRIBUTES sa;
+    PSECURITY_DESCRIPTOR pSD = NULL;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    FILE* fp = NULL;
+
+    const char* szSD = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)";
+
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            szSD, SDDL_REVISION_1, &pSD, NULL)) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Win32 Security: Failed to create security descriptor (Error: %lu)", GetLastError());
+        return NULL;
+    }
+
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.lpSecurityDescriptor = pSD;
+    sa.bInheritHandle = FALSE;
+
+    hFile = CreateFileA(filename, GENERIC_WRITE, 0, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    LocalFree(pSD);
+
+    if (hFile == INVALID_HANDLE_VALUE) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Win32 Security: CreateFile failed for '%s' (Error: %lu)", filename, GetLastError());
+        return NULL;
+    }
+
+    int fd = _open_osfhandle((intptr_t)hFile, _O_WRONLY);
+    if (fd == -1) {
+        CloseHandle(hFile);
+        return NULL;
+    }
+
+    fp = _fdopen(fd, "wb");
+    if (!fp) {
+        _close(fd); 
+        return NULL;
+    }
+
+    return fp;
+}
+#endif
+
 // Writes exact bytes to a key file with strictly restricted permissions (0600).
 static bool write_key_file(const char* filename, const void* data, size_t len) {
 #ifdef _WIN32
-  // Windows implementation: Standard fopen.
-  // Warning: Permissions depend on directory ACLs.
-  // Administrators must disable LocalDumps via Registry.
-  FILE* f = fopen(filename, "wb");
+  FILE* f = _fopen_exclusive_win32(filename);
 #else
-  // POSIX implementation: Use open() to enforce 0600 (rw-------).
-  // O_TRUNC: Truncate if exists. O_CREAT: Create if missing.
   int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
   if (fd == -1) {
       _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open key file '%s' for writing: %s", filename, strerror(errno));
@@ -197,20 +237,19 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 
   if (!f) {
       #ifndef _WIN32
-      close(fd);
+      if (fd != -1) close(fd);
       #endif
       return false;
   }
   
   bool success = (fwrite(data, 1, len, f) == len);
-  fclose(f); // This also closes the underlying fd
+  fclose(f); 
   return success;
 }
 
 // --- API Implementation: Initialization and Cleanup ---
 
 int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
-// Disable core dumps to prevent sensitive memory leakage.
 #ifndef _WIN32
   struct rlimit core_limits;
   core_limits.rlim_cur = 0;
@@ -223,7 +262,6 @@ int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
     return HSC_ERROR_GENERAL;
   }
 #else
-  // Windows platform security enhancements.
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
   fprintf(stderr, "[Oracipher Core] SECURITY WARNING: Running on Windows.\n");
   fprintf(stderr,
@@ -299,8 +337,6 @@ hsc_master_key_pair* hsc_load_master_key_pair_from_private_key(
     return NULL;
   }
 
-  // The sender identity key is re-introduced during encryption for signing.
-  // However, the recipient still requires encryption_sk for KEM decapsulation.
   kp->internal_kp.encryption_sk = secure_alloc(crypto_box_SECRETKEYBYTES);
   if (!kp->internal_kp.encryption_sk) {
     _hsc_log(HSC_LOG_LEVEL_ERROR,
@@ -334,8 +370,6 @@ int hsc_save_master_key_pair(const hsc_master_key_pair* kp,
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  // TODO(maintainer): Implement encrypted storage for private keys in future
-  // versions (Priority P0). Focusing on protocol layer fixes for now.
   if (!write_key_file(pub_key_path, kp->internal_kp.identity_pk,
                       HSC_MASTER_PUBLIC_KEY_BYTES) ||
       !write_key_file(priv_key_path, kp->internal_kp.identity_sk,
@@ -352,10 +386,16 @@ void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
   *kp = NULL;
 }
 
+// [FIX]: Added max_len check.
 int hsc_get_master_public_key(const hsc_master_key_pair* kp,
-                              unsigned char* public_key_out) {
+                              unsigned char* public_key_out,
+                              size_t public_key_max_len) {
   if (kp == NULL || public_key_out == NULL) {
     return HSC_ERROR_INVALID_ARGUMENT;
+  }
+  // [FIX]: Buffer overflow protection
+  if (public_key_max_len < HSC_MASTER_PUBLIC_KEY_BYTES) {
+      return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
   }
   memcpy(public_key_out, kp->internal_kp.identity_pk,
          HSC_MASTER_PUBLIC_KEY_BYTES);
@@ -379,9 +419,15 @@ int hsc_verify_user_certificate(const char* user_cert_pem,
                                  expected_username);
 }
 
+// [FIX]: Added max_len check.
 int hsc_extract_public_key_from_cert(const char* user_cert_pem,
-                                     unsigned char* public_key_out) {
-  return extract_public_key_from_cert(user_cert_pem, public_key_out);
+                                     unsigned char* public_key_out,
+                                     size_t public_key_max_len) {
+  if (public_key_max_len < HSC_MASTER_PUBLIC_KEY_BYTES) {
+      return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
+  }
+  // [FIX]: Pass max_len to internal function
+  return extract_public_key_from_cert(user_cert_pem, public_key_out, public_key_max_len);
 }
 
 // --- API Implementation: Asymmetric Encryption (Key Encapsulation) ---
@@ -389,6 +435,7 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem,
 // Encapsulates a session key for a recipient.
 // Requires sender_mkp for signing to ensure authenticity (PFS + Auth).
 int hsc_encapsulate_session_key(unsigned char* encrypted_output,
+                                size_t encrypted_output_max_len, // [FIX] Added parameter
                                 size_t* encrypted_output_len,
                                 const unsigned char* session_key,
                                 size_t session_key_len,
@@ -398,8 +445,10 @@ int hsc_encapsulate_session_key(unsigned char* encrypted_output,
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  // Unwrap hsc_master_key_pair and pass the internal structure.
-  int result = encapsulate_session_key(encrypted_output, encrypted_output_len,
+  // [FIX]: Pass max_len to internal function
+  int result = encapsulate_session_key(encrypted_output, 
+                                       encrypted_output_max_len,
+                                       encrypted_output_len,
                                        session_key, session_key_len,
                                        recipient_pk, &sender_mkp->internal_kp);
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
@@ -408,6 +457,7 @@ int hsc_encapsulate_session_key(unsigned char* encrypted_output,
 // Decapsulates a session key from a sender.
 // Requires sender_pk for signature verification.
 int hsc_decapsulate_session_key(unsigned char* decrypted_output,
+                                size_t decrypted_output_max_len, // [FIX] Added parameter
                                 const unsigned char* encrypted_input,
                                 size_t encrypted_input_len,
                                 const hsc_master_key_pair* my_kp,
@@ -416,8 +466,10 @@ int hsc_decapsulate_session_key(unsigned char* decrypted_output,
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  // Pass local decryption private key and sender public key for verification.
-  int result = decapsulate_session_key(decrypted_output, encrypted_input,
+  // [FIX]: Pass max_len to internal function
+  int result = decapsulate_session_key(decrypted_output, 
+                                       decrypted_output_max_len,
+                                       encrypted_input,
                                        encrypted_input_len,
                                        my_kp->internal_kp.encryption_sk,
                                        sender_pk);
@@ -427,19 +479,24 @@ int hsc_decapsulate_session_key(unsigned char* decrypted_output,
 // --- API Implementation: One-shot Symmetric Encryption ---
 
 int hsc_aead_encrypt(unsigned char* ciphertext,
+                     size_t ciphertext_max_len, // [FIX] Added parameter
                      unsigned long long* ciphertext_len,
                      const unsigned char* message, size_t message_len,
                      const unsigned char* key) {
-  int result = encrypt_symmetric_aead(ciphertext, ciphertext_len, message,
+  // [FIX]: Pass max_len to internal function
+  int result = encrypt_symmetric_aead(ciphertext, ciphertext_max_len, ciphertext_len, message,
                                       message_len, key);
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 int hsc_aead_decrypt(unsigned char* decrypted_message,
+                     size_t decrypted_message_max_len, // [FIX] Added parameter
                      unsigned long long* decrypted_message_len,
                      const unsigned char* ciphertext, size_t ciphertext_len,
                      const unsigned char* key) {
-  int result = decrypt_symmetric_aead(decrypted_message, decrypted_message_len,
+  // [FIX]: Pass max_len to internal function
+  int result = decrypt_symmetric_aead(decrypted_message, decrypted_message_max_len, 
+                                      decrypted_message_len,
                                       ciphertext, ciphertext_len, key);
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
@@ -519,14 +576,14 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
     goto cleanup;
   }
 
-  // Header buffer adapts to the new HSC_MAX_ENCAPSULATED_KEY_SIZE (includes
-  // signature).
   unsigned char encapsulated_key[HSC_MAX_ENCAPSULATED_KEY_SIZE];
   size_t actual_encapsulated_len;
   hsc_random_bytes(session_key, HSC_SESSION_KEY_BYTES);
 
-  // Invoke updated encapsulation function, passing sender_mkp.
-  if (hsc_encapsulate_session_key(encapsulated_key, &actual_encapsulated_len,
+  // [FIX]: Pass sizeof(encapsulated_key) as max_len
+  if (hsc_encapsulate_session_key(encapsulated_key, 
+                                  sizeof(encapsulated_key),
+                                  &actual_encapsulated_len,
                                   session_key, HSC_SESSION_KEY_BYTES,
                                   recipient_pk, sender_mkp) != HSC_OK) {
     ret_code = HSC_ERROR_CRYPTO_OPERATION;
@@ -538,15 +595,11 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
     goto cleanup;
   }
 
-  // [FIX]: Audit Finding #3 - Symlink Race / TOCTOU 防御
 #ifdef _WIN32
-  f_out = fopen(output_path, "wb"); // Windows 暂保留 fopen，依赖 ACL
+  f_out = _fopen_exclusive_win32(output_path); 
 #else
-  // 使用 O_EXCL | O_CREAT 确保文件不存在，防止覆盖敏感文件（如符号链接指向的 /etc/shadow）
-  // 同时应用 0600 权限
   int fd_out = open(output_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd_out == -1) {
-      // 如果文件已存在或打开失败
       _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open output file '%s' (O_EXCL check failed): %s", output_path, strerror(errno));
       ret_code = HSC_ERROR_FILE_IO;
       goto cleanup;
@@ -636,9 +689,10 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     goto cleanup;
   }
 
-  // Invoke updated decapsulation function, passing sender_pk for signature
-  // verification.
-  if (hsc_decapsulate_session_key(dec_session_key, encapsulated_key,
+  // [FIX]: Pass HSC_SESSION_KEY_BYTES as max_len
+  if (hsc_decapsulate_session_key(dec_session_key, 
+                                  HSC_SESSION_KEY_BYTES,
+                                  encapsulated_key,
                                   enc_key_len, recipient_kp,
                                   sender_pk) != HSC_OK) {
     ret_code = HSC_ERROR_CRYPTO_OPERATION;
@@ -656,9 +710,8 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     goto cleanup;
   }
 
-  // [FIX]: 应用 O_EXCL 保护解密输出流，防止覆盖攻击
 #ifdef _WIN32
-  f_out = fopen(output_path, "wb");
+  f_out = _fopen_exclusive_win32(output_path);
 #else
   int fd_out = open(output_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd_out == -1) {
@@ -718,8 +771,6 @@ void _hsc_log(int level, const char* format, ...) {
 
   va_list args;
   va_start(args, format);
-  // Note: Log messages may be truncated if they exceed the buffer size.
-  // Callers should be aware of this limitation.
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
 
@@ -752,10 +803,16 @@ int hsc_derive_key_from_password(unsigned char* derived_key,
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
+// [FIX]: Added max_len check.
 int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out,
+                                        size_t x25519_pk_max_len,
                                         const unsigned char* ed25519_pk_in) {
   if (x25519_pk_out == NULL || ed25519_pk_in == NULL) {
     return HSC_ERROR_INVALID_ARGUMENT;
+  }
+  // [FIX] Check size
+  if (x25519_pk_max_len < crypto_box_PUBLICKEYBYTES) {
+      return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
   }
   if (crypto_sign_ed25519_pk_to_curve25519(x25519_pk_out, ed25519_pk_in) != 0) {
     return HSC_ERROR_CRYPTO_OPERATION;
@@ -763,10 +820,16 @@ int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out,
   return HSC_OK;
 }
 
+// [FIX]: Added max_len check.
 int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out,
+                                        size_t x25519_sk_max_len,
                                         const unsigned char* ed25519_sk_in) {
   if (x25519_sk_out == NULL || ed25519_sk_in == NULL) {
     return HSC_ERROR_INVALID_ARGUMENT;
+  }
+  // [FIX] Check size
+  if (x25519_sk_max_len < crypto_box_SECRETKEYBYTES) {
+      return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
   }
   if (crypto_sign_ed25519_sk_to_curve25519(x25519_sk_out, ed25519_sk_in) != 0) {
     return HSC_ERROR_CRYPTO_OPERATION;
@@ -774,9 +837,10 @@ int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out,
   return HSC_OK;
 }
 
-int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext,
-                                   unsigned char* tag_out,
-                                   unsigned char* nonce_out,
+// [FIX]: Added max_len checks for all output buffers.
+int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, size_t ciphertext_max_len,
+                                   unsigned char* tag_out, size_t tag_max_len,
+                                   unsigned char* nonce_out, size_t nonce_max_len,
                                    const unsigned char* message,
                                    size_t message_len,
                                    const unsigned char* additional_data,
@@ -786,16 +850,19 @@ int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext,
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  hsc_random_bytes(nonce_out, HSC_AEAD_NONCE_BYTES);
-
+  // [FIX] Pass max_len to internal function
   int result = encrypt_symmetric_aead_detached(
-      ciphertext, tag_out, message, message_len, additional_data, ad_len,
-      nonce_out, key);
+      ciphertext, ciphertext_max_len,
+      tag_out, tag_max_len,
+      message, message_len, additional_data, ad_len,
+      nonce_out, nonce_max_len, 
+      key);
 
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
-int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
+// [FIX]: Added max_len check.
+int hsc_aead_decrypt_detached(unsigned char* decrypted_message, size_t decrypted_message_max_len,
                               const unsigned char* ciphertext,
                               size_t ciphertext_len, const unsigned char* tag,
                               const unsigned char* additional_data,
@@ -805,9 +872,11 @@ int hsc_aead_decrypt_detached(unsigned char* decrypted_message,
       nonce == NULL || key == NULL) {
     return HSC_ERROR_INVALID_ARGUMENT;
   }
+
+  // [FIX] Pass max_len to internal function
   int result = decrypt_symmetric_aead_detached(
-      decrypted_message, ciphertext, ciphertext_len, tag, additional_data,
+      decrypted_message, decrypted_message_max_len,
+      ciphertext, ciphertext_len, tag, additional_data,
       ad_len, nonce, key);
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
-/* --- END OF FILE src/hsc_kernel.c --- */

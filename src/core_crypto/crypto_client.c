@@ -1,5 +1,3 @@
-/* --- START OF FILE src/core_crypto/crypto_client.c --- */
-
 #include "crypto_client.h"
 #include "../common/secure_memory.h"
 #include "../common/internal_logger.h"
@@ -257,13 +255,23 @@ cleanup:
 }
 
 int encrypt_symmetric_aead(
-    unsigned char* ciphertext, unsigned long long* ciphertext_len,
+    unsigned char* ciphertext, size_t ciphertext_max_len,
+    unsigned long long* ciphertext_len,
     const unsigned char* message, size_t message_len,
     const unsigned char* key
 ) {
     if (ciphertext == NULL || ciphertext_len == NULL || message == NULL || key == NULL) return -1;
     
     const size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+    const size_t mac_len = crypto_aead_xchacha20poly1305_ietf_ABYTES;
+    size_t required_len = message_len + nonce_len + mac_len;
+
+    // [FIX]: Output buffer boundary check
+    if (ciphertext_max_len < required_len) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "AEAD Encrypt: Output buffer too small. Required: %zu, Provided: %zu", required_len, ciphertext_max_len);
+        return -1;
+    }
+
     unsigned char* nonce = ciphertext;
     unsigned char* actual_ciphertext = ciphertext + nonce_len;
     
@@ -284,14 +292,26 @@ int encrypt_symmetric_aead(
 }
 
 int decrypt_symmetric_aead(
-    unsigned char* decrypted_message, unsigned long long* decrypted_message_len,
+    unsigned char* decrypted_message, size_t decrypted_message_max_len,
+    unsigned long long* decrypted_message_len,
     const unsigned char* ciphertext, size_t ciphertext_len,
     const unsigned char* key
 ) {
     if (decrypted_message == NULL || decrypted_message_len == NULL || ciphertext == NULL || key == NULL) return -1;
 
     const size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
-    if (ciphertext_len < nonce_len) return -1;
+    const size_t mac_len = crypto_aead_xchacha20poly1305_ietf_ABYTES;
+    
+    if (ciphertext_len < nonce_len + mac_len) return -1;
+
+    // The maximum possible plaintext length is ciphertext length minus nonce and mac overhead
+    size_t expected_plaintext_len = ciphertext_len - nonce_len - mac_len;
+    
+    // [FIX]: Output buffer boundary check
+    if (decrypted_message_max_len < expected_plaintext_len) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "AEAD Decrypt: Output buffer too small. Required: %zu, Provided: %zu", expected_plaintext_len, decrypted_message_max_len);
+        return -1;
+    }
 
     const unsigned char* nonce = ciphertext;
     const unsigned char* actual_ciphertext = ciphertext + nonce_len;
@@ -310,29 +330,41 @@ int decrypt_symmetric_aead(
     return 0;
 }
 
-int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* tag_out,
-                                    const unsigned char* message, size_t message_len,
+int encrypt_symmetric_aead_detached(unsigned char* ciphertext, size_t ciphertext_max_len,
+                                    unsigned char* tag_out, size_t tag_max_len,
+                                    const unsigned char* message, size_t message_len, // [FIX] Added const
                                     const unsigned char* additional_data, size_t ad_len,
-                                    const unsigned char* nonce, const unsigned char* key) {
-    if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce == NULL || key == NULL) return -1;
+                                    unsigned char* nonce_out, size_t nonce_max_len,
+                                    const unsigned char* key) {
+    if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce_out == NULL || key == NULL) return -1;
     
+    // [FIX] Validate buffer sizes
+    if (ciphertext_max_len < message_len) return -1;
+    if (tag_max_len < crypto_aead_xchacha20poly1305_ietf_ABYTES) return -1;
+    if (nonce_max_len < crypto_aead_xchacha20poly1305_ietf_NPUBBYTES) return -1;
+
+    randombytes_buf(nonce_out, crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+
     unsigned long long ciphertext_len_out;
     if (crypto_aead_xchacha20poly1305_ietf_encrypt_detached(
             ciphertext, tag_out, &ciphertext_len_out,
-            message, message_len, additional_data, ad_len, NULL, nonce, key
+            message, message_len, additional_data, ad_len, NULL, nonce_out, key
         ) != 0) {
         return -1;
     }
     return 0;
 }
 
-int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
+int decrypt_symmetric_aead_detached(unsigned char* decrypted_message, size_t decrypted_message_max_len,
                                     const unsigned char* ciphertext, size_t ciphertext_len,
                                     const unsigned char* tag,
                                     const unsigned char* additional_data, size_t ad_len,
                                     const unsigned char* nonce, const unsigned char* key) {
     if (decrypted_message == NULL || ciphertext == NULL || tag == NULL || nonce == NULL || key == NULL) return -1;
     
+    // [FIX] Validate buffer size
+    if (decrypted_message_max_len < ciphertext_len) return -1;
+
     if (crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
             decrypted_message, NULL,
             ciphertext, ciphertext_len,
@@ -343,10 +375,11 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
     return 0;
 }
 
-// [FIX]: 重构：Authenticated Ephemeral KEM (Sign-then-Encrypt)
+// 重构：Authenticated Ephemeral KEM (Sign-then-Encrypt)
 // [SECURITY FIX 2025]: 修复 Unknown Key Share 漏洞。
 // 将接收方的加密公钥 (recipient_encrypt_pk) 纳入签名上下文，以绑定身份。
 int encapsulate_session_key(unsigned char* encrypted_output,
+                            size_t encrypted_output_max_len,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
                             const unsigned char* recipient_sign_pk,
@@ -354,6 +387,19 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     
     if (encrypted_output == NULL || encrypted_output_len == NULL || session_key == NULL || 
         recipient_sign_pk == NULL || sender_mkp == NULL || sender_mkp->identity_sk == NULL) {
+        return -1;
+    }
+
+    // [FIX]: Calculate required length and check bounds
+    // Structure: [Nonce (24)] + [Ephemeral_PK (32)] + [Signature (64)] + [Ciphertext (SessionKey + 16)]
+    size_t ciphertext_len = session_key_len + crypto_box_curve25519xchacha20poly1305_MACBYTES;
+    size_t required_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + 
+                          crypto_box_PUBLICKEYBYTES + 
+                          crypto_sign_BYTES + 
+                          ciphertext_len;
+
+    if (encrypted_output_max_len < required_len) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Encapsulate: Output buffer too small. Required: %zu, Provided: %zu", required_len, encrypted_output_max_len);
         return -1;
     }
 
@@ -373,9 +419,6 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     randombytes_buf(nonce, sizeof(nonce));
 
     // 4. 执行匿名加密 (使用 Ephemeral SK)
-    // 计算密文长度: Plaintext + MAC
-    size_t ciphertext_len = session_key_len + crypto_box_curve25519xchacha20poly1305_MACBYTES;
-    
     // 使用安全内存临时存储密文，因为接下来要对其签名
     unsigned char* ciphertext = secure_alloc(ciphertext_len);
     if (!ciphertext) {
@@ -421,14 +464,13 @@ int encapsulate_session_key(unsigned char* encrypted_output,
 
     // 6. 组装最终输出
     // Output Format: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext]
-    // 注意：Output Format 保持不变，增加的 recipient_pk 仅用于签名的计算，不传输（接收方已知）。
     unsigned char* p_out = encrypted_output;
     memcpy(p_out, nonce, sizeof(nonce)); p_out += sizeof(nonce);
     memcpy(p_out, ephem_pk, sizeof(ephem_pk)); p_out += sizeof(ephem_pk);
     memcpy(p_out, signature, sizeof(signature)); p_out += sizeof(signature);
     memcpy(p_out, ciphertext, ciphertext_len);
     
-    *encrypted_output_len = sizeof(nonce) + sizeof(ephem_pk) + sizeof(signature) + ciphertext_len;
+    *encrypted_output_len = required_len;
 
     secure_free(ciphertext);
     return 0;
@@ -436,6 +478,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
 
 // [FIX]: 重构：Authenticated Ephemeral KEM 解封装
 int decapsulate_session_key(unsigned char* decrypted_output,
+                            size_t decrypted_output_max_len,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
                             const unsigned char* my_enc_sk,
                             const unsigned char* sender_public_key) {
@@ -462,13 +505,18 @@ int decapsulate_session_key(unsigned char* decrypted_output,
     const unsigned char* ciphertext = signature + crypto_sign_BYTES;
     
     size_t ciphertext_len = encrypted_input_len - (ciphertext - encrypted_input);
+    size_t expected_plaintext_len = ciphertext_len - crypto_box_curve25519xchacha20poly1305_MACBYTES;
 
-    // 3. [FIX] 验证签名
+    // [FIX]: Check output buffer size
+    if (decrypted_output_max_len < expected_plaintext_len) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "Decapsulate: Output buffer too small. Required: %zu, Provided: %zu", expected_plaintext_len, decrypted_output_max_len);
+        return -1;
+    }
+
+    // 3. 验证签名
     // 重建被签名的消息: [Nonce] || [Ephemeral_PK] || [Ciphertext] || [My_Encrypt_PK]
     // 接收方需要知道自己的公钥 (X25519) 来验证发送方是否正确锁定了目标。
     
-    // [FIX] 从私钥 (my_enc_sk) 推导对应的公钥 (my_enc_pk)。
-    // 这样可以避免修改函数签名，同时确保使用实际用于解密的密钥对进行绑定验证。
     unsigned char my_enc_pk[crypto_box_PUBLICKEYBYTES];
     crypto_scalarmult_base(my_enc_pk, my_enc_sk);
 
@@ -512,4 +560,3 @@ int decapsulate_session_key(unsigned char* decrypted_output,
 
     return decrypt_ret;
 }
-/* --- END OF FILE src/core_crypto/crypto_client.c --- */

@@ -1,5 +1,3 @@
-/* --- START OF FILE src/core_crypto/crypto_client.h --- */
-
 #ifndef CRYPTO_CLIENT_H
 #define CRYPTO_CLIENT_H
 
@@ -140,6 +138,7 @@ int derive_key_from_password(
  * @brief 使用 AEAD (XChaCha20-Poly1305) 对称加密数据
  *
  * @param ciphertext (输出) 加密后的数据缓冲区
+ * @param ciphertext_max_len (输入) [FIX] 缓冲区的最大容量
  * @param ciphertext_len (输出) 加密后数据的长度
  * @param message 要加密的明文
  * @param message_len 明文的长度
@@ -147,7 +146,8 @@ int derive_key_from_password(
  * @return 成功返回 0，失败返回 -1
  */
 int encrypt_symmetric_aead(
-    unsigned char* ciphertext, unsigned long long* ciphertext_len,
+    unsigned char* ciphertext, size_t ciphertext_max_len,
+    unsigned long long* ciphertext_len,
     const unsigned char* message, size_t message_len,
     const unsigned char* key
 );
@@ -156,30 +156,36 @@ int encrypt_symmetric_aead(
  * @brief 使用 AEAD (XChaCha20-Poly1305) 对称解密数据
  *
  * @param decrypted_message (输出) 解密后的明文缓冲区
+ * @param decrypted_message_max_len (输入) [FIX] 缓冲区的最大容量
  * @param decrypted_message_len (输出) 解密后明文的长度
  * @param ciphertext 要解密的密文
  * @param ciphertext_len 密文的长度
  * @param key 解密密钥
- * @return 成功返回 0，失败（如验证失败）返回 -1
+ * @return 成功返回 0，失败（如验证失败或缓冲区不足）返回 -1
  */
 int decrypt_symmetric_aead(
-    unsigned char* decrypted_message, unsigned long long* decrypted_message_len,
+    unsigned char* decrypted_message, size_t decrypted_message_max_len,
+    unsigned long long* decrypted_message_len,
     const unsigned char* ciphertext, size_t ciphertext_len,
     const unsigned char* key
 );
 
 /**
  * @brief [分离模式] 内部实现 AEAD 对称加密
+ * [FIX] Added max_len checks and const correctness.
  */
-int encrypt_symmetric_aead_detached(unsigned char* ciphertext, unsigned char* tag_out,
-                                    const unsigned char* message, size_t message_len,
+int encrypt_symmetric_aead_detached(unsigned char* ciphertext, size_t ciphertext_max_len,
+                                    unsigned char* tag_out, size_t tag_max_len,
+                                    const unsigned char* message, size_t message_len, // [FIX] Added const
                                     const unsigned char* additional_data, size_t ad_len,
-                                    const unsigned char* nonce, const unsigned char* key);
+                                    unsigned char* nonce_out, size_t nonce_max_len,
+                                    const unsigned char* key);
 
 /**
  * @brief [分离模式] 内部实现 AEAD 对称解密
+ * [FIX] Added max_len checks.
  */
-int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
+int decrypt_symmetric_aead_detached(unsigned char* decrypted_message, size_t decrypted_message_max_len,
                                     const unsigned char* ciphertext, size_t ciphertext_len,
                                     const unsigned char* tag,
                                     const unsigned char* additional_data, size_t ad_len,
@@ -194,6 +200,7 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
  *        输出格式变更: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext(Key+MAC)]
  *
  * @param encrypted_output (输出) 存放加密结果的缓冲区
+ * @param encrypted_output_max_len (输入) [FIX] 缓冲区的最大容量
  * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度
  * @param session_key 要加密的会话密钥明文
  * @param session_key_len 会话密钥的长度
@@ -202,6 +209,7 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message,
  * @return 成功返回 0，失败返回 -1
  */
 int encapsulate_session_key(unsigned char* encrypted_output,
+                            size_t encrypted_output_max_len,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
                             const unsigned char* recipient_sign_pk,
@@ -216,6 +224,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
  *        输入格式要求: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext(Key+MAC)]
  *
  * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区
+ * @param decrypted_output_max_len (输入) [FIX] 缓冲区的最大容量
  * @param encrypted_input 要解密的封装数据
  * @param encrypted_input_len 封装数据的长度
  * @param my_enc_sk 我方（接收者）的 X25519 加密私钥
@@ -223,10 +232,10 @@ int encapsulate_session_key(unsigned char* encrypted_output,
  * @return 成功返回 0，签名验证失败或解密失败返回 -1
  */
 int decapsulate_session_key(unsigned char* decrypted_output,
+                            size_t decrypted_output_max_len,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
                             const unsigned char* my_enc_sk,
                             const unsigned char* sender_public_key); // [FIX]: Added sender_pk
 
 
 #endif // CRYPTO_CLIENT_H
-/* --- END OF FILE src/core_crypto/crypto_client.h --- */

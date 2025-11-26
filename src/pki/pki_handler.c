@@ -1,5 +1,3 @@
-/* --- START OF FILE src/pki/pki_handler.c --- */
-
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -10,7 +8,7 @@
 #include <openssl/ocsp.h>
 #include <curl/curl.h>
 
-// [FIX]: Finding #3 - 引入网络头文件以解析 IP 地址进行 SSRF 防御
+// Finding #3 - 引入网络头文件以解析 IP 地址进行 SSRF 防御
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
@@ -22,7 +20,7 @@
 
 #include "pki_handler.h"
 
-// [FIX]: 编译错误修复
+// 编译错误修复
 // 必须包含 crypto_client.h 才能访问 master_key_pair 结构体的内部成员 (identity_sk)
 // 以及获取 MASTER_PUBLIC_KEY_BYTES 常量定义。
 #include "../core_crypto/crypto_client.h" 
@@ -106,7 +104,7 @@ void free_csr_pem(char* csr_pem) {
 }
 
 int generate_csr(const master_key_pair* mkp, const char* username, char** out_csr_pem) {
-    // [FIXED]: 现在包含了 crypto_client.h，编译器可以看到 mkp->identity_sk 的定义
+    // 现在包含了 crypto_client.h，编译器可以看到 mkp->identity_sk 的定义
     if (mkp == NULL || mkp->identity_sk == NULL || username == NULL || out_csr_pem == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
@@ -181,7 +179,7 @@ cleanup:
 
 // ======================= OCSP 检查的静态辅助函数 =======================
 
-// [FIX]: Finding #3 - SSRF 防御回调函数实现
+// Finding #3 - SSRF 防御回调函数实现
 static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, struct curl_sockaddr *addr) {
     (void)clientp; // 未使用
 
@@ -210,7 +208,7 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Loopback IP: %s", ip_str);
         }
-        // [FIX]: Audit Finding #1 - 显式拦截 0.0.0.0 (INADDR_ANY)。
+        // Audit Finding #1 - 显式拦截 0.0.0.0 (INADDR_ANY)。
         // 在某些系统上，0.0.0.0 意味着本机，可绕过 127.0.0.0/8 的检查。
         else if (ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0) {
             block_connection = true;
@@ -245,7 +243,7 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Loopback IPv6: %s", ip_str);
         }
-        // [FIX]: Audit Finding #1 - 显式拦截 :: (Unspecified Address)
+        // Audit Finding #1 - 显式拦截 :: (Unspecified Address)
         // 同样防止作为本地别名绕过。
         else if (memcmp(ip, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16) == 0) {
             block_connection = true;
@@ -263,7 +261,7 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Link-Local IPv6: %s", ip_str);
         }
-        // [FIX]: Finding #1 - Explicitly Block IPv4-mapped IPv6 addresses (::ffff:0:0/96)
+        // Finding #1 - Explicitly Block IPv4-mapped IPv6 addresses (::ffff:0:0/96)
         // Format: 80 bits of zeros + 16 bits of ones (0xFFFF) + 32 bits IPv4
         // Attack vector: Attacker uses ::ffff:127.0.0.1 to bypass IPv4 whitelist checks.
         else {
@@ -351,7 +349,7 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
             curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
         #endif
         
-        // [FIX]: Finding #3 - 启用 SSRF 防御回调
+        // Finding #3 - 启用 SSRF 防御回调
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, opensocket_callback);
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, NULL);
 
@@ -500,7 +498,7 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
     _hsc_log(HSC_LOG_LEVEL_INFO, "      iv. [Checking Revocation Status (OCSP)]:");
     int ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
 
-    // [FIX START]: Fail-Closed 策略实施
+    // Fail-Closed 策略实施
     // 1. 首先检查证书中是否存在 OCSP URI (AIA 扩展)。
     STACK_OF(OPENSSL_STRING)* ocsp_uris = X509_get1_ocsp(user_cert);
     if (!ocsp_uris || sk_OPENSSL_STRING_num(ocsp_uris) <= 0) {
@@ -519,7 +517,6 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
         }
     }
     sk_OPENSSL_STRING_free(ocsp_uris);
-    // [FIX END]
 
     OCSP_REQUEST* ocsp_req = _create_ocsp_request(user_cert, issuer_cert);
     if (!ocsp_req) {
@@ -629,7 +626,34 @@ int verify_user_certificate(const char* user_cert_pem,
     }
     _hsc_log(HSC_LOG_LEVEL_INFO, "      > SUCCESS: Certificate subject matches the expected user '%s'.", expected_username);
 
-    int ocsp_res = check_ocsp_status(user_cert, ca_cert, store);
+    // [FIX] Vulnerability #2: Broken Chain Validation
+    // 必须获取已验证的证书链，以找到用户证书的直接签发者（Issuer）。
+    // 之前的代码错误地使用 Root CA 作为签发者，这在有中间 CA 时会导致 OCSP 失败。
+    STACK_OF(X509)* chain = X509_STORE_CTX_get1_chain(ctx);
+    if (!chain) {
+        LOG_PKI_ERROR("Failed to retrieve verified certificate chain for OCSP check.");
+        ret_code = HSC_ERROR_PKI_OPERATION;
+        goto cleanup;
+    }
+
+    X509* real_issuer = NULL;
+    // 链结构通常为: [0]=UserCert, [1]=Intermediate, [2]=Root...
+    // 我们需要的是 [1] 作为直接签发者。
+    // 如果链长度为 1，则说明是自签名或直接由根签发（且根未在链中作为额外元素），
+    // 此时直接签发者就是它自己（自签名）或我们需要 fallback 到 Root。
+    // 为了安全起见，对于标准 PKI，Issuer 通常在索引 1。
+    if (sk_X509_num(chain) > 1) {
+        real_issuer = sk_X509_value(chain, 1);
+    } else {
+        // Fallback: 假设 ca_cert 是直接签发者
+        real_issuer = ca_cert; 
+    }
+
+    int ocsp_res = check_ocsp_status(user_cert, real_issuer, store);
+    
+    // 释放链副本
+    sk_X509_pop_free(chain, X509_free);
+
     if (ocsp_res != HSC_OK) {
         ret_code = ocsp_res;
         goto cleanup;
@@ -648,11 +672,20 @@ cleanup:
     return ret_code;
 }
 
+// [FIX]: Added public_key_max_len for safety (Vulnerability #1)
 int extract_public_key_from_cert(const char* user_cert_pem,
-                                 unsigned char* public_key_out) {
+                                 unsigned char* public_key_out,
+                                 size_t public_key_max_len) {
     if (user_cert_pem == NULL || public_key_out == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
+    
+    // [FIX] Buffer Overflow Protection
+    if (public_key_max_len < MASTER_PUBLIC_KEY_BYTES) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: Output buffer too small for public key (Required: %d, Provided: %zu).", MASTER_PUBLIC_KEY_BYTES, public_key_max_len);
+        return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
+    }
+
     int ret = HSC_ERROR_PKI_OPERATION;
     BIO* cert_bio = BIO_new_mem_buf(user_cert_pem, -1);
     X509* cert = NULL;
@@ -674,7 +707,7 @@ int extract_public_key_from_cert(const char* user_cert_pem,
         ret = HSC_ERROR_INVALID_FORMAT;
         goto cleanup;
     }
-    // [FIXED]: MASTER_PUBLIC_KEY_BYTES 现在已定义 (通过 crypto_client.h -> security_spec.h)
+    // MASTER_PUBLIC_KEY_BYTES 现在已定义 (通过 crypto_client.h -> security_spec.h)
     size_t pub_key_len = MASTER_PUBLIC_KEY_BYTES;
     if (EVP_PKEY_get_raw_public_key(pkey, public_key_out, &pub_key_len) != 1 || pub_key_len != MASTER_PUBLIC_KEY_BYTES) {
         LOG_PKI_ERROR("Failed to get raw public key bytes from certificate.");
@@ -687,5 +720,3 @@ cleanup:
     if (cert_bio) BIO_free(cert_bio);
     return ret;
 }
-
-/* --- END OF FILE src/pki/pki_handler.c --- */

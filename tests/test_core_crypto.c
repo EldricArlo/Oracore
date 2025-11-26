@@ -5,8 +5,8 @@
 #include <stdlib.h> // 为 getenv 和 _putenv_s (Windows) / setenv (POSIX)
 
 // 包含我们需要测试的模块的头文件
-#include "core_crypto/crypto_client.h"
-#include "common/secure_memory.h"
+#include "../src/core_crypto/crypto_client.h"
+#include "../src/common/secure_memory.h"
 
 // --- [新增] 跨平台的环境变量设置辅助函数 ---
 // 为了让测试代码在 Windows 和 POSIX 系统上都能运行，我们创建这些辅助函数。
@@ -160,10 +160,16 @@ void test_encryption_decryption_roundtrip() {
     size_t ciphertext_buf_len = message_len + crypto_aead_xchacha20poly1305_ietf_ABYTES + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     unsigned char* ciphertext = malloc(ciphertext_buf_len);
     unsigned long long ciphertext_len;
-    _verify(encrypt_symmetric_aead(ciphertext, &ciphertext_len, (const unsigned char*)message, message_len, key) == 0);
+    
+    // [FIX]: Added max_len argument
+    _verify(encrypt_symmetric_aead(ciphertext, ciphertext_buf_len, &ciphertext_len, (const unsigned char*)message, message_len, key) == 0);
+    
     unsigned char* decrypted_message = malloc(message_len);
     unsigned long long decrypted_len;
-    _verify(decrypt_symmetric_aead(decrypted_message, &decrypted_len, ciphertext, ciphertext_len, key) == 0);
+    
+    // [FIX]: Added max_len argument
+    _verify(decrypt_symmetric_aead(decrypted_message, message_len, &decrypted_len, ciphertext, ciphertext_len, key) == 0);
+    
     _verify(decrypted_len == message_len);
     _verify(memcmp(message, decrypted_message, message_len) == 0);
     free(ciphertext);
@@ -180,10 +186,16 @@ void test_decryption_failure_wrong_key() {
     size_t ciphertext_buf_len = message_len + crypto_aead_xchacha20poly1305_ietf_ABYTES + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     unsigned char* ciphertext = malloc(ciphertext_buf_len);
     unsigned long long ciphertext_len;
-    _verify(encrypt_symmetric_aead(ciphertext, &ciphertext_len, (const unsigned char*)message, message_len, key1) == 0);
+    
+    // [FIX]: Added max_len argument
+    _verify(encrypt_symmetric_aead(ciphertext, ciphertext_buf_len, &ciphertext_len, (const unsigned char*)message, message_len, key1) == 0);
+    
     unsigned char* decrypted_message = malloc(message_len);
     unsigned long long decrypted_len;
-    _verify(decrypt_symmetric_aead(decrypted_message, &decrypted_len, ciphertext, ciphertext_len, key2) != 0);
+    
+    // [FIX]: Added max_len argument
+    _verify(decrypt_symmetric_aead(decrypted_message, message_len, &decrypted_len, ciphertext, ciphertext_len, key2) != 0);
+    
     free(ciphertext);
     free(decrypted_message);
 }
@@ -196,14 +208,20 @@ void test_decryption_failure_tampered_ciphertext() {
     size_t ciphertext_buf_len = message_len + crypto_aead_xchacha20poly1305_ietf_ABYTES + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     unsigned char* ciphertext = malloc(ciphertext_buf_len);
     unsigned long long ciphertext_len;
-    _verify(encrypt_symmetric_aead(ciphertext, &ciphertext_len, (const unsigned char*)message, message_len, key) == 0);
+    
+    // [FIX]: Added max_len argument
+    _verify(encrypt_symmetric_aead(ciphertext, ciphertext_buf_len, &ciphertext_len, (const unsigned char*)message, message_len, key) == 0);
+    
     size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     if (ciphertext_len > nonce_len) {
         ciphertext[nonce_len] ^= 0x01;
     }
     unsigned char* decrypted_message = malloc(message_len);
     unsigned long long decrypted_len;
-    _verify(decrypt_symmetric_aead(decrypted_message, &decrypted_len, ciphertext, ciphertext_len, key) != 0);
+    
+    // [FIX]: Added max_len argument
+    _verify(decrypt_symmetric_aead(decrypted_message, message_len, &decrypted_len, ciphertext, ciphertext_len, key) != 0);
+    
     free(ciphertext);
     free(decrypted_message);
 }

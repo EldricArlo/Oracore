@@ -7,6 +7,7 @@
 
 #include "core_crypto/crypto_client.h"
 #include "common/secure_memory.h"
+#include <sodium.h> // Ensure sodium types/functions are available
 
 // [委员会修改] 移除了原有的 TEST_ASSERT 宏。
 
@@ -17,7 +18,7 @@
  */
 int test_aead_roundtrip() {
     printf("  Running test: test_aead_roundtrip...\n");
-    int ret = -1; // [修改]
+    int ret = -1;
     unsigned char* ciphertext = NULL;
     unsigned char* decrypted_message = NULL;
 
@@ -35,8 +36,8 @@ int test_aead_roundtrip() {
     }
     unsigned long long ciphertext_len;
 
-    // 加密
-    if (encrypt_symmetric_aead(ciphertext, &ciphertext_len, (const unsigned char*)message, message_len, key) != 0) {
+    // 加密 [FIX]: 传入缓冲区最大长度
+    if (encrypt_symmetric_aead(ciphertext, ciphertext_buf_len, &ciphertext_len, (const unsigned char*)message, message_len, key) != 0) {
         fprintf(stderr, "TEST FAILED: encrypt_symmetric_aead should succeed (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
@@ -53,7 +54,8 @@ int test_aead_roundtrip() {
     }
     unsigned long long decrypted_message_len;
 
-    if (decrypt_symmetric_aead(decrypted_message, &decrypted_message_len, ciphertext, ciphertext_len, key) != 0) {
+    // [FIX]: 传入缓冲区最大长度
+    if (decrypt_symmetric_aead(decrypted_message, message_len + 1, &decrypted_message_len, ciphertext, ciphertext_len, key) != 0) {
         fprintf(stderr, "TEST FAILED: decrypt_symmetric_aead should succeed (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
@@ -82,10 +84,9 @@ cleanup:
  */
 int test_aead_wrong_key() {
     printf("  Running test: test_aead_wrong_key...\n");
-    int ret = -1; // [修改]
+    int ret = -1;
     unsigned char* ciphertext = NULL;
     unsigned char* decrypted_message = NULL;
-    // [委员会修正] 添加缺失的变量声明
     unsigned long long decrypted_message_len;
 
     unsigned char key_a[SESSION_KEY_BYTES];
@@ -101,14 +102,15 @@ int test_aead_wrong_key() {
     ciphertext = malloc(ciphertext_buf_len);
     unsigned long long ciphertext_len;
 
-    // 使用密钥 A 加密
-    encrypt_symmetric_aead(ciphertext, &ciphertext_len, (const unsigned char*)message, message_len, key_a);
+    // 使用密钥 A 加密 [FIX]: 传入缓冲区最大长度
+    encrypt_symmetric_aead(ciphertext, ciphertext_buf_len, &ciphertext_len, (const unsigned char*)message, message_len, key_a);
     
     // 尝试使用密钥 B 解密
     decrypted_message = malloc(message_len);
     if (!decrypted_message) goto cleanup;
 
-    int res_decrypt = decrypt_symmetric_aead(decrypted_message, &decrypted_message_len, ciphertext, ciphertext_len, key_b);
+    // [FIX]: 传入缓冲区最大长度
+    int res_decrypt = decrypt_symmetric_aead(decrypted_message, message_len, &decrypted_message_len, ciphertext, ciphertext_len, key_b);
     if (res_decrypt != -1) {
         fprintf(stderr, "TEST FAILED: Decryption with wrong key must fail (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
@@ -128,7 +130,7 @@ cleanup:
  */
 int test_aead_tampered_ciphertext() {
     printf("  Running test: test_aead_tampered_ciphertext...\n");
-    int ret = -1; // [修改]
+    int ret = -1;
     unsigned char* ciphertext = NULL;
     unsigned char* decrypted_message = NULL;
 
@@ -143,7 +145,8 @@ int test_aead_tampered_ciphertext() {
     if (!ciphertext) goto cleanup;
     unsigned long long ciphertext_len;
 
-    encrypt_symmetric_aead(ciphertext, &ciphertext_len, (const unsigned char*)message, message_len, key);
+    // [FIX]: 传入缓冲区最大长度
+    encrypt_symmetric_aead(ciphertext, ciphertext_buf_len, &ciphertext_len, (const unsigned char*)message, message_len, key);
 
     // 篡改密文的一个字节 (跳过 nonce 部分)
     size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
@@ -158,7 +161,8 @@ int test_aead_tampered_ciphertext() {
     if (!decrypted_message) goto cleanup;
     unsigned long long decrypted_message_len;
 
-    int res_decrypt = decrypt_symmetric_aead(decrypted_message, &decrypted_message_len, ciphertext, ciphertext_len, key);
+    // [FIX]: 传入缓冲区最大长度
+    int res_decrypt = decrypt_symmetric_aead(decrypted_message, message_len, &decrypted_message_len, ciphertext, ciphertext_len, key);
     if (res_decrypt != -1) {
         fprintf(stderr, "TEST FAILED: Decryption of tampered ciphertext must fail (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
@@ -178,7 +182,7 @@ cleanup:
  */
 int test_aead_empty_message() {
     printf("  Running test: test_aead_empty_message...\n");
-    int ret = -1; // [修改]
+    int ret = -1;
     unsigned char* ciphertext = NULL;
     unsigned char* decrypted_message = NULL;
 
@@ -193,7 +197,8 @@ int test_aead_empty_message() {
     if (!ciphertext) goto cleanup;
     unsigned long long ciphertext_len;
 
-    if (encrypt_symmetric_aead(ciphertext, &ciphertext_len, (const unsigned char*)message, message_len, key) != 0) {
+    // [FIX]: 传入缓冲区最大长度
+    if (encrypt_symmetric_aead(ciphertext, ciphertext_buf_len, &ciphertext_len, (const unsigned char*)message, message_len, key) != 0) {
         fprintf(stderr, "TEST FAILED: Encryption of empty message should succeed (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
@@ -202,7 +207,8 @@ int test_aead_empty_message() {
     if (!decrypted_message) goto cleanup;
     unsigned long long decrypted_message_len;
 
-    if (decrypt_symmetric_aead(decrypted_message, &decrypted_message_len, ciphertext, ciphertext_len, key) != 0) {
+    // [FIX]: 传入缓冲区最大长度
+    if (decrypt_symmetric_aead(decrypted_message, 1, &decrypted_message_len, ciphertext, ciphertext_len, key) != 0) {
         fprintf(stderr, "TEST FAILED: Decryption of empty message should succeed (%s:%d)\n", __FILE__, __LINE__);
         goto cleanup;
     }
