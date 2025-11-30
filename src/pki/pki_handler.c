@@ -42,6 +42,7 @@
 #define OCSP_RESPONSE_VALIDITY_SLACK_SECONDS 300L // 5分钟的宽限期
 #define INITIAL_HTTP_CHUNK_CAPACITY 1024
 #define MAX_OCSP_RESPONSE_SIZE (1 * 1024 * 1024) // 1 MB
+#define MAX_CERT_PEM_SIZE (100 * 1024)           // 100 KB limit for a single certificate PEM
 
 // 内部全局配置状态，默认为严格安全模式
 static hsc_pki_config g_pki_config = {
@@ -108,6 +109,19 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
     if (mkp == NULL || mkp->identity_sk == NULL || username == NULL || out_csr_pem == NULL) {
         return HSC_ERROR_INVALID_ARGUMENT;
     }
+
+    // [FIX] Input Validation: Username length check
+    // Prevent buffer overflows or massive ASN.1 structures
+    if (strlen(username) > CERT_COMMON_NAME_MAX_LEN) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: Username exceeds maximum allowed length (%d).", CERT_COMMON_NAME_MAX_LEN);
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    // Basic sanity check for empty strings
+    if (strlen(username) == 0) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: Username cannot be empty.");
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+
     *out_csr_pem = NULL;
 
     int ret = HSC_ERROR_PKI_OPERATION;
@@ -599,6 +613,23 @@ int verify_user_certificate(const char* user_cert_pem,
                             const char* trusted_ca_cert_pem,
                             const char* expected_username) {
     if (user_cert_pem == NULL || trusted_ca_cert_pem == NULL || expected_username == NULL) {
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+
+    // [FIX] Input Validation: PEM and Username
+    // 1. Check length of expected_username to prevent overflow in comparisons
+    if (strlen(expected_username) > CERT_COMMON_NAME_MAX_LEN) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: Expected username is too long.");
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    // 2. Check length of PEM input to prevent DoS via massive allocation
+    if (strlen(user_cert_pem) > MAX_CERT_PEM_SIZE) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: User certificate PEM too large (Limit: %d bytes).", MAX_CERT_PEM_SIZE);
+        return HSC_ERROR_INVALID_ARGUMENT;
+    }
+    // Not strictly checking CA cert size here, as it's usually trusted/internal, but good practice if exposed.
+    if (strlen(trusted_ca_cert_pem) > MAX_CERT_PEM_SIZE) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: CA certificate PEM too large (Limit: %d bytes).", MAX_CERT_PEM_SIZE);
         return HSC_ERROR_INVALID_ARGUMENT;
     }
 

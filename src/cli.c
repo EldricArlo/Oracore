@@ -61,8 +61,14 @@ char* read_pem_file(const char* filename) {
 // --- CLI Helper Functions ---
 
 void print_usage(const char* prog_name) {
-    printf("Oracipher Core CLI v5.1\n");
-    printf("Usage: %s <command> [options]\n\n", prog_name);
+    printf("Oracipher Core CLI v5.2\n");
+    printf("Usage: %s [global options] <command> [command options]\n\n", prog_name);
+    
+    printf("Global Options:\n");
+    printf("  --allow-no-ocsp, --private-mode\n");
+    printf("      [RISK] Allow certificates without OCSP URI (Private PKI Mode).\n");
+    printf("      Use this for offline environments or internal CAs.\n\n");
+
     printf("Commands:\n");
     printf("  gen-keypair <name> [--force]\n");
     printf("      Generate a new master key pair.\n");
@@ -84,6 +90,7 @@ bool file_exists(const char* filename) {
 
 // [FIX]: Implements safe key generation with --force logic
 int cmd_gen_keypair(int argc, char** argv) {
+    // Note: argv[0] is the command name "gen-keypair"
     if (argc < 2) {
         fprintf(stderr, "Error: Missing key name.\n");
         fprintf(stderr, "Usage: gen-keypair <name> [--force]\n");
@@ -97,7 +104,12 @@ int cmd_gen_keypair(int argc, char** argv) {
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--force") == 0) {
             force = true;
-        } else {
+        } 
+        // Ignore global flags here as they are handled in main
+        else if (strcmp(argv[i], "--allow-no-ocsp") == 0 || strcmp(argv[i], "--private-mode") == 0) {
+            continue;
+        }
+        else {
             fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
             return 1;
         }
@@ -181,12 +193,31 @@ void cli_logger(int level, const char* message) {
 }
 
 int main(int argc, char** argv) {
-    // Initialize Core Library
-    if (hsc_init(NULL, NULL) != HSC_OK) {
+    // [FIX] Architecture: Parse global flags BEFORE initialization
+    hsc_pki_config config = { .allow_no_ocsp_uri = false }; // Default: Secure/Strict
+    bool global_flag_found = false;
+
+    // Quick scan for global flags. 
+    // We scan all arguments to allow flags to be placed anywhere (user-friendly).
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--allow-no-ocsp") == 0 || strcmp(argv[i], "--private-mode") == 0) {
+            config.allow_no_ocsp_uri = true;
+            global_flag_found = true;
+            break; // Found it
+        }
+    }
+
+    // Initialize Core Library with the configured settings
+    // Pass NULL for pepper to use Environment Variable (HSC_PEPPER_HEX)
+    if (hsc_init(&config, NULL) != HSC_OK) {
         fprintf(stderr, "Fatal Error: Oracipher Core initialization failed.\n");
         return 1;
     }
     hsc_set_log_callback(cli_logger);
+
+    if (global_flag_found) {
+        printf("[CLI] Notice: Private PKI Mode enabled (OCSP checks relaxed for internal certs).\n");
+    }
 
     if (argc < 2) {
         print_usage(argv[0]);
@@ -194,20 +225,62 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const char* command = argv[1];
+    // Identify the command.
+    // Since we allow global flags anywhere, we need to find the first argument
+    // that is NOT a flag, which we treat as the command.
+    int command_index = -1;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] != '-') {
+            command_index = i;
+            break;
+        }
+    }
+
     int ret = 0;
 
-    // Command Dispatcher
-    if (strcmp(command, "gen-keypair") == 0) {
-        // Pass arguments starting from argv[1] (command name) to handler
-        ret = cmd_gen_keypair(argc - 1, argv + 1);
-    } else if (strcmp(command, "help") == 0 || strcmp(command, "--help") == 0) {
-        print_usage(argv[0]);
-        ret = 0;
+    if (command_index == -1) {
+        // No command found, maybe just flags or help
+        // Check if help flag was present
+        bool help_requested = false;
+        for (int i=1; i<argc; i++) {
+             if (strcmp(argv[i], "help") == 0 || strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                 help_requested = true;
+                 break;
+             }
+        }
+        
+        if (help_requested) {
+            print_usage(argv[0]);
+            ret = 0;
+        } else {
+            fprintf(stderr, "Error: No command specified.\n");
+            print_usage(argv[0]);
+            ret = 1;
+        }
     } else {
-        fprintf(stderr, "Error: Unknown command '%s'\n\n", command);
-        print_usage(argv[0]);
-        ret = 1;
+        const char* command = argv[command_index];
+
+        // Dispatch Command
+        if (strcmp(command, "gen-keypair") == 0) {
+            // Pass the subset of argv starting from the command
+            // We reconstruct a new argc/argv view for the subcommand if needed,
+            // or just pass the pointer.
+            // For simplicity in this structure, we pass the original count minus offset is tricky
+            // because flags might be before the command.
+            // Let's just pass the whole argv but the command handler starts looking from command_index.
+            
+            // Actually, simpler: Pass the rest of the args relative to the command index.
+            // cmd_gen_keypair expects argv[0] to be command name, argv[1] to be first arg.
+            // So we pass &argv[command_index] as argv, and (argc - command_index) as argc.
+            ret = cmd_gen_keypair(argc - command_index, &argv[command_index]);
+        } else if (strcmp(command, "help") == 0) {
+            print_usage(argv[0]);
+            ret = 0;
+        } else {
+            fprintf(stderr, "Error: Unknown command '%s'\n\n", command);
+            print_usage(argv[0]);
+            ret = 1;
+        }
     }
 
     hsc_cleanup();
