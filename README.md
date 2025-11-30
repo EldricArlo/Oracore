@@ -190,15 +190,18 @@ To secure your environment against potential API failures or OS-level overrides,
 
 ### 4.5 Absolute Memory Security (Swap/Pagefile)
 
-> **🔥 FATAL RISK: OpenSSL Memory Management**
+> **🚨 CRITICAL PRODUCTION REQUIREMENT: DISABLE SWAP**
 >
-> While Oracipher Core uses `libsodium` to lock its internal memory, operations involving X.509 certificates (e.g., `hsc_generate_csr`) must utilize OpenSSL. OpenSSL's default memory allocator **does not lock memory**, meaning private key material may potentially be written to the system's Swap partition or Pagefile during these operations.
-
-**SECURITY REQUIREMENT:**
-To guarantee absolute security and prevent key remanence on persistent storage, you **MUST disable system swap** on any machine used for key generation, signing, or decryption.
-
-*   **Linux**: `sudo swapoff -a` (and remove from `/etc/fstab`)
-*   **Windows**: Disable "Paging file" in Advanced System Settings -> Performance -> Virtual Memory.
+> **Vulnerability Notice (Report 15 Finding #1):**
+> While Oracipher Core uses locked memory (`sodium_malloc`) for its own keys, operations involving X.509 certificates (e.g., `hsc_generate_csr`) utilize **OpenSSL**. OpenSSL's internal memory allocator **DOES NOT** lock memory by default.
+>
+> **RISK:** Private key material generated or processed by OpenSSL may be written to the system's Swap partition or Pagefile during high memory pressure or hibernation.
+>
+> **MANDATORY REMEDIATION:**
+> To prevent sensitive data remanence on physical disk, you **MUST** disable swap at the operating system level on any server handling private keys.
+>
+> *   **Linux**: `sudo swapoff -a` (and ensure it is removed from `/etc/fstab`)
+> *   **Windows**: Disable "Paging file" in `Advanced System Settings -> Performance -> Virtual Memory`.
 
 **Failure to do so constitutes a known residual risk.**
 

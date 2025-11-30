@@ -2,11 +2,11 @@
 # CMakeLists.txt for Oracipher Core
 #
 # Reviewed and Updated by the Oracipher Core Code Review Committee
-# Version: 3.1 (Remediation: Fixed Linker Dependencies for Windows Security Features)
+# Version: 3.2 (Remediation: Secure Build Configuration)
 #
 # This file now integrates clang-tidy directly into the build process,
 # enforces strict dependency version checks, and prevents test utilities
-# from being installed by default.
+# from being installed by default (Fixing Report 15 Vulnerability #2).
 # ==============================================================================
 
 # --- 1. Project Definition and C Standard ---
@@ -16,7 +16,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-# [COMMITTEE CONFIG] New option to control the installation of development tools.
+# [COMMITTEE FIX] New option to control the installation of development tools.
 # Defaults to OFF to ensure test_ca_util is not deployed to production.
 option(INSTALL_DEV_TOOLS "Install development and testing tools (like test_ca_util)" OFF)
 
@@ -33,12 +33,12 @@ if(WIN32)
     # [FIX]: Audit Finding [Build] - Windows Security Hardening
     if(MSVC)
         # 1. Control Flow Guard (CFG)
-        # 防御内存破坏漏洞（如 vtable 劫持）
+        # Defense against memory corruption vulnerabilities (e.g., vtable hijacking)
         add_compile_options(/guard:cf)
         add_link_options(/GUARD:CF /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA)
 
         # 2. Spectre Mitigation
-        # [FIX]: 新增 /Qspectre 以缓解推测执行侧信道攻击 (Spectre Variant 1)
+        # [FIX]: Added /Qspectre to mitigate speculative execution side-channel attacks (Spectre Variant 1)
         add_compile_options(/Qspectre)
     endif()
 endif()
@@ -131,10 +131,10 @@ target_link_libraries(hsc_kernel PUBLIC
     ${CURL_LIBRARIES}
 )
 
-# [FIX]: 修复 Windows 下链接错误
-# 1. ws2_32: 用于 pki_handler.c 的 Socket SSRF 防御 (getaddrinfo, socket 等)
-# 2. Advapi32: 用于 hsc_kernel.c 的安全描述符函数 (ConvertStringSecurityDescriptorToSecurityDescriptorA)
-# 3. Kernel32: 默认包含，用于 SetProcessMitigationPolicy (P1阶段)
+# [FIX]: Windows Linker Fixes
+# 1. ws2_32: For pki_handler.c Socket SSRF protection (getaddrinfo, socket, etc.)
+# 2. Advapi32: For hsc_kernel.c security descriptor functions
+# 3. Kernel32: Default included, used for SetProcessMitigationPolicy (P1 phase)
 if(WIN32)
     target_link_libraries(hsc_kernel PRIVATE ws2_32 Advapi32)
 endif()
@@ -146,6 +146,7 @@ target_link_libraries(hsc_cli PRIVATE hsc_kernel)
 add_executable(hsc_demo src/main.c)
 target_link_libraries(hsc_demo PRIVATE hsc_kernel)
 
+# Define test_ca_util but control its installation later
 add_executable(test_ca_util tests/test_ca_util.c)
 target_include_directories(test_ca_util PRIVATE
     ${INTERNAL_INCLUDE_DIR}
@@ -159,7 +160,6 @@ target_link_libraries(test_ca_util PRIVATE
     ${CURL_LIBRARIES}
 )
 
-# [FIX]: Windows 下 test_ca_util 也可能间接依赖 socket 符号，安全起见也加上
 if(WIN32)
     target_link_libraries(test_ca_util PRIVATE ws2_32 Advapi32)
 endif()
@@ -182,7 +182,6 @@ foreach(test_source ${TEST_MAIN_SRCS})
     
     target_link_libraries(${test_name} PRIVATE hsc_kernel)
     
-    # [FIX]: Windows 链接修复
     if(WIN32)
         target_link_libraries(${test_name} PRIVATE ws2_32 Advapi32)
     endif()
