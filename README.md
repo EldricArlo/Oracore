@@ -53,7 +53,8 @@ Our design adheres to the following core security principles:
 *   **Robust Hybrid Encryption Model:**
     *   **Symmetric Encryption:** Provides AEAD stream encryption (for large data blocks) and one-shot AEAD encryption (for small data blocks) based on **XChaCha20-Poly1305**.
     *   **Asymmetric Encryption:** Uses **X25519** (based on Curve25519) for a Key Encapsulation Mechanism (KEM).
-    *   **[FIX] Ephemeral Session Keys (Sender Compromise Resistance):** The protocol generates a fresh ephemeral key pair for every encryption session. This ensures that even if the **sender's** long-term private key is compromised in the future, past messages sent by them cannot be decrypted (protecting against passive decryption of recorded traffic). *Note: This does not constitute "Perfect Forward Secrecy" in the strictest sense (Double Ratchet), as a compromise of the recipient's long-term key would still allow decryption of past messages.*
+    *   **[UPDATED] Sender Compromise Resistance (Sender-PFS):** The protocol generates a fresh ephemeral key pair for every encryption session. This ensures that even if the **sender's** long-term private key is compromised in the future, past messages sent by them cannot be decrypted (protecting against passive decryption of recorded traffic).
+    *   **Forward Secrecy Limitation:** Please note this model does **not** provide Recipient Perfect Forward Secrecy. Since the recipient's private key is static (to allow asynchronous file decryption), a compromise of the recipient's long-term key **will** allow decryption of past messages.
 
 *   **Modern Cryptographic Primitive Stack:**
     *   **Key Derivation:** Employs **Argon2id**, the winner of the Password Hashing Competition, to effectively resist GPU and ASIC cracking attempts.
@@ -442,6 +443,7 @@ Oracipher Core provides two distinct hybrid encryption workflows, each with diff
     *   **Authentication:** Cryptographically verifies that the public key truly belongs to the intended recipient.
     *   **Integrity:** Ensures the certificate has not been tampered with.
     *   **Revocation Checking:** Actively checks via OCSP if the certificate has been revoked by the issuing authority.
+    *   **Sender Compromise Resistance:** Uses ephemeral sender keys to protect past messages if the sender's private key is leaked. (Note: Recipient compromise still impacts past messages).
 *   **When to Use:** In any scenario where the sender and receiver do not have a pre-existing, highly secure channel to exchange public keys. This is the standard for most internet-based communication.
 
 ### Direct Key (Raw) Workflow (Advanced)

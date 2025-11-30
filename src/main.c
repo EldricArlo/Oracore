@@ -1,3 +1,5 @@
+/* src/main.c */
+
 // Copyright 2025 Oracipher Core. All Rights Reserved.
 //
 // Main demonstration program for the Oracipher Core v5.1 library.
@@ -87,9 +89,11 @@ char* read_pem_file(const char* filename) {
 // --- Main Demonstration Program ---
 
 int main() {
-    printf("--- Oracipher Core v5.1 (Auth+PFS) Kernel API Demo ---\n");
+    // [FIX]: Updated banner to reflect "Sender-PFS" instead of generic "PFS"
+    printf("--- Oracipher Core v5.1 (Auth+Sender-PFS) Kernel API Demo ---\n");
     printf("This program demonstrates the end-to-end workflow as a library client "
            "(Authenticated Ephemeral KEM).\n");
+    printf("Security Note: This protocol provides Sender Compromise Resistance.\n");
     printf("It assumes CA certificates and user certificates have been generated "
            "by an independent CA tool.\n\n");
 
@@ -207,7 +211,8 @@ int main() {
         fprintf(stderr, "Critical Error: Session key encapsulation failed!\n");
         goto cleanup;
     }
-    printf("  > Session key encapsulated via asymmetric encryption and signed by sender.\n\n");
+    printf("  > Session key encapsulated (Ephemeral Key + Sender Signature).\n");
+    printf("  > Note: This ensures Sender Compromise Resistance (Sender-PFS).\n\n");
 
     // --- Stage 4: Decrypt as Recipient ---
     printf("--- Stage 4: Decrypting file as recipient 'Alice' ---\n");
