@@ -31,46 +31,64 @@ static int hex_char_to_int(char c) {
 
 /**
  * @brief [内部] 加载并验证全局胡椒。
+ * 
+ * [FIX]: 修复发现 #2 - 增加环境变量清理逻辑
+ * 安全增强: 读取环境变量后，立即在内存中擦除其内容并从环境中移除，
+ * 防止其他进程或后续的内存转储获取到明文 Pepper。
  */
 static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "Loading global cryptographic pepper...");
 
-    const char* pepper_hex = NULL;
+    const char* pepper_hex_source = NULL;
+    char* env_ptr = NULL; // [FIX]: 用于持有非 const 的 getenv 返回指针
     bool is_from_env = false;
 
     if (explicit_hex != NULL) {
-        pepper_hex = explicit_hex;
+        pepper_hex_source = explicit_hex;
         _hsc_log(HSC_LOG_LEVEL_INFO, "  > Using explicitly provided pepper.");
     } else {
-        pepper_hex = getenv("HSC_PEPPER_HEX");
-        if (pepper_hex == NULL) {
+        env_ptr = getenv("HSC_PEPPER_HEX");
+        if (env_ptr == NULL) {
             _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Security pepper not provided via arguments and 'HSC_PEPPER_HEX' environment variable is not set.");
             return -1;
         }
+        pepper_hex_source = env_ptr;
         is_from_env = true;
         _hsc_log(HSC_LOG_LEVEL_INFO, "  > Using pepper from environment variable 'HSC_PEPPER_HEX'.");
     }
 
-    size_t hex_len = strlen(pepper_hex);
+    size_t hex_len = strlen(pepper_hex_source);
     if (hex_len != REQUIRED_PEPPER_BYTES * 2) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper must be exactly %zu hex characters long, but got %zu.", REQUIRED_PEPPER_BYTES * 2, hex_len);
+        // [FIX]: 即使失败也要清理环境变量
+        if (is_from_env && env_ptr) {
+            sodium_memzero(env_ptr, hex_len);
+        }
         return -1;
     }
 
     g_internal_pepper = secure_alloc(REQUIRED_PEPPER_BYTES);
     if (g_internal_pepper == NULL) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Failed to allocate secure memory for the pepper.");
+         // [FIX]: 即使失败也要清理环境变量
+        if (is_from_env && env_ptr) {
+            sodium_memzero(env_ptr, hex_len);
+        }
         return -1;
     }
     
     for (size_t i = 0; i < REQUIRED_PEPPER_BYTES; ++i) {
-        int high = hex_char_to_int(pepper_hex[2 * i]);
-        int low = hex_char_to_int(pepper_hex[2 * i + 1]);
+        int high = hex_char_to_int(pepper_hex_source[2 * i]);
+        int low = hex_char_to_int(pepper_hex_source[2 * i + 1]);
         
         if (high == -1 || low == -1) {
             secure_free(g_internal_pepper);
             g_internal_pepper = NULL;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper contains invalid non-hexadecimal characters.");
+            // [FIX]: 即使失败也要清理环境变量
+            if (is_from_env && env_ptr) {
+                sodium_memzero(env_ptr, hex_len);
+            }
             return -1;
         }
         
@@ -81,7 +99,23 @@ static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "  > Successfully loaded and validated the %zu-byte global pepper.", g_internal_pepper_len);
 
     if (is_from_env) {
-        _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Note: Sensitive pepper loaded from environment. Ensure process environment is isolated.");
+        _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Note: Sensitive pepper loaded from environment. Performing memory scrub...");
+        
+        // [FIX]: 立即擦除环境变量所在的内存区域
+        // 注意：这修改了 getenv 返回的内存，虽然在标准中行为未定义，
+        // 但在 POSIX/Windows 实践中通常能有效擦除进程环境块中的数据。
+        if (env_ptr) {
+            sodium_memzero(env_ptr, hex_len);
+        }
+
+        // [FIX]: 从环境表中移除变量
+        #ifdef _WIN32
+            _putenv_s("HSC_PEPPER_HEX", "");
+        #else
+            unsetenv("HSC_PEPPER_HEX");
+        #endif
+        
+        _hsc_log(HSC_LOG_LEVEL_INFO, "  > [SECURITY] Environment variable 'HSC_PEPPER_HEX' scrubbed and unset.");
     }
     
     return 0;

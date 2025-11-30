@@ -1,9 +1,10 @@
 // Copyright 2025 Oracipher Core.
 //
-// This file implements a Command Line Interface (CLI) demonstration for the
-// Oracipher Core library. It illustrates the end-to-end workflow of
-// Authenticated Ephemeral KEM, including key generation, certificate handling,
-// secure file sharing, and decryption.
+// Oracipher Core Command Line Interface (CLI).
+// 
+// [Refactored]: Transformed from a static demo into a functional CLI tool.
+// This file implements the user interface for key management and enforces
+// safe file handling policies (Anti-Overwrite).
 
 #include <stdio.h>
 #include <string.h>
@@ -11,16 +12,20 @@
 #include <stdbool.h>
 #include <errno.h>
 
+// [FIX]: Include headers for file access checks
+#ifdef _WIN32
+    #include <io.h>
+    #define R_OK 4
+    #define access _access
+#else
+    #include <unistd.h>
+#endif
+
 #include "hsc_kernel.h"
-// Include sodium.h for sodium_memcmp (constant-time comparison).
 #include <sodium.h>
 
-// Prints binary data in hexadecimal format to stdout.
-//
-// Args:
-//   label: A descriptive label string printed before the data.
-//   data: Pointer to the raw binary data.
-//   len: Length of the data in bytes.
+// --- Helper Functions (Preserved for future extensions) ---
+
 void print_hex(const char* label, const unsigned char* data, size_t len) {
     printf("%s: ", label);
     for (size_t i = 0; i < len; ++i) {
@@ -29,270 +34,182 @@ void print_hex(const char* label, const unsigned char* data, size_t len) {
     printf("\n");
 }
 
-// Reads the entire content of a PEM file into a heap-allocated string.
-//
-// This function handles file opening, size calculation (supporting Windows
-// large files), and reading. It enforces a size limit to prevent OOM attacks.
-// The caller is responsible for freeing the returned memory.
-//
-// Args:
-//   filename: Path to the PEM file to read.
-//
-// Returns:
-//   A pointer to the null-terminated string containing the file content,
-//   or NULL if the file could not be opened, read, or was too large.
 char* read_pem_file(const char* filename) {
     FILE* f = fopen(filename, "rb");
-    if (!f) {
-        fprintf(stderr, "\nError: Unable to open required PEM file '%s'.\n", filename);
-        fprintf(stderr, "Please ensure you have generated all required certificate files "
-                        "using the 'test_ca_util' tool as described in the README.\n");
-        return NULL;
-    }
+    if (!f) return NULL;
     
     fseek(f, 0, SEEK_END);
-    long long length = 0;
-    
-    // Handle 64-bit file offsets on Windows vs POSIX systems.
-    #ifdef _WIN32
-        length = _ftelli64(f);
-    #else
-        length = ftell(f);
-    #endif
-    
+    long length = ftell(f);
     fseek(f, 0, SEEK_SET);
     
-    // Limit maximum read size to 1MB to mitigate potential Denial of Service (DoS)
-    // or Out of Memory (OOM) risks caused by malicious large files.
     if (length <= 0 || length > 1024 * 1024) { 
-        fprintf(stderr, "Error: File size is invalid or too large (DoS protection limit).\n");
         fclose(f); 
         return NULL; 
     }
 
     char* buffer = malloc((size_t)length + 1);
-    if (!buffer) { 
-        fclose(f); 
-        return NULL; 
-    }
+    if (!buffer) { fclose(f); return NULL; }
     
     if (fread(buffer, 1, (size_t)length, f) != (size_t)length) {
-        fclose(f);
-        free(buffer);
-        return NULL;
+        fclose(f); free(buffer); return NULL;
     }
     buffer[length] = '\0';
     fclose(f);
     return buffer;
 }
 
-// Main entry point for the demonstration.
-int main() {
-    printf("--- Oracipher Core v5.1 (Auth+PFS) CLI Demo ---\n");
-    printf("This program demonstrates the end-to-end workflow as a library client "
-           "(Authenticated Ephemeral KEM).\n");
-    printf("It assumes CA certificates and user certificates have been generated "
-           "by a separate CA tool.\n\n");
-    
-    int ret = 1;
+// --- CLI Helper Functions ---
 
-    // Declare all resources that need explicit cleanup.
-    hsc_master_key_pair* alice_mkp = NULL;
-    char* ca_cert_pem = NULL;
-    char* alice_cert_pem = NULL;
-    unsigned char* encrypted_file = NULL;
-    unsigned char* encapsulated_session_key = NULL;
-    unsigned char* decrypted_session_key = NULL;
-    unsigned char* decrypted_file_content = NULL;
-
-    // --- Initialization ---
-    // Pass NULL, NULL to use default security configurations and ENV Pepper.
-    if (hsc_init(NULL, NULL) != HSC_OK) {
-        fprintf(stderr, "Error: High Security Kernel library initialization failed!\n");
-        goto cleanup;
-    }
-    printf("Cryptography library initialized successfully.\n\n");
-
-    // --- Phase 1: 'Alice' Creates Local Key Pair ---
-    printf("--- Phase 1: 'Alice' creates her Master Key Pair ---\n");
-    const char* alice_username = "alice@example.com";
-    
-    alice_mkp = hsc_generate_master_key_pair();
-    if (alice_mkp == NULL) {
-        fprintf(stderr, "Error: Failed to generate Alice's master key pair.\n");
-        goto cleanup;
-    }
-    printf("'Alice' Master Key Pair generated in memory.\n\n");
-    
-    // --- Phase 2: Load Certificates Generated by External CA Tool ---
-    printf("--- Phase 2: Load certificate files issued by external CA ---\n");
-    ca_cert_pem = read_pem_file("ca.pem");
-    alice_cert_pem = read_pem_file("alice.pem");
-    if (!ca_cert_pem || !alice_cert_pem) {
-        goto cleanup; // read_pem_file has already printed the error message.
-    }
-    printf("Successfully loaded 'ca.pem' and 'alice.pem'.\n\n");
-
-    // --- Phase 3: End-to-End File Encryption & Secure Sharing (Alice -> Alice) ---
-    printf("--- Phase 3: End-to-End Sharing Demo (Alice -> Alice) ---\n");
-
-    // 1. Local Encryption (Generate session key, encrypt file content with AEAD).
-    printf("1. Local file encryption...\n");
-    unsigned char session_key[HSC_SESSION_KEY_BYTES];
-    hsc_random_bytes(session_key, sizeof(session_key));
-    print_hex("  > [Plaintext] Session Key", session_key, sizeof(session_key));
-    
-    const char* file_content = "This is the secret content of the file.";
-    printf("  > [Plaintext] File Content: \"%s\"\n", file_content);
-    
-    size_t file_content_len = strlen(file_content);
-    size_t enc_file_buf_len = file_content_len + HSC_AEAD_OVERHEAD_BYTES;
-    
-    encrypted_file = hsc_secure_alloc(enc_file_buf_len);
-    if (!encrypted_file) { 
-        fprintf(stderr, "Secure memory allocation failed!\n"); 
-        goto cleanup; 
-    }
-    unsigned long long actual_enc_file_len;
-    
-    // [FIX]: Updated API call with ciphertext_max_len
-    if (hsc_aead_encrypt(encrypted_file, enc_file_buf_len, 
-                         &actual_enc_file_len, 
-                         (unsigned char*)file_content, file_content_len, 
-                         session_key) != HSC_OK) {
-        fprintf(stderr, "Fatal Error: Symmetric file encryption failed!\n"); 
-        goto cleanup;
-    }
-    printf("  > File content encrypted using AEAD.\n\n");
-    
-    // 2. Verify Receiver ('Alice') Certificate.
-    printf("2. Verifying recipient ('Alice') certificate...\n");
-    if (hsc_verify_user_certificate(alice_cert_pem, ca_cert_pem, alice_username) != HSC_OK) {
-        fprintf(stderr, "Fatal Error: Recipient certificate verification failed! Aborting share.\n");
-        goto cleanup;
-    }
-    printf("  > Recipient certificate verified successfully!\n\n");
-    
-    // 3. Extract Receiver Public Key from Certificate.
-    printf("3. Extracting recipient public key from certificate...\n");
-    unsigned char recipient_pk[HSC_MASTER_PUBLIC_KEY_BYTES];
-    
-    // [FIX]: Updated API call with public_key_max_len
-    if (hsc_extract_public_key_from_cert(alice_cert_pem, recipient_pk, sizeof(recipient_pk)) != HSC_OK) {
-        fprintf(stderr, "Fatal Error: Failed to extract public key from certificate!\n"); 
-        goto cleanup;
-    }
-    print_hex("  > Extracted Recipient PK", recipient_pk, sizeof(recipient_pk));
+void print_usage(const char* prog_name) {
+    printf("Oracipher Core CLI v5.1\n");
+    printf("Usage: %s <command> [options]\n\n", prog_name);
+    printf("Commands:\n");
+    printf("  gen-keypair <name> [--force]\n");
+    printf("      Generate a new master key pair.\n");
+    printf("      Output: <name>.key (Private) and <name>.pub (Public)\n");
+    printf("      --force: Overwrite existing files if they exist.\n");
     printf("\n");
+    printf("  help\n");
+    printf("      Show this help message.\n");
+}
 
-    // 4. Encapsulate Session Key (Authenticated Ephemeral KEM).
-    printf("4. Encapsulating session key for recipient (Authenticated Ephemeral KEM)...\n");
-    size_t encapsulated_key_buf_len = HSC_MAX_ENCAPSULATED_KEY_SIZE;
-    
-    encapsulated_session_key = hsc_secure_alloc(encapsulated_key_buf_len);
-    if (!encapsulated_session_key) { 
-        fprintf(stderr, "Secure memory allocation failed!\n"); 
-        goto cleanup; 
+bool file_exists(const char* filename) {
+    if (access(filename, R_OK) == 0) {
+        return true;
     }
-    
-    size_t actual_encapsulated_len;
-    
-    // Use sender_mkp (Alice) to sign the encapsulation.
-    // [FIX]: Updated API call with encrypted_output_max_len
-    if (hsc_encapsulate_session_key(encapsulated_session_key, encapsulated_key_buf_len,
-                                    &actual_encapsulated_len, 
-                                    session_key, sizeof(session_key),
-                                    recipient_pk,
-                                    alice_mkp) != HSC_OK) {
-        fprintf(stderr, "Fatal Error: Session key encapsulation failed!\n"); 
-        goto cleanup;
-    }
-    printf("  > Session key encapsulated with asymmetric encryption and signed by sender.\n\n");
-    
-    // --- Phase 4: Decrypting as Receiver ---
-    printf("--- Phase 4: Decrypting file as receiver 'Alice' ---\n");
+    return false;
+}
 
-    // [Simulation] Get Sender Public Key (Alice verifying Alice).
-    unsigned char sender_public_key[HSC_MASTER_PUBLIC_KEY_BYTES];
-    // [FIX]: Updated API call with public_key_max_len
-    if (hsc_extract_public_key_from_cert(alice_cert_pem, sender_public_key, sizeof(sender_public_key)) != HSC_OK) {
-        fprintf(stderr, "Fatal Error: Failed to get sender public key!\n"); 
-        goto cleanup;
+// --- Command Implementation: gen-keypair ---
+
+// [FIX]: Implements safe key generation with --force logic
+int cmd_gen_keypair(int argc, char** argv) {
+    if (argc < 2) {
+        fprintf(stderr, "Error: Missing key name.\n");
+        fprintf(stderr, "Usage: gen-keypair <name> [--force]\n");
+        return 1;
     }
 
-    // 1. Decapsulate Session Key.
-    printf("1. Decapsulating session key (verifying signature)...\n");
-    decrypted_session_key = hsc_secure_alloc(sizeof(session_key));
-    if (!decrypted_session_key) { 
-        fprintf(stderr, "Secure memory allocation failed!\n"); 
-        goto cleanup; 
+    const char* name = argv[1];
+    bool force = false;
+
+    // Parse options starting from argv[2]
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--force") == 0) {
+            force = true;
+        } else {
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            return 1;
+        }
     }
 
-    // Pass sender_public_key for signature verification.
-    // [FIX]: Updated API call with decrypted_output_max_len
-    if (hsc_decapsulate_session_key(decrypted_session_key, sizeof(session_key),
-                                    encapsulated_session_key, actual_encapsulated_len, 
-                                    alice_mkp,
-                                    sender_public_key) != HSC_OK) {
-        fprintf(stderr, "Decryption Error: Failed to decapsulate session key "
-                        "(signature verification failed?)!\n"); 
-        goto cleanup;
-    }
-    print_hex("  > [Decrypted] Recovered Session Key", decrypted_session_key, sizeof(session_key));
-
-    if (sodium_memcmp(session_key, decrypted_session_key, sizeof(session_key)) != 0) {
-        fprintf(stderr, "Verification Failed: Recovered session key does not match original!\n");
-        goto cleanup;
-    }
-    printf("  > Verification Success: Recovered session key matches original.\n\n");
-
-    // 2. Decrypt File Content using Recovered Session Key.
-    printf("2. Decrypting file content using recovered session key...\n");
+    char pub_path[512];
+    char priv_path[512];
     
-    decrypted_file_content = hsc_secure_alloc(file_content_len + 1);
-    if (!decrypted_file_content) { 
-        fprintf(stderr, "Secure memory allocation failed!\n"); 
-        goto cleanup; 
+    // Construct filenames
+    if (snprintf(pub_path, sizeof(pub_path), "%s.pub", name) >= (int)sizeof(pub_path) ||
+        snprintf(priv_path, sizeof(priv_path), "%s.key", name) >= (int)sizeof(priv_path)) {
+        fprintf(stderr, "Error: Key name is too long.\n");
+        return 1;
     }
-    unsigned long long actual_dec_file_len;
-    
-    // [FIX]: Updated API call with decrypted_message_max_len
-    if (hsc_aead_decrypt(decrypted_file_content, file_content_len + 1,
-                         &actual_dec_file_len, 
-                         encrypted_file, actual_enc_file_len, 
-                         decrypted_session_key) != HSC_OK) {
-        fprintf(stderr, "Decryption Error: Failed to decrypt file content!\n");
-        goto cleanup;
-    }
-    decrypted_file_content[actual_dec_file_len] = '\0';
-    
-    printf("  > [Decrypted] Recovered File Content: \"%s\"\n", (char*)decrypted_file_content);
 
-    if (actual_dec_file_len == file_content_len &&
-        sodium_memcmp(file_content, decrypted_file_content, file_content_len) == 0) 
-    {
-        printf("  > Verification Success: Recovered content matches original.\n\n");
+    // [FIX]: Check for existing files (Pre-flight check)
+    bool pub_exists = file_exists(pub_path);
+    bool priv_exists = file_exists(priv_path);
+
+    if (pub_exists || priv_exists) {
+        if (!force) {
+            // [FAIL-SAFE]: If files exist and --force is NOT set, abort.
+            fprintf(stderr, "\n[SECURITY ERROR] Key files already exist:\n");
+            if (pub_exists) fprintf(stderr, "  - %s\n", pub_path);
+            if (priv_exists) fprintf(stderr, "  - %s\n", priv_path);
+            fprintf(stderr, "Operation aborted to prevent accidental overwrite.\n");
+            fprintf(stderr, "Use '--force' if you intend to replace them.\n");
+            return 1;
+        } else {
+            // [FORCE]: User explicitly requested overwrite.
+            // Since kernel uses O_EXCL, we must manually remove old files first.
+            printf("Warning: --force specified. Removing existing keys...\n");
+            if (pub_exists && remove(pub_path) != 0) {
+                fprintf(stderr, "Error: Failed to delete '%s': %s\n", pub_path, strerror(errno));
+                return 1;
+            }
+            if (priv_exists && remove(priv_path) != 0) {
+                fprintf(stderr, "Error: Failed to delete '%s': %s\n", priv_path, strerror(errno));
+                return 1;
+            }
+        }
+    }
+
+    printf("Generating Master Key Pair for '%s'...\n", name);
+
+    hsc_master_key_pair* kp = hsc_generate_master_key_pair();
+    if (!kp) {
+        fprintf(stderr, "Fatal Error: Key pair generation failed (Internal Error).\n");
+        return 1;
+    }
+
+    // Call Kernel API to save files.
+    // Note: Kernel now uses O_EXCL (CREATE_NEW), so if we failed to clean up above
+    // or if a race condition occurs, this will still fail safely.
+    int ret = hsc_save_master_key_pair(kp, pub_path, priv_path);
+    
+    hsc_free_master_key_pair(&kp);
+
+    if (ret == HSC_OK) {
+        printf("Success! Keys generated:\n");
+        printf("  > Public:  %s\n", pub_path);
+        printf("  > Private: %s (KEEP SECRET)\n", priv_path);
+        return 0;
+    } else if (ret == HSC_ERROR_FILE_IO) {
+        fprintf(stderr, "Error: Failed to write key files (File I/O Error).\n");
+        fprintf(stderr, "Hint: Check permissions or if file was created by another process.\n");
+        return 1;
     } else {
-        printf("  > Verification Failed: Recovered content does not match original!\n\n");
-        goto cleanup;
+        fprintf(stderr, "Error: Failed to save keys (Error Code: %d)\n", ret);
+        return 1;
     }
-    
-    ret = 0; 
-    printf("\033[32m--- Demo Completed Successfully ---\033[0m\n");
+}
 
-cleanup:
-    printf("\n--- Cleaning up resources ---\n");
-    free(ca_cert_pem);
-    free(alice_cert_pem);
-    hsc_free_master_key_pair(&alice_mkp);
-    
-    if (encrypted_file) hsc_secure_free(encrypted_file);
-    if (encapsulated_session_key) hsc_secure_free(encapsulated_session_key);
-    if (decrypted_session_key) hsc_secure_free(decrypted_session_key);
-    if (decrypted_file_content) hsc_secure_free(decrypted_file_content);
+// --- Main Entry Point & Dispatcher ---
+
+// Simple logging callback for the CLI
+void cli_logger(int level, const char* message) {
+    if (level >= 1) { // Warn or Error
+        fprintf(stderr, "[LibLog] %s\n", message);
+    }
+}
+
+int main(int argc, char** argv) {
+    // Initialize Core Library
+    if (hsc_init(NULL, NULL) != HSC_OK) {
+        fprintf(stderr, "Fatal Error: Oracipher Core initialization failed.\n");
+        return 1;
+    }
+    hsc_set_log_callback(cli_logger);
+
+    if (argc < 2) {
+        print_usage(argv[0]);
+        hsc_cleanup();
+        return 1;
+    }
+
+    const char* command = argv[1];
+    int ret = 0;
+
+    // Command Dispatcher
+    if (strcmp(command, "gen-keypair") == 0) {
+        // Pass arguments starting from argv[1] (command name) to handler
+        ret = cmd_gen_keypair(argc - 1, argv + 1);
+    } else if (strcmp(command, "help") == 0 || strcmp(command, "--help") == 0) {
+        print_usage(argv[0]);
+        ret = 0;
+    } else {
+        fprintf(stderr, "Error: Unknown command '%s'\n\n", command);
+        print_usage(argv[0]);
+        ret = 1;
+    }
 
     hsc_cleanup();
-    printf("Cleanup complete.\n");
-
     return ret;
 }

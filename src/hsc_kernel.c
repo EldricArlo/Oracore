@@ -197,12 +197,21 @@ static FILE* _fopen_exclusive_win32(const char* filename) {
     sa.lpSecurityDescriptor = pSD;
     sa.bInheritHandle = FALSE;
 
-    hFile = CreateFileA(filename, GENERIC_WRITE, 0, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    // [FIX]: Finding #3 - Silent Overwrite Risk
+    // Changed CREATE_ALWAYS to CREATE_NEW.
+    // This ensures the function fails if the file already exists,
+    // preventing accidental key destruction.
+    hFile = CreateFileA(filename, GENERIC_WRITE, 0, &sa, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
 
     LocalFree(pSD);
 
     if (hFile == INVALID_HANDLE_VALUE) {
-        _hsc_log(HSC_LOG_LEVEL_ERROR, "Win32 Security: CreateFile failed for '%s' (Error: %lu)", filename, GetLastError());
+        DWORD err = GetLastError();
+        if (err == ERROR_FILE_EXISTS) {
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "File IO: File '%s' already exists. Aborting to prevent overwrite.", filename);
+        } else {
+            _hsc_log(HSC_LOG_LEVEL_ERROR, "Win32 Security: CreateFile failed for '%s' (Error: %lu)", filename, err);
+        }
         return NULL;
     }
 
@@ -227,9 +236,16 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 #ifdef _WIN32
   FILE* f = _fopen_exclusive_win32(filename);
 #else
-  int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+  // [FIX]: Finding #3 - Silent Overwrite Risk
+  // Added O_EXCL to flags and removed O_TRUNC.
+  // This ensures open() fails if the file exists.
+  int fd = open(filename, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd == -1) {
-      _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open key file '%s' for writing: %s", filename, strerror(errno));
+      if (errno == EEXIST) {
+          _hsc_log(HSC_LOG_LEVEL_ERROR, "File IO: File '%s' already exists. Aborting to prevent overwrite.", filename);
+      } else {
+          _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open key file '%s' for writing: %s", filename, strerror(errno));
+      }
       return false;
   }
   FILE* f = fdopen(fd, "wb");
@@ -427,10 +443,18 @@ int hsc_save_master_key_pair(const hsc_master_key_pair* kp,
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
+  // NOTE: write_key_file now strictly uses O_EXCL/CREATE_NEW.
+  // If files exist, it returns false.
   if (!write_key_file(pub_key_path, kp->internal_kp.identity_pk,
-                      HSC_MASTER_PUBLIC_KEY_BYTES) ||
-      !write_key_file(priv_key_path, kp->internal_kp.identity_sk,
+                      HSC_MASTER_PUBLIC_KEY_BYTES)) {
+      return HSC_ERROR_FILE_IO;
+  }
+
+  if (!write_key_file(priv_key_path, kp->internal_kp.identity_sk,
                       HSC_MASTER_SECRET_KEY_BYTES)) {
+    // If private key save fails (e.g., exists), try to cleanup the public key
+    // to avoid partial state, although deleting files is risky in library code.
+    // For now, we return error and let the caller handle it.
     return HSC_ERROR_FILE_IO;
   }
   return HSC_OK;
@@ -655,9 +679,14 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
 #ifdef _WIN32
   f_out = _fopen_exclusive_win32(output_path); 
 #else
+  // [FIX]: Finding #3 - Ensure O_EXCL is used here as well
   int fd_out = open(output_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd_out == -1) {
-      _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open output file '%s' (O_EXCL check failed): %s", output_path, strerror(errno));
+      if (errno == EEXIST) {
+          _hsc_log(HSC_LOG_LEVEL_ERROR, "File IO: Output file '%s' already exists.", output_path);
+      } else {
+          _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open output file '%s': %s", output_path, strerror(errno));
+      }
       ret_code = HSC_ERROR_FILE_IO;
       goto cleanup;
   }
@@ -696,6 +725,7 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
 cleanup:
   if (f_in) fclose(f_in);
   if (f_out) fclose(f_out);
+  // [NOTE]: If failed, we should try to remove the partial file
   if (ret_code != HSC_OK && output_path != NULL) remove(output_path);
   hsc_crypto_stream_state_free(&st);
   hsc_secure_free(session_key);
@@ -770,9 +800,14 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
 #ifdef _WIN32
   f_out = _fopen_exclusive_win32(output_path);
 #else
+  // [FIX]: Finding #3 - Ensure O_EXCL is used here as well
   int fd_out = open(output_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd_out == -1) {
-      _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open output file '%s' (O_EXCL check failed): %s", output_path, strerror(errno));
+      if (errno == EEXIST) {
+          _hsc_log(HSC_LOG_LEVEL_ERROR, "File IO: Output file '%s' already exists.", output_path);
+      } else {
+          _hsc_log(HSC_LOG_LEVEL_ERROR, "Failed to open output file '%s': %s", output_path, strerror(errno));
+      }
       ret_code = HSC_ERROR_FILE_IO;
       goto cleanup;
   }
