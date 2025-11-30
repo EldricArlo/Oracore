@@ -7,11 +7,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <ctype.h> 
+#include <ctype.h>
+#include <stdint.h> // For SIZE_MAX
 
 // --- 运行时安全参数的定义与初始化 ---
 unsigned long long g_argon2_opslimit = BASELINE_ARGON2ID_OPSLIMIT;
 size_t g_argon2_memlimit = BASELINE_ARGON2ID_MEMLIMIT;
+
+// 定义 Argon2id 参数的硬性上限，防止通过环境变量进行 DoS 攻击
+// [FIX]: Finding #3 - Unbounded KDF Parameters DoS
+#define MAX_ARGON2_OPSLIMIT 128
+#define MAX_ARGON2_MEMLIMIT (4ULL * 1024 * 1024 * 1024) // 4 GB
 
 // 全局胡椒现在存储在安全内存中，并在运行时加载
 static unsigned char* g_internal_pepper = NULL;
@@ -32,27 +38,31 @@ static int hex_char_to_int(char c) {
 /**
  * @brief [内部] 加载并验证全局胡椒。
  * 
- * [FIX]: 修复发现 #2 - 增加环境变量清理逻辑
- * 安全增强: 读取环境变量后，立即在内存中擦除其内容并从环境中移除，
- * 防止其他进程或后续的内存转储获取到明文 Pepper。
+ * [FIX]: 修复 Report 15 Finding #2 - Undefined Behavior via getenv Modification
+ * 策略变更：严禁修改 getenv 返回的指针。
+ * 安全措施：
+ * 1. 读取环境变量。
+ * 2. 立即将敏感数据拷贝到 secure_alloc 的安全内存中。
+ * 3. 使用标准 API (unsetenv/_putenv_s) 从环境表中移除变量，断开访问路径。
+ * 注意：我们不再尝试擦除 getenv 返回的原始内存，因为那是 UB 且可能导致崩溃。
  */
 static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "Loading global cryptographic pepper...");
 
     const char* pepper_hex_source = NULL;
-    char* env_ptr = NULL; // [FIX]: 用于持有非 const 的 getenv 返回指针
     bool is_from_env = false;
 
     if (explicit_hex != NULL) {
         pepper_hex_source = explicit_hex;
         _hsc_log(HSC_LOG_LEVEL_INFO, "  > Using explicitly provided pepper.");
     } else {
-        env_ptr = getenv("HSC_PEPPER_HEX");
-        if (env_ptr == NULL) {
+        // getenv 返回的指针不应被修改 (C11 7.22.4.6)
+        pepper_hex_source = getenv("HSC_PEPPER_HEX");
+        
+        if (pepper_hex_source == NULL) {
             _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Security pepper not provided via arguments and 'HSC_PEPPER_HEX' environment variable is not set.");
             return -1;
         }
-        pepper_hex_source = env_ptr;
         is_from_env = true;
         _hsc_log(HSC_LOG_LEVEL_INFO, "  > Using pepper from environment variable 'HSC_PEPPER_HEX'.");
     }
@@ -60,9 +70,14 @@ static int _load_pepper(const char* explicit_hex) {
     size_t hex_len = strlen(pepper_hex_source);
     if (hex_len != REQUIRED_PEPPER_BYTES * 2) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper must be exactly %zu hex characters long, but got %zu.", REQUIRED_PEPPER_BYTES * 2, hex_len);
-        // [FIX]: 即使失败也要清理环境变量
-        if (is_from_env && env_ptr) {
-            sodium_memzero(env_ptr, hex_len);
+        
+        // 即使长度错误，也尝试从环境中移除该变量
+        if (is_from_env) {
+            #ifdef _WIN32
+                _putenv_s("HSC_PEPPER_HEX", "");
+            #else
+                unsetenv("HSC_PEPPER_HEX");
+            #endif
         }
         return -1;
     }
@@ -70,13 +85,17 @@ static int _load_pepper(const char* explicit_hex) {
     g_internal_pepper = secure_alloc(REQUIRED_PEPPER_BYTES);
     if (g_internal_pepper == NULL) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Failed to allocate secure memory for the pepper.");
-         // [FIX]: 即使失败也要清理环境变量
-        if (is_from_env && env_ptr) {
-            sodium_memzero(env_ptr, hex_len);
+        if (is_from_env) {
+            #ifdef _WIN32
+                _putenv_s("HSC_PEPPER_HEX", "");
+            #else
+                unsetenv("HSC_PEPPER_HEX");
+            #endif
         }
         return -1;
     }
     
+    // 解析 Hex 字符串到安全内存
     for (size_t i = 0; i < REQUIRED_PEPPER_BYTES; ++i) {
         int high = hex_char_to_int(pepper_hex_source[2 * i]);
         int low = hex_char_to_int(pepper_hex_source[2 * i + 1]);
@@ -85,9 +104,13 @@ static int _load_pepper(const char* explicit_hex) {
             secure_free(g_internal_pepper);
             g_internal_pepper = NULL;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "  > FATAL: Pepper contains invalid non-hexadecimal characters.");
-            // [FIX]: 即使失败也要清理环境变量
-            if (is_from_env && env_ptr) {
-                sodium_memzero(env_ptr, hex_len);
+            
+            if (is_from_env) {
+                #ifdef _WIN32
+                    _putenv_s("HSC_PEPPER_HEX", "");
+                #else
+                    unsetenv("HSC_PEPPER_HEX");
+                #endif
             }
             return -1;
         }
@@ -99,23 +122,18 @@ static int _load_pepper(const char* explicit_hex) {
     _hsc_log(HSC_LOG_LEVEL_INFO, "  > Successfully loaded and validated the %zu-byte global pepper.", g_internal_pepper_len);
 
     if (is_from_env) {
-        _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Note: Sensitive pepper loaded from environment. Performing memory scrub...");
+        _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Note: Sensitive pepper loaded from environment.");
         
-        // [FIX]: 立即擦除环境变量所在的内存区域
-        // 注意：这修改了 getenv 返回的内存，虽然在标准中行为未定义，
-        // 但在 POSIX/Windows 实践中通常能有效擦除进程环境块中的数据。
-        if (env_ptr) {
-            sodium_memzero(env_ptr, hex_len);
-        }
-
-        // [FIX]: 从环境表中移除变量
+        // [FIX]: 安全合规修正
+        // 仅使用标准 API 移除环境变量。
+        // 这虽然不能物理擦除原始内存（取决于 libc 实现），但这是我们在不引入 UB 的前提下能做的极限。
         #ifdef _WIN32
             _putenv_s("HSC_PEPPER_HEX", "");
         #else
             unsetenv("HSC_PEPPER_HEX");
         #endif
         
-        _hsc_log(HSC_LOG_LEVEL_INFO, "  > [SECURITY] Environment variable 'HSC_PEPPER_HEX' scrubbed and unset.");
+        _hsc_log(HSC_LOG_LEVEL_INFO, "  > [SECURITY] Environment variable 'HSC_PEPPER_HEX' unset from process environment.");
     }
     
     return 0;
@@ -131,13 +149,15 @@ void crypto_config_load_from_env() {
         char* endptr;
         errno = 0;
         unsigned long long ops_from_env = strtoull(opslimit_env, &endptr, 10);
+        
+        // [FIX]: Finding #3 - 添加上限检查
         if (errno == ERANGE) {
             _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_OPSLIMIT value is out of range. Using default.");
-        } else if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT) {
+        } else if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT && ops_from_env <= MAX_ARGON2_OPSLIMIT) {
             g_argon2_opslimit = ops_from_env;
             _hsc_log(HSC_LOG_LEVEL_INFO, "  > Argon2id OpsLimit overridden by environment: %llu", g_argon2_opslimit);
         } else {
-            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: Invalid or below-baseline HSC_ARGON2_OPSLIMIT ignored. Using default.");
+            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_OPSLIMIT invalid, unsafe, or too high (Max: %d). Using default.", MAX_ARGON2_OPSLIMIT);
         }
     }
 
@@ -147,13 +167,16 @@ void crypto_config_load_from_env() {
         char* endptr;
         errno = 0;
         unsigned long long mem_from_env = strtoull(memlimit_env, &endptr, 10);
+        
+        // [FIX]: Finding #3 - 添加上限检查
         if (errno == ERANGE) {
             _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_MEMLIMIT value is out of range. Using default.");
-        } else if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT) {
+        } else if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT && mem_from_env <= MAX_ARGON2_MEMLIMIT) {
             g_argon2_memlimit = (size_t)mem_from_env;
             _hsc_log(HSC_LOG_LEVEL_INFO, "  > Argon2id MemLimit overridden by environment: %zu bytes", g_argon2_memlimit);
         } else {
-            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: Invalid or below-baseline HSC_ARGON2_MEMLIMIT ignored. Using default.");
+            // 将 4GB 显示为人类可读格式
+            _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_MEMLIMIT invalid, unsafe, or too high (Max: 4GB). Using default.");
         }
     }
 }
@@ -298,6 +321,15 @@ int encrypt_symmetric_aead(
     
     const size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     const size_t mac_len = crypto_aead_xchacha20poly1305_ietf_ABYTES;
+    
+    // [FIX]: Finding #1 - Integer Overflow Prevention
+    // 在计算 message_len + overhead 之前，先检查 SIZE_MAX 边界。
+    // 如果 SIZE_MAX - message_len < overhead，说明 message_len 加上 overhead 后会溢出。
+    if (SIZE_MAX - message_len < nonce_len + mac_len) {
+        _hsc_log(HSC_LOG_LEVEL_ERROR, "AEAD Encrypt: Integer overflow detected in ciphertext length calculation. Input message too large.");
+        return -1;
+    }
+
     size_t required_len = message_len + nonce_len + mac_len;
 
     // [FIX]: Output buffer boundary check
@@ -366,7 +398,7 @@ int decrypt_symmetric_aead(
 
 int encrypt_symmetric_aead_detached(unsigned char* ciphertext, size_t ciphertext_max_len,
                                     unsigned char* tag_out, size_t tag_max_len,
-                                    const unsigned char* message, size_t message_len, // [FIX] Added const
+                                    const unsigned char* message, size_t message_len,
                                     const unsigned char* additional_data, size_t ad_len,
                                     unsigned char* nonce_out, size_t nonce_max_len,
                                     const unsigned char* key) {
@@ -409,9 +441,7 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message, size_t dec
     return 0;
 }
 
-// 重构：Authenticated Ephemeral KEM (Sign-then-Encrypt)
-// [SECURITY FIX 2025]: 修复 Unknown Key Share 漏洞。
-// 将接收方的加密公钥 (recipient_encrypt_pk) 纳入签名上下文，以绑定身份。
+// Authenticated Ephemeral KEM (Sign-then-Encrypt)
 int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t encrypted_output_max_len,
                             size_t* encrypted_output_len,
@@ -424,7 +454,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         return -1;
     }
 
-    // [FIX]: Calculate required length and check bounds
+    // [FIX]: Calculate required length and check bounds (with overflow check implied by small fixed additions)
     // Structure: [Nonce (24)] + [Ephemeral_PK (32)] + [Signature (64)] + [Ciphertext (SessionKey + 16)]
     size_t ciphertext_len = session_key_len + crypto_box_curve25519xchacha20poly1305_MACBYTES;
     size_t required_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + 
@@ -474,7 +504,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     // 立即擦除临时私钥
     sodium_memzero(ephem_sk, sizeof(ephem_sk));
 
-    // 5. [FIX] 签名数据 (Sign-then-Encrypt)
+    // 5. 签名数据 (Sign-then-Encrypt)
     // 签名内容更新: [Nonce] || [Ephemeral_PK] || [Ciphertext] || [Recipient_Encrypt_PK]
     // 新增 Recipient_Encrypt_PK (32 bytes) 以锁定接收者身份，防止中间人重放。
     size_t msg_to_sign_len = sizeof(nonce) + sizeof(ephem_pk) + ciphertext_len + sizeof(recipient_encrypt_pk);
@@ -488,7 +518,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     memcpy(p_sign, nonce, sizeof(nonce)); p_sign += sizeof(nonce);
     memcpy(p_sign, ephem_pk, sizeof(ephem_pk)); p_sign += sizeof(ephem_pk);
     memcpy(p_sign, ciphertext, ciphertext_len); p_sign += ciphertext_len;
-    // [FIX] Append recipient PK
+    // Append recipient PK
     memcpy(p_sign, recipient_encrypt_pk, sizeof(recipient_encrypt_pk)); 
 
     unsigned char signature[crypto_sign_BYTES];
@@ -510,7 +540,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
     return 0;
 }
 
-// [FIX]: 重构：Authenticated Ephemeral KEM 解封装
+// Authenticated Ephemeral KEM 解封装
 int decapsulate_session_key(unsigned char* decrypted_output,
                             size_t decrypted_output_max_len,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
@@ -569,13 +599,13 @@ int decapsulate_session_key(unsigned char* decrypted_output,
     memcpy(p_verify, nonce, crypto_box_curve25519xchacha20poly1305_NONCEBYTES); p_verify += crypto_box_curve25519xchacha20poly1305_NONCEBYTES;
     memcpy(p_verify, ephem_pk, crypto_box_PUBLICKEYBYTES); p_verify += crypto_box_PUBLICKEYBYTES;
     memcpy(p_verify, ciphertext, ciphertext_len); p_verify += ciphertext_len;
-    // [FIX] Append my public key for verification
+    // Append my public key for verification
     memcpy(p_verify, my_enc_pk, crypto_box_PUBLICKEYBYTES);
 
     int verify_ret = crypto_sign_verify_detached(signature, signed_msg, signed_msg_len, sender_public_key);
     
     secure_free(signed_msg);
-    sodium_memzero(my_enc_pk, sizeof(my_enc_pk)); // 清理推导出的公钥（虽然不是敏感数据，但保持干净）
+    sodium_memzero(my_enc_pk, sizeof(my_enc_pk)); // 清理推导出的公钥
 
     if (verify_ret != 0) {
         // 签名验证失败！

@@ -23,6 +23,7 @@ English | [简体中文](./languages/README_zh_CN.md) | [繁體中文](./languag
     *   [4.2 Critical Security Configuration: The Pepper](#42-critical-security-configuration-the-pepper)
     *   [4.3 Compilation & Testing](#43-compilation--testing)
     *   [4.4 Windows Deployment Security (CRITICAL)](#44-windows-deployment-security-critical)
+    *   [4.5 Absolute Memory Security (Swap/Pagefile)](#45-absolute-memory-security-swappagefile)
 5.  [Usage Guide](#5-usage-guide)
     *   [5.1 Using as a Command-Line Tool (`hsc_cli` & `test_ca_util`)](#51-using-as-a-command-line-tool-hsc_cli--test_ca_util)
     *   [5.2 Using as a Library in Your Project](#52-using-as-a-library-in-your-project)
@@ -187,6 +188,20 @@ To secure your environment against potential API failures or OS-level overrides,
 4.  Alternatively, disable WER entirely if your security policy requires strict memory confidentiality.
 
 **Failure to ensure these protections may result in decrypted session keys or private keys persisting on the physical disk after an application crash.**
+
+### 4.5 Absolute Memory Security (Swap/Pagefile)
+
+> **🔥 FATAL RISK: OpenSSL Memory Management**
+>
+> While Oracipher Core uses `libsodium` to lock its internal memory, operations involving X.509 certificates (e.g., `hsc_generate_csr`) must utilize OpenSSL. OpenSSL's default memory allocator **does not lock memory**, meaning private key material may potentially be written to the system's Swap partition or Pagefile during these operations.
+
+**SECURITY REQUIREMENT:**
+To guarantee absolute security and prevent key remanence on persistent storage, you **MUST disable system swap** on any machine used for key generation, signing, or decryption.
+
+*   **Linux**: `sudo swapoff -a` (and remove from `/etc/fstab`)
+*   **Windows**: Disable "Paging file" in Advanced System Settings -> Performance -> Virtual Memory.
+
+**Failure to do so constitutes a known residual risk.**
 
 ## 5. Usage Guide
 

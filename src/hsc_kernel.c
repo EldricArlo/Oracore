@@ -282,8 +282,11 @@ static void _win32_disable_crash_dumps() {
     if (exeName) exeName++; else exeName = exePath;
 
     // 2. 动态加载 Wer.dll
-    // 动态加载避免了对 SDK 版本的硬性依赖，并允许在旧版 Windows 上降级处理
-    HMODULE hWer = LoadLibraryA("wer.dll");
+    // [FIX]: Audit Finding #1 - DLL Hijacking
+    // 强制使用 LOAD_LIBRARY_SEARCH_SYSTEM32 以防止 DLL 劫持/预加载攻击。
+    // 这要求 Windows 8 / Server 2012 或安装了相应补丁的旧版 Windows。
+    // 对于极旧的系统，此调用可能失败，从而导致回退机制被触发，这是安全的 (Fail-Safe)。
+    HMODULE hWer = LoadLibraryExA("wer.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     bool exclusion_success = false;
 
     if (hWer) {
@@ -452,9 +455,11 @@ int hsc_save_master_key_pair(const hsc_master_key_pair* kp,
 
   if (!write_key_file(priv_key_path, kp->internal_kp.identity_sk,
                       HSC_MASTER_SECRET_KEY_BYTES)) {
-    // If private key save fails (e.g., exists), try to cleanup the public key
-    // to avoid partial state, although deleting files is risky in library code.
-    // For now, we return error and let the caller handle it.
+    // [FIX]: Audit Finding #3 - Broken Atomicity
+    // If private key save fails (e.g., exists or permissions), 
+    // we MUST clean up the public key to avoid leaving the system in an inconsistent "orphan" state.
+    _hsc_log(HSC_LOG_LEVEL_ERROR, "Atomic Rollback: Failed to write private key. Deleting public key '%s' to prevent corrupt state.", pub_key_path);
+    remove(pub_key_path);
     return HSC_ERROR_FILE_IO;
   }
   return HSC_OK;
