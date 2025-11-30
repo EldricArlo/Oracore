@@ -1,3 +1,5 @@
+/* src/pki/pki_handler.c */
+
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -539,6 +541,7 @@ cleanup:
 
 
 static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* store) {
+    // 简化的日志，以适应循环调用
     _hsc_log(HSC_LOG_LEVEL_INFO, "      iv. [Checking Revocation Status (OCSP)]:");
     int ret = HSC_ERROR_CERT_OCSP_UNAVAILABLE;
 
@@ -718,8 +721,8 @@ int verify_user_certificate(const char* user_cert_pem,
     }
     _hsc_log(HSC_LOG_LEVEL_INFO, "      > SUCCESS: Certificate subject matches the expected user '%s'.", expected_username);
 
-    // [FIX] Vulnerability #2: Broken Chain Validation
-    // 必须获取已验证的证书链，以找到用户证书的直接签发者（Issuer）。
+    // [FIX] Vulnerability #2 & Report 15 P0: Full Chain Validation (Intermediate + Leaf)
+    // 必须获取已验证的证书链，并对链上的所有证书（Root除外）进行 OCSP 检查。
     STACK_OF(X509)* chain = X509_STORE_CTX_get1_chain(ctx);
     if (!chain) {
         LOG_PKI_ERROR("Failed to retrieve verified certificate chain for OCSP check.");
@@ -727,26 +730,56 @@ int verify_user_certificate(const char* user_cert_pem,
         goto cleanup;
     }
 
-    X509* real_issuer = NULL;
-    // 链结构通常为: [0]=UserCert, [1]=Issuer (Intermediate/Root)...
-    // 我们需要的是 [1] 作为直接签发者。
-    if (sk_X509_num(chain) > 1) {
-        real_issuer = sk_X509_value(chain, 1);
-    } else {
-        // Fallback: 如果链长度为1，说明用户证书是自签名的，或者直接被信任（作为信任锚点）。
-        // 在这种情况下，Issuer 就是它自己。
-        real_issuer = user_cert; 
-    }
+    int num_certs = sk_X509_num(chain);
+    _hsc_log(HSC_LOG_LEVEL_INFO, "    Step iv [Deep OCSP Check]: Validating %d certificates in chain.", num_certs);
 
-    int ocsp_res = check_ocsp_status(user_cert, real_issuer, store);
+    // Loop through the chain to validate revocation for Leaf AND Intermediates.
+    // We stop before the last one if it is a Root CA (Roots are trust anchors).
+    // Logic: 
+    //   i=0 is Leaf. Issuer is at i+1.
+    //   i=1 is Intermediate. Issuer is at i+2.
+    //   ...
+    //   i=num-1 is Root.
+    // Loop condition: i < num_certs - 1.
     
-    // 释放链副本
-    sk_X509_pop_free(chain, X509_free);
-
-    if (ocsp_res != HSC_OK) {
-        ret_code = ocsp_res;
+    if (num_certs < 1) {
+        ret_code = HSC_ERROR_CERT_CHAIN_OR_VALIDITY;
+        sk_X509_pop_free(chain, X509_free);
         goto cleanup;
     }
+
+    // Special handling for single certificate chain (Trusted Self-Signed)
+    if (num_certs == 1) {
+        _hsc_log(HSC_LOG_LEVEL_INFO, "         > Chain length is 1. Checking leaf against itself.");
+        X509* curr = sk_X509_value(chain, 0);
+        // Issuer is itself
+        int ocsp_res = check_ocsp_status(curr, curr, store);
+        if (ocsp_res != HSC_OK) {
+             _hsc_log(HSC_LOG_LEVEL_ERROR, "         > Revocation check failed for self-signed leaf.");
+             ret_code = ocsp_res;
+             sk_X509_pop_free(chain, X509_free);
+             goto cleanup;
+        }
+    } else {
+        // Standard chain
+        for (int i = 0; i < num_certs - 1; i++) {
+            X509* curr = sk_X509_value(chain, i);
+            X509* issuer = sk_X509_value(chain, i + 1);
+            
+            _hsc_log(HSC_LOG_LEVEL_INFO, "         > Checking revocation status for certificate at depth %d...", i);
+            
+            int ocsp_res = check_ocsp_status(curr, issuer, store);
+            if (ocsp_res != HSC_OK) {
+                _hsc_log(HSC_LOG_LEVEL_ERROR, "         > Revocation check failed at depth %d. Aborting.", i);
+                ret_code = ocsp_res;
+                sk_X509_pop_free(chain, X509_free);
+                goto cleanup;
+            }
+        }
+    }
+    
+    // Release the chain stack copy
+    sk_X509_pop_free(chain, X509_free);
 
     ret_code = HSC_OK;
 
@@ -754,8 +787,6 @@ cleanup:
     if (ctx) X509_STORE_CTX_free(ctx);
     if (store) X509_STORE_free(store);
     if (user_cert) X509_free(user_cert);
-    // [NOTE]: ca_cert_tmp is freed in loop. 
-    // [NOTE]: ca_cert (from previous code) is removed.
     if (user_bio) BIO_free(user_bio);
     if (ca_bio) BIO_free(ca_bio);
     
