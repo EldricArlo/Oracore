@@ -1,8 +1,8 @@
 # 🔐 Core Secret Operations Guide: HSC_PEPPER_HEX Management Manual
 
-**Applicable Version:** Oracipher Core v5.1+
+**Applicable Version:** Oracipher Core v5.2
 **Security Level:** Top Secret
-**Last Updated:** 2025-11-21
+**Last Updated:** 2025-11-30
 
 ---
 
@@ -44,7 +44,7 @@ It is strictly prohibited to hardcode the Pepper in source code, Dockerfiles, or
 ### 💎 Scenario A: Programmatic Injection (Highest Security)
 **Recommended for:** Enterprise apps using HashiCorp Vault, AWS Secrets Manager, or Azure Key Vault.
 
-Oracipher Core v5.1+ allows passing the pepper directly to the initialization function. This avoids the risk of environment variables leaking via `/proc/PID/environ` or crash dumps.
+Oracipher Core v5.2 allows passing the pepper directly to the initialization function. This avoids the risk of environment variables leaking via `/proc/PID/environ` or crash dumps.
 
 ```c
 // Fetch secret from your Vault client library into memory
@@ -183,7 +183,8 @@ Remove-Item Env:\HSC_PEPPER_HEX
 
 1.  **Check Loading Status**:
     Check application logs (stdout/stderr). `Oracipher Core` will print:
-    *   ✅ `INFO: Successfully loaded and validated the 32-byte global pepper...`
+    *   ✅ `INFO: Loading global cryptographic pepper...`
+    *   ✅ `INFO: > Successfully loaded and validated the 32-byte global pepper.`
     *   ❌ `FATAL: Security pepper not provided via arguments and 'HSC_PEPPER_HEX' environment variable is not set.`
 
 2.  **Log Hygiene**:

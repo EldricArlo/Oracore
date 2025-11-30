@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./src/media/icon-256.png" alt="Oracipher Icon" width="128">
-  <h1 style="border-bottom: none;">Oracipher Core</h1>
+  <h1 style="border-bottom: none;">Oracipher Core v5.2</h1>
 
 # High-Security Hybrid Encryption Kernel Library
 
@@ -10,7 +10,7 @@
 
 </div>
 
-English | [简体中文](./languages/README_zh_CN.md) | [繁體中文](./languages/README_zh_TW.md) | [Português](./languages/README_pt_BR.md) | [Español](./languages/README_es_ES.md) | [日本語](./languages/README_ja_JP.md) | [Русский](./languages/README_ru_RU.md) | [العربية](./languages/README_ar_AR.md) | [Türkçe](./languages/README_tr_TR.md) |
+<!-- English | [简体中文](./languages/README_zh_CN.md) | [繁體中文](./languages/README_zh_TW.md) | [Português](./languages/README_pt_BR.md) | [Español](./languages/README_es_ES.md) | [日本語](./languages/README_ja_JP.md) | [Русский](./languages/README_ru_RU.md) | [العربية](./languages/README_ar_AR.md) | [Türkçe](./languages/README_tr_TR.md) | -->
 
 ---
 
@@ -44,7 +44,7 @@ This project is a security-centric, advanced hybrid encryption kernel library im
 Our design adheres to the following core security principles:
 
 *   **Choose Vetted, Modern Cryptography:** We never roll our own crypto. We only use modern cryptographic primitives that are widely recognized by the community and resistant to side-channel attacks.
-*   **Defense-in-Depth:** Security does not rely on any single layer. We implement protections at multiple levels, including memory management, API design, protocol flow, and **robust handling of all external inputs to prevent resource exhaustion attacks**.
+*   **Defense-in-Depth:** Security does not rely on any single layer. We implement protections at multiple levels, including memory management (stack clearing), API design, protocol flow, and **robust handling of all external inputs to prevent resource exhaustion attacks**.
 *   **Secure Defaults & "Fail-Closed" Policy:** The system's default behavior must be secure. When faced with an uncertain state (e.g., unable to verify certificate revocation status), the system must choose to fail and terminate the operation (fail-closed) rather than proceed.
 *   **Minimize Sensitive Data Exposure:** We strictly control the lifecycle, scope, and residency of critical data like private keys in memory, keeping them to the absolute minimum necessary.
 
@@ -70,7 +70,8 @@ Our design adheres to the following core security principles:
 *   **Rock-Solid Memory Safety:**
     *   Exposes `libsodium`'s secure memory functions through the public API, allowing clients to handle sensitive data (like session keys) safely.
     *   **[Securely Documented]** All internal private keys **and other critical secrets (e.g., key seeds, intermediate hash values)** are stored in locked memory, **preventing them from being swapped to disk by the OS**, and are securely zeroed before being freed. Boundaries with third-party libraries (like OpenSSL) are carefully managed. When sensitive data must cross into standard memory regions (e.g., passing a seed to OpenSSL in `generate_csr`), this library employs defense-in-depth techniques (such as immediately clearing memory buffers after use) to mitigate the inherent risks, representing a best-practice approach when interacting with non-secure-memory-aware libraries.
-    *   **[NEW] API Boundary Hardening:** All public APIs now enforce strict output buffer size checks (`_max_len` parameters) to prevent buffer overflows, even if the caller miscalculates allocation sizes.
+    *   **[NEW in v5.2] Stack Clearing:** Critical internal encryption loops now perform mandatory stack wiping to prevent sensitive data remnants in stack frames.
+    *   **[NEW in v5.2] API Boundary Hardening:** All public APIs now enforce strict output buffer size checks (`_max_len` parameters) to prevent buffer overflows, even if the caller miscalculates allocation sizes.
 
 *   **High-Quality Engineering Practices:**
     *   **Clean API Boundary:** Provides a single public header file, `hsc_kernel.h`, which encapsulates all internal implementation details using opaque pointers, achieving high cohesion and low coupling.
@@ -99,7 +100,7 @@ The project uses a clean, layered directory structure to achieve separation of c
 │   ├── test_api_integration.c # End-to-end tests for high-level APIs
 │   ├── test_helpers.h/.c # Test helper functions (CA generation, signing)
 │   └── test_ca_util.c    # Source code for the standalone test CA utility
-├── Makefile              # Build and task management script
+├── CMakeLists.txt        # Build configuration
 └── README.md             # This project's documentation
 ```
 
@@ -107,7 +108,7 @@ The project uses a clean, layered directory structure to achieve separation of c
 
 ### 4.1 Dependencies
 
-*   **Build Tools:** `make`
+*   **Build Tools:** `cmake`, `make`
 *   **C Compiler:** `gcc` or `clang` (with C11 and `-Werror` support)
 *   **libsodium:** (`libsodium-dev`)
 *   **OpenSSL:** **v3.0** or newer is recommended (`libssl-dev`)
@@ -142,14 +143,16 @@ echo $HSC_PEPPER_HEX
 
 The project is designed to be highly portable and avoids platform-specific hardcoded paths, ensuring it builds and runs correctly on all supported systems.
 
-1.  **Compile All Targets (library, demo, CLI, tests):**
+1.  **Configure and Build:**
     ```bash
-    make all
+    mkdir build && cd build
+    cmake ..
+    cmake --build .
     ```
 
 2.  **Run the Comprehensive Test Suite (Critical Step):**
     ```bash
-    make run-tests
+    ctest --output-on-failure
     ```
     > **Important Note on Expected OCSP Test Behavior**
     >
@@ -159,17 +162,12 @@ The project is designed to be highly portable and avoids platform-specific hardc
 
 3.  **Run the Demo Program:**
     ```bash
-    ./bin/hsc_demo
+    ./hsc_demo
     ```
 
 4.  **Explore the Command-Line Tool:**
     ```bash
-    ./bin/hsc_cli
-    ```
-
-5.  **Clean Up Build Files:**
-    ```bash
-    make clean
+    ./hsc_cli --help
     ```
 
 ### 4.4 Windows Deployment Security (CRITICAL)
@@ -221,43 +219,43 @@ This section provides a complete, self-contained workflow demonstrating how two 
 > **Planning:** Ensure your environment has outbound network access to the OCSP URLs defined in your certificates. This tool is **not designed for air-gapped (offline) systems** unless you use the "Direct Key" mode (Option C) or configure a local OCSP responder.
 
 **Tool Roles:**
-*   `./bin/test_ca_util`: A helper utility that simulates a Certificate Authority (CA), responsible for generating a root certificate and signing user certificates.
-*   `./bin/hsc_cli`: The core client tool for key generation, CSR creation, certificate validation, and file encryption/decryption.
+*   `./test_ca_util`: A helper utility that simulates a Certificate Authority (CA), responsible for generating a root certificate and signing user certificates.
+*   `./hsc_cli`: The core client tool for key generation, CSR creation, certificate validation, and file encryption/decryption.
 
 **Complete Workflow Example: Alice Encrypts a File and Sends It Securely to Bob**
 
 1.  **(Setup) Create a Test Certificate Authority (CA):**
     *We use `test_ca_util` to generate a root CA key and a self-signed certificate.*
     ```bash
-    ./bin/test_ca_util gen-ca ca.key ca.pem
+    ./test_ca_util gen-ca ca.key ca.pem
     ```
 
 2.  **(Alice & Bob) Generate Their Master Key Pairs:**
     ```bash
-    ./bin/hsc_cli gen-keypair alice
-    ./bin/hsc_cli gen-keypair bob
+    ./hsc_cli gen-keypair alice
+    ./hsc_cli gen-keypair bob
     ```
     *This creates `alice.key`, `alice.pub`, `bob.key`, and `bob.pub`.*
 
 3.  **(Alice & Bob) Generate Certificate Signing Requests (CSRs):**
     ```bash
-    ./bin/hsc_cli gen-csr alice.key "alice@example.com"
-    ./bin/hsc_cli gen-csr bob.key "bob@example.com"
+    ./hsc_cli gen-csr alice.key "alice@example.com"
+    ./hsc_cli gen-csr bob.key "bob@example.com"
     ```
     *This creates `alice.csr` and `bob.csr`.*
 
 4.  **(CA) Sign the CSRs to Issue Certificates:**
     *The CA uses its private key (`ca.key`) and certificate (`ca.pem`) to sign the CSRs.*
     ```bash
-    ./bin/test_ca_util sign alice.csr ca.key ca.pem alice.pem
-    ./bin/test_ca_util sign bob.csr ca.key ca.pem bob.pem
+    ./test_ca_util sign alice.csr ca.key ca.pem alice.pem
+    ./test_ca_util sign bob.csr ca.key ca.pem bob.pem
     ```
     *Alice and Bob now have their official certificates, `alice.pem` and `bob.pem`.*
 
 5.  **(Alice) Verifies Bob's Certificate Before Sending:**
     *Alice uses the trusted CA certificate (`ca.pem`) to verify Bob's identity. This is a critical step before trusting his certificate.*
     ```bash
-    ./bin/hsc_cli verify-cert bob.pem --ca ca.pem --user "bob@example.com"
+    ./hsc_cli verify-cert bob.pem --ca ca.pem --user "bob@example.com"
     ```
 
 6.  **(Alice) Encrypts a File for Bob:**
@@ -267,20 +265,20 @@ This section provides a complete, self-contained workflow demonstrating how two 
     > This is the standard, secure way to operate. The tool **requires** Alice to provide the CA certificate and the expected username to perform a full, strict validation of Bob's certificate before encrypting.
     ```bash
     echo "This is top secret information." > secret.txt
-    ./bin/hsc_cli encrypt secret.txt --to bob.pem --from alice.key --ca ca.pem --user "bob@example.com"
+    ./hsc_cli encrypt secret.txt --to bob.pem --from alice.key --ca ca.pem --user "bob@example.com"
     ```
 
     **Option B: Certificate-Based without Validation (Dangerous - Expert Use Only)**
     > If Alice is absolutely certain of the certificate's authenticity and wishes to skip validation, she must explicitly use the `--no-verify` flag. **This is not recommended.**
     ```bash
     # Use with extreme caution!
-    ./bin/hsc_cli encrypt secret.txt --to bob.pem --from alice.key --no-verify
+    ./hsc_cli encrypt secret.txt --to bob.pem --from alice.key --no-verify
     ```
 
     **Option C: Direct Key Mode (Advanced - For Pre-Trusted Keys)**
     *If Alice has already obtained Bob's public key (`bob.pub`) through a secure, trusted channel, she can encrypt to it directly, bypassing all certificate logic. **The tool will show a severe security warning and require explicit user confirmation before proceeding.**
     ```bash
-    ./bin/hsc_cli encrypt secret.txt --recipient-pk-file bob.pub --from alice.key
+    ./hsc_cli encrypt secret.txt --recipient-pk-file bob.pub --from alice.key
     ```
     *All options create `secret.txt.hsc`. Alice can now send `secret.txt.hsc` and her certificate `alice.pem` to Bob.*
 
@@ -289,12 +287,12 @@ This section provides a complete, self-contained workflow demonstrating how two 
 
     **If Alice Used Option A or B (Certificate):**
     ```bash
-    ./bin/hsc_cli decrypt secret.txt.hsc --to bob.key --from alice.pem
+    ./hsc_cli decrypt secret.txt.hsc --to bob.key --from alice.pem
     ```
 
     **If Alice Used Option C (Direct Key):**
     ```bash
-    ./bin/hsc_cli decrypt secret.txt.hsc --to bob.key --sender-pk-file alice.pub
+    ./hsc_cli decrypt secret.txt.hsc --to bob.key --sender-pk-file alice.pub
     ```
     *Both commands will produce `secret.txt.decrypted`.*
     ```bash
@@ -429,7 +427,7 @@ export HSC_PKI_ALLOW_PRIVATE_IP=1
 
 # Don't forget the mandatory HSC_PEPPER_HEX variable!
 export HSC_PEPPER_HEX=$(openssl rand -hex 32)
-./bin/hsc_cli gen-keypair my_strong_key
+./hsc_cli gen-keypair my_strong_key
 ```
 
 ## 8. Advanced Topic: Encryption Mode Comparison

@@ -1,3 +1,5 @@
+/* src/hsc_kernel.c */
+
 // Copyright 2025 Oracipher. All Rights Reserved.
 //
 // Implementation of the High-Security Core (HSC) kernel.
@@ -88,6 +90,7 @@ static uint64_t load64_le(const unsigned char* src) {
 }
 
 // Internal loop to perform stream encryption from file to file.
+// [FIX]: Finding #1 - Added strict stack clearing via goto cleanup pattern.
 static int _perform_stream_encryption(FILE* f_in, FILE* f_out,
                                       hsc_crypto_stream_state* st) {
   unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE];
@@ -95,11 +98,13 @@ static int _perform_stream_encryption(FILE* f_in, FILE* f_out,
   size_t bytes_read;
   unsigned long long out_len;
   uint8_t tag;
+  int ret = HSC_OK;
 
   // 使用更安全的循环结构，避免 feof 的误用
   while ((bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in)) > 0) {
     if (ferror(f_in)) {
-      return HSC_ERROR_FILE_IO;
+      ret = HSC_ERROR_FILE_IO;
+      goto cleanup;
     }
     // 检查是否是最后一块
     int c = fgetc(f_in);
@@ -112,19 +117,27 @@ static int _perform_stream_encryption(FILE* f_in, FILE* f_out,
 
     if (hsc_crypto_stream_push(st, buf_out, &out_len, buf_in, bytes_read,
                                tag) != HSC_OK) {
-      return HSC_ERROR_CRYPTO_OPERATION;
+      ret = HSC_ERROR_CRYPTO_OPERATION;
+      goto cleanup;
     }
     if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
-      return HSC_ERROR_FILE_IO;
+      ret = HSC_ERROR_FILE_IO;
+      goto cleanup;
     }
     if (tag == HSC_STREAM_TAG_FINAL) break;
   }
 
-  return HSC_OK;
+cleanup:
+  // [FIX]: Finding #1 - Securely wipe stack buffers before returning.
+  // This prevents plaintext fragments from remaining in stack memory.
+  sodium_memzero(buf_in, sizeof(buf_in));
+  sodium_memzero(buf_out, sizeof(buf_out));
+  return ret;
 }
 
 // Internal loop to perform stream decryption from file to file.
 // Sets stream_finished_flag to true if the final tag is successfully verified.
+// [FIX]: Finding #1 - Added strict stack clearing via goto cleanup pattern.
 static int _perform_stream_decryption(FILE* f_in, FILE* f_out,
                                       hsc_crypto_stream_state* st,
                                       bool* stream_finished_flag) {
@@ -133,27 +146,36 @@ static int _perform_stream_decryption(FILE* f_in, FILE* f_out,
   size_t bytes_read;
   unsigned long long out_len;
   unsigned char tag;
+  int ret = HSC_OK;
   *stream_finished_flag = false;
 
   while ((bytes_read = fread(buf_in, 1, sizeof(buf_in), f_in)) > 0) {
     if (ferror(f_in)) {
-      return HSC_ERROR_FILE_IO;
+      ret = HSC_ERROR_FILE_IO;
+      goto cleanup;
     }
 
     if (hsc_crypto_stream_pull(st, buf_out, &out_len, &tag, buf_in,
                                bytes_read) != HSC_OK) {
-      return HSC_ERROR_CRYPTO_OPERATION;
+      ret = HSC_ERROR_CRYPTO_OPERATION;
+      goto cleanup;
     }
     if (tag == HSC_STREAM_TAG_FINAL) {
       *stream_finished_flag = true;
     }
     if (fwrite(buf_out, 1, out_len, f_out) != out_len) {
-      return HSC_ERROR_FILE_IO;
+      ret = HSC_ERROR_FILE_IO;
+      goto cleanup;
     }
     if (*stream_finished_flag) break;
   }
 
-  return HSC_OK;
+cleanup:
+  // [FIX]: Finding #1 - Securely wipe stack buffers before returning.
+  // This prevents decrypted plaintext fragments from remaining in stack memory.
+  sodium_memzero(buf_in, sizeof(buf_in));
+  sodium_memzero(buf_out, sizeof(buf_out));
+  return ret;
 }
 
 // Reads exact bytes from a key file.
