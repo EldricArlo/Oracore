@@ -10,7 +10,7 @@
 #include <openssl/ocsp.h>
 #include <curl/curl.h>
 
-// Finding #3 - 引入网络头文件以解析 IP 地址进行 SSRF 防御
+// 引入网络头文件以解析 IP 地址进行 SSRF 防御
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
@@ -112,7 +112,7 @@ int generate_csr(const master_key_pair* mkp, const char* username, char** out_cs
         return HSC_ERROR_INVALID_ARGUMENT;
     }
 
-    // [FIX] Input Validation: Username length check
+    // Input Validation: Username length check
     // Prevent buffer overflows or massive ASN.1 structures
     if (strlen(username) > CERT_COMMON_NAME_MAX_LEN) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: Username exceeds maximum allowed length (%d).", CERT_COMMON_NAME_MAX_LEN);
@@ -195,7 +195,7 @@ cleanup:
 
 // ======================= OCSP 检查的静态辅助函数 =======================
 
-// Finding #3 - SSRF 防御回调函数实现
+// SSRF 防御回调函数实现
 static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, struct curl_sockaddr *addr) {
     (void)clientp; // 未使用
 
@@ -259,7 +259,7 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Loopback IPv6: %s", ip_str);
         }
-        // Audit Finding #1 - 显式拦截 :: (Unspecified Address)
+        // 显式拦截 :: (Unspecified Address)
         // 同样防止作为本地别名绕过。
         else if (memcmp(ip, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16) == 0) {
             block_connection = true;
@@ -277,7 +277,7 @@ static curl_socket_t opensocket_callback(void *clientp, curlsocktype purpose, st
             block_connection = true;
             _hsc_log(HSC_LOG_LEVEL_ERROR, "SSRF Security: Blocked connection to Link-Local IPv6: %s", ip_str);
         }
-        // Finding #1 - Explicitly Block IPv4-mapped IPv6 addresses (::ffff:0:0/96)
+        // Explicitly Block IPv4-mapped IPv6 addresses (::ffff:0:0/96)
         // Format: 80 bits of zeros + 16 bits of ones (0xFFFF) + 32 bits IPv4
         // Attack vector: Attacker uses ::ffff:127.0.0.1 to bypass IPv4 whitelist checks.
         else {
@@ -365,7 +365,7 @@ static struct memory_chunk perform_http_post(const char* url, const unsigned cha
             curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
         #endif
         
-        // Finding #3 - 启用 SSRF 防御回调
+        // 启用 SSRF 防御回调
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, opensocket_callback);
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, NULL);
 
@@ -424,7 +424,7 @@ static OCSP_REQUEST* _create_ocsp_request(X509* user_cert, X509* issuer_cert) {
         return NULL;
     }
 
-    // [FIX]: High Risk #1 (Replay Attack)
+    // High Risk #1 (Replay Attack)
     // 强制向 OCSP 请求添加 Nonce 扩展。
     // 这要求 OCSP Responder 必须支持 Nonce，否则后续验证将失败。
     // 这是防止攻击者重放旧的 "Good" 响应的关键缓解措施。
@@ -478,7 +478,7 @@ cleanup:
     return ocsp_resp;
 }
 
-// [FIX]: Updated signature to accept OCSP_REQUEST* for nonce verification
+// Updated signature to accept OCSP_REQUEST* for nonce verification
 static int _verify_and_check_status(OCSP_RESPONSE* ocsp_resp, OCSP_REQUEST* ocsp_req, X509_STORE* store, X509* user_cert, X509* issuer_cert) {
     int final_status = -1;
     OCSP_BASICRESP* bresp = NULL;
@@ -497,7 +497,7 @@ static int _verify_and_check_status(OCSP_RESPONSE* ocsp_resp, OCSP_REQUEST* ocsp
         goto cleanup;
     }
 
-    // [FIX]: High Risk #1 (Replay Attack) - Verify Nonce
+    // High Risk #1 (Replay Attack) - Verify Nonce
     // 检查响应中的 Nonce 是否存在且与请求中的一致。
     // 返回值: 1=匹配, 0=响应中缺失, -1=不匹配
     int nonce_check = OCSP_check_nonce(ocsp_req, bresp);
@@ -582,7 +582,7 @@ static int check_ocsp_status(X509* user_cert, X509* issuer_cert, X509_STORE* sto
         return ret;
     }
 
-    // [FIX]: Pass ocsp_req to verification function
+    // Pass ocsp_req to verification function
     int status = _verify_and_check_status(ocsp_resp, ocsp_req, store, user_cert, issuer_cert);
     
     OCSP_RESPONSE_free(ocsp_resp);
@@ -619,7 +619,7 @@ int verify_user_certificate(const char* user_cert_pem,
         return HSC_ERROR_INVALID_ARGUMENT;
     }
 
-    // [FIX] Input Validation: PEM and Username
+    // Input Validation: PEM and Username
     // 1. Check length of expected_username to prevent overflow in comparisons
     if (strlen(expected_username) > CERT_COMMON_NAME_MAX_LEN) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: Expected username is too long.");
@@ -658,7 +658,7 @@ int verify_user_certificate(const char* user_cert_pem,
         goto cleanup; 
     }
 
-    // [FIX] Refactoring Roadmap #1: Loop Load CA Certificates
+    // Refactoring Roadmap #1: Loop Load CA Certificates
     // 允许加载整个证书链（Root + Intermediates）
     _hsc_log(HSC_LOG_LEVEL_INFO, "    Step i & ii (Chain & Validity Period):");
     store = X509_STORE_new();
@@ -721,7 +721,7 @@ int verify_user_certificate(const char* user_cert_pem,
     }
     _hsc_log(HSC_LOG_LEVEL_INFO, "      > SUCCESS: Certificate subject matches the expected user '%s'.", expected_username);
 
-    // [FIX] Vulnerability #2 & Report 15 P0: Full Chain Validation (Intermediate + Leaf)
+    // Vulnerability #2 & Report 15 P0: Full Chain Validation (Intermediate + Leaf)
     // 必须获取已验证的证书链，并对链上的所有证书（Root除外）进行 OCSP 检查。
     STACK_OF(X509)* chain = X509_STORE_CTX_get1_chain(ctx);
     if (!chain) {
@@ -793,7 +793,7 @@ cleanup:
     return ret_code;
 }
 
-// [FIX]: Added public_key_max_len for safety (Vulnerability #1)
+// Added public_key_max_len for safety (Vulnerability #1)
 int extract_public_key_from_cert(const char* user_cert_pem,
                                  unsigned char* public_key_out,
                                  size_t public_key_max_len) {
@@ -801,7 +801,7 @@ int extract_public_key_from_cert(const char* user_cert_pem,
         return HSC_ERROR_INVALID_ARGUMENT;
     }
     
-    // [FIX] Buffer Overflow Protection
+    // Buffer Overflow Protection
     if (public_key_max_len < MASTER_PUBLIC_KEY_BYTES) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "PKI Error: Output buffer too small for public key (Required: %d, Provided: %zu).", MASTER_PUBLIC_KEY_BYTES, public_key_max_len);
         return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;

@@ -90,7 +90,7 @@ static uint64_t load64_le(const unsigned char* src) {
 }
 
 // Internal loop to perform stream encryption from file to file.
-// [FIX]: Finding #1 - Added strict stack clearing via goto cleanup pattern.
+// Added strict stack clearing via goto cleanup pattern.
 static int _perform_stream_encryption(FILE* f_in, FILE* f_out,
                                       hsc_crypto_stream_state* st) {
   unsigned char buf_in[HSC_FILE_IO_CHUNK_SIZE];
@@ -128,7 +128,7 @@ static int _perform_stream_encryption(FILE* f_in, FILE* f_out,
   }
 
 cleanup:
-  // [FIX]: Finding #1 - Securely wipe stack buffers before returning.
+  // Securely wipe stack buffers before returning.
   // This prevents plaintext fragments from remaining in stack memory.
   sodium_memzero(buf_in, sizeof(buf_in));
   sodium_memzero(buf_out, sizeof(buf_out));
@@ -137,7 +137,7 @@ cleanup:
 
 // Internal loop to perform stream decryption from file to file.
 // Sets stream_finished_flag to true if the final tag is successfully verified.
-// [FIX]: Finding #1 - Added strict stack clearing via goto cleanup pattern.
+// Added strict stack clearing via goto cleanup pattern.
 static int _perform_stream_decryption(FILE* f_in, FILE* f_out,
                                       hsc_crypto_stream_state* st,
                                       bool* stream_finished_flag) {
@@ -171,7 +171,7 @@ static int _perform_stream_decryption(FILE* f_in, FILE* f_out,
   }
 
 cleanup:
-  // [FIX]: Finding #1 - Securely wipe stack buffers before returning.
+  // Securely wipe stack buffers before returning.
   // This prevents decrypted plaintext fragments from remaining in stack memory.
   sodium_memzero(buf_in, sizeof(buf_in));
   sodium_memzero(buf_out, sizeof(buf_out));
@@ -219,7 +219,7 @@ static FILE* _fopen_exclusive_win32(const char* filename) {
     sa.lpSecurityDescriptor = pSD;
     sa.bInheritHandle = FALSE;
 
-    // [FIX]: Finding #3 - Silent Overwrite Risk
+    // Silent Overwrite Risk
     // Changed CREATE_ALWAYS to CREATE_NEW.
     // This ensures the function fails if the file already exists,
     // preventing accidental key destruction.
@@ -258,7 +258,7 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 #ifdef _WIN32
   FILE* f = _fopen_exclusive_win32(filename);
 #else
-  // [FIX]: Finding #3 - Silent Overwrite Risk
+  // Silent Overwrite Risk
   // Added O_EXCL to flags and removed O_TRUNC.
   // This ensures open() fails if the file exists.
   int fd = open(filename, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
@@ -288,7 +288,7 @@ static bool write_key_file(const char* filename, const void* data, size_t len) {
 // --- API Implementation: Initialization and Cleanup ---
 
 #ifdef _WIN32
-// [FIX]: High Risk #2 (Windows Data Remanence)
+// High Risk #2 (Windows Data Remanence)
 // 定义 WerAddExcludedApplication 函数指针，用于动态加载
 typedef HRESULT (WINAPI *PFN_WerAddExcludedApplication)(PCWSTR, BOOL);
 
@@ -304,7 +304,7 @@ static void _win32_disable_crash_dumps() {
     if (exeName) exeName++; else exeName = exePath;
 
     // 2. 动态加载 Wer.dll
-    // [FIX]: Audit Finding #1 - DLL Hijacking
+    // Audit Finding #1 - DLL Hijacking
     // 强制使用 LOAD_LIBRARY_SEARCH_SYSTEM32 以防止 DLL 劫持/预加载攻击。
     // 这要求 Windows 8 / Server 2012 或安装了相应补丁的旧版 Windows。
     // 对于极旧的系统，此调用可能失败，从而导致回退机制被触发，这是安全的 (Fail-Safe)。
@@ -312,7 +312,7 @@ static void _win32_disable_crash_dumps() {
     bool exclusion_success = false;
 
     if (hWer) {
-        // [FIX]: Compiler Compliance
+        // Compiler Compliance
         // 使用 Pragma 局部抑制 -Wcast-function-type 警告。
         // 这是 Win32 GetProcAddress 的标准用法，但在严格的警告等级下会报错。
         #if defined(__GNUC__) || defined(__clang__)
@@ -366,7 +366,7 @@ int hsc_init(const hsc_pki_config* config, const char* pepper_hex) {
     return HSC_ERROR_GENERAL;
   }
 #else
-  // [FIX]: 调用增强的 Windows 防转储函数
+  // 调用增强的 Windows 防转储函数
   _win32_disable_crash_dumps();
 #endif
 
@@ -477,7 +477,7 @@ int hsc_save_master_key_pair(const hsc_master_key_pair* kp,
 
   if (!write_key_file(priv_key_path, kp->internal_kp.identity_sk,
                       HSC_MASTER_SECRET_KEY_BYTES)) {
-    // [FIX]: Audit Finding #3 - Broken Atomicity
+    // Audit Finding #3 - Broken Atomicity
     // If private key save fails (e.g., exists or permissions), 
     // we MUST clean up the public key to avoid leaving the system in an inconsistent "orphan" state.
     _hsc_log(HSC_LOG_LEVEL_ERROR, "Atomic Rollback: Failed to write private key. Deleting public key '%s' to prevent corrupt state.", pub_key_path);
@@ -494,14 +494,14 @@ void hsc_free_master_key_pair(hsc_master_key_pair** kp) {
   *kp = NULL;
 }
 
-// [FIX]: Added max_len check.
+// Added max_len check.
 int hsc_get_master_public_key(const hsc_master_key_pair* kp,
                               unsigned char* public_key_out,
                               size_t public_key_max_len) {
   if (kp == NULL || public_key_out == NULL) {
     return HSC_ERROR_INVALID_ARGUMENT;
   }
-  // [FIX]: Buffer overflow protection
+  // Buffer overflow protection
   if (public_key_max_len < HSC_MASTER_PUBLIC_KEY_BYTES) {
       return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
   }
@@ -527,14 +527,14 @@ int hsc_verify_user_certificate(const char* user_cert_pem,
                                  expected_username);
 }
 
-// [FIX]: Added max_len check.
+// Added max_len check.
 int hsc_extract_public_key_from_cert(const char* user_cert_pem,
                                      unsigned char* public_key_out,
                                      size_t public_key_max_len) {
   if (public_key_max_len < HSC_MASTER_PUBLIC_KEY_BYTES) {
       return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
   }
-  // [FIX]: Pass max_len to internal function
+  // Pass max_len to internal function
   return extract_public_key_from_cert(user_cert_pem, public_key_out, public_key_max_len);
 }
 
@@ -543,7 +543,7 @@ int hsc_extract_public_key_from_cert(const char* user_cert_pem,
 // Encapsulates a session key for a recipient.
 // Requires sender_mkp for signing to ensure authenticity (PFS + Auth).
 int hsc_encapsulate_session_key(unsigned char* encrypted_output,
-                                size_t encrypted_output_max_len, // [FIX] Added parameter
+                                size_t encrypted_output_max_len, // Added parameter
                                 size_t* encrypted_output_len,
                                 const unsigned char* session_key,
                                 size_t session_key_len,
@@ -553,7 +553,7 @@ int hsc_encapsulate_session_key(unsigned char* encrypted_output,
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  // [FIX]: Pass max_len to internal function
+  // Pass max_len to internal function
   int result = encapsulate_session_key(encrypted_output, 
                                        encrypted_output_max_len,
                                        encrypted_output_len,
@@ -565,7 +565,7 @@ int hsc_encapsulate_session_key(unsigned char* encrypted_output,
 // Decapsulates a session key from a sender.
 // Requires sender_pk for signature verification.
 int hsc_decapsulate_session_key(unsigned char* decrypted_output,
-                                size_t decrypted_output_max_len, // [FIX] Added parameter
+                                size_t decrypted_output_max_len, // Added parameter
                                 const unsigned char* encrypted_input,
                                 size_t encrypted_input_len,
                                 const hsc_master_key_pair* my_kp,
@@ -574,7 +574,7 @@ int hsc_decapsulate_session_key(unsigned char* decrypted_output,
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  // [FIX]: Pass max_len to internal function
+  // Pass max_len to internal function
   int result = decapsulate_session_key(decrypted_output, 
                                        decrypted_output_max_len,
                                        encrypted_input,
@@ -587,22 +587,22 @@ int hsc_decapsulate_session_key(unsigned char* decrypted_output,
 // --- API Implementation: One-shot Symmetric Encryption ---
 
 int hsc_aead_encrypt(unsigned char* ciphertext,
-                     size_t ciphertext_max_len, // [FIX] Added parameter
+                     size_t ciphertext_max_len, // Added parameter
                      unsigned long long* ciphertext_len,
                      const unsigned char* message, size_t message_len,
                      const unsigned char* key) {
-  // [FIX]: Pass max_len to internal function
+  // Pass max_len to internal function
   int result = encrypt_symmetric_aead(ciphertext, ciphertext_max_len, ciphertext_len, message,
                                       message_len, key);
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
 int hsc_aead_decrypt(unsigned char* decrypted_message,
-                     size_t decrypted_message_max_len, // [FIX] Added parameter
+                     size_t decrypted_message_max_len, // Added parameter
                      unsigned long long* decrypted_message_len,
                      const unsigned char* ciphertext, size_t ciphertext_len,
                      const unsigned char* key) {
-  // [FIX]: Pass max_len to internal function
+  // Pass max_len to internal function
   int result = decrypt_symmetric_aead(decrypted_message, decrypted_message_max_len, 
                                       decrypted_message_len,
                                       ciphertext, ciphertext_len, key);
@@ -688,7 +688,7 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
   size_t actual_encapsulated_len;
   hsc_random_bytes(session_key, HSC_SESSION_KEY_BYTES);
 
-  // [FIX]: Pass sizeof(encapsulated_key) as max_len
+  // Pass sizeof(encapsulated_key) as max_len
   if (hsc_encapsulate_session_key(encapsulated_key, 
                                   sizeof(encapsulated_key),
                                   &actual_encapsulated_len,
@@ -706,7 +706,7 @@ int hsc_hybrid_encrypt_stream_raw(const char* output_path,
 #ifdef _WIN32
   f_out = _fopen_exclusive_win32(output_path); 
 #else
-  // [FIX]: Finding #3 - Ensure O_EXCL is used here as well
+  // Ensure O_EXCL is used here as well
   int fd_out = open(output_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd_out == -1) {
       if (errno == EEXIST) {
@@ -803,7 +803,7 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
     goto cleanup;
   }
 
-  // [FIX]: Pass HSC_SESSION_KEY_BYTES as max_len
+  // Pass HSC_SESSION_KEY_BYTES as max_len
   if (hsc_decapsulate_session_key(dec_session_key, 
                                   HSC_SESSION_KEY_BYTES,
                                   encapsulated_key,
@@ -827,7 +827,7 @@ int hsc_hybrid_decrypt_stream_raw(const char* output_path,
 #ifdef _WIN32
   f_out = _fopen_exclusive_win32(output_path);
 #else
-  // [FIX]: Finding #3 - Ensure O_EXCL is used here as well
+  // Ensure O_EXCL is used here as well
   int fd_out = open(output_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd_out == -1) {
       if (errno == EEXIST) {
@@ -922,14 +922,14 @@ int hsc_derive_key_from_password(unsigned char* derived_key,
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
-// [FIX]: Added max_len check.
+// Added max_len check.
 int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out,
                                         size_t x25519_pk_max_len,
                                         const unsigned char* ed25519_pk_in) {
   if (x25519_pk_out == NULL || ed25519_pk_in == NULL) {
     return HSC_ERROR_INVALID_ARGUMENT;
   }
-  // [FIX] Check size
+  // Check size
   if (x25519_pk_max_len < crypto_box_PUBLICKEYBYTES) {
       return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
   }
@@ -939,14 +939,14 @@ int hsc_convert_ed25519_pk_to_x25519_pk(unsigned char* x25519_pk_out,
   return HSC_OK;
 }
 
-// [FIX]: Added max_len check.
+// Added max_len check.
 int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out,
                                         size_t x25519_sk_max_len,
                                         const unsigned char* ed25519_sk_in) {
   if (x25519_sk_out == NULL || ed25519_sk_in == NULL) {
     return HSC_ERROR_INVALID_ARGUMENT;
   }
-  // [FIX] Check size
+  // Check size
   if (x25519_sk_max_len < crypto_box_SECRETKEYBYTES) {
       return HSC_ERROR_OUTPUT_BUFFER_TOO_SMALL;
   }
@@ -956,7 +956,7 @@ int hsc_convert_ed25519_sk_to_x25519_sk(unsigned char* x25519_sk_out,
   return HSC_OK;
 }
 
-// [FIX]: Added max_len checks for all output buffers.
+// Added max_len checks for all output buffers.
 int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, size_t ciphertext_max_len,
                                    unsigned char* tag_out, size_t tag_max_len,
                                    unsigned char* nonce_out, size_t nonce_max_len,
@@ -969,7 +969,7 @@ int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, size_t ciphertext_
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  // [FIX] Pass max_len to internal function
+  // Pass max_len to internal function
   int result = encrypt_symmetric_aead_detached(
       ciphertext, ciphertext_max_len,
       tag_out, tag_max_len,
@@ -980,7 +980,7 @@ int hsc_aead_encrypt_detached_safe(unsigned char* ciphertext, size_t ciphertext_
   return (result == 0) ? HSC_OK : HSC_ERROR_CRYPTO_OPERATION;
 }
 
-// [FIX]: Added max_len check.
+// Added max_len check.
 int hsc_aead_decrypt_detached(unsigned char* decrypted_message, size_t decrypted_message_max_len,
                               const unsigned char* ciphertext,
                               size_t ciphertext_len, const unsigned char* tag,
@@ -992,7 +992,7 @@ int hsc_aead_decrypt_detached(unsigned char* decrypted_message, size_t decrypted
     return HSC_ERROR_INVALID_ARGUMENT;
   }
 
-  // [FIX] Pass max_len to internal function
+  // Pass max_len to internal function
   int result = decrypt_symmetric_aead_detached(
       decrypted_message, decrypted_message_max_len,
       ciphertext, ciphertext_len, tag, additional_data,

@@ -15,7 +15,7 @@ unsigned long long g_argon2_opslimit = BASELINE_ARGON2ID_OPSLIMIT;
 size_t g_argon2_memlimit = BASELINE_ARGON2ID_MEMLIMIT;
 
 // 定义 Argon2id 参数的硬性上限，防止通过环境变量进行 DoS 攻击
-// [FIX]: Finding #3 - Unbounded KDF Parameters DoS
+// Finding #3 - Unbounded KDF Parameters DoS
 #define MAX_ARGON2_OPSLIMIT 128
 #define MAX_ARGON2_MEMLIMIT (4ULL * 1024 * 1024 * 1024) // 4 GB
 
@@ -38,7 +38,7 @@ static int hex_char_to_int(char c) {
 /**
  * @brief [内部] 加载并验证全局胡椒。
  * 
- * [FIX]: 修复 Report 15 Finding #2 - Undefined Behavior via getenv Modification
+ * 修复 Report 15 Finding #2 - Undefined Behavior via getenv Modification
  * 策略变更：严禁修改 getenv 返回的指针。
  * 安全措施：
  * 1. 读取环境变量。
@@ -124,7 +124,7 @@ static int _load_pepper(const char* explicit_hex) {
     if (is_from_env) {
         _hsc_log(HSC_LOG_LEVEL_WARN, "  > [SECURITY] Note: Sensitive pepper loaded from environment.");
         
-        // [FIX]: 安全合规修正
+        // 安全合规修正
         // 仅使用标准 API 移除环境变量。
         // 这虽然不能物理擦除原始内存（取决于 libc 实现），但这是我们在不引入 UB 的前提下能做的极限。
         #ifdef _WIN32
@@ -150,7 +150,7 @@ void crypto_config_load_from_env() {
         errno = 0;
         unsigned long long ops_from_env = strtoull(opslimit_env, &endptr, 10);
         
-        // [FIX]: Finding #3 - 添加上限检查
+        // Finding #3 - 添加上限检查
         if (errno == ERANGE) {
             _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_OPSLIMIT value is out of range. Using default.");
         } else if (*endptr == '\0' && ops_from_env >= BASELINE_ARGON2ID_OPSLIMIT && ops_from_env <= MAX_ARGON2_OPSLIMIT) {
@@ -168,7 +168,7 @@ void crypto_config_load_from_env() {
         errno = 0;
         unsigned long long mem_from_env = strtoull(memlimit_env, &endptr, 10);
         
-        // [FIX]: Finding #3 - 添加上限检查
+        // Finding #3 - 添加上限检查
         if (errno == ERANGE) {
             _hsc_log(HSC_LOG_LEVEL_WARN, "  > WARNING: HSC_ARGON2_MEMLIMIT value is out of range. Using default.");
         } else if (*endptr == '\0' && mem_from_env >= BASELINE_ARGON2ID_MEMLIMIT && mem_from_env <= MAX_ARGON2_MEMLIMIT) {
@@ -322,7 +322,7 @@ int encrypt_symmetric_aead(
     const size_t nonce_len = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
     const size_t mac_len = crypto_aead_xchacha20poly1305_ietf_ABYTES;
     
-    // [FIX]: Finding #1 - Integer Overflow Prevention
+    // Finding #1 - Integer Overflow Prevention
     // 在计算 message_len + overhead 之前，先检查 SIZE_MAX 边界。
     // 如果 SIZE_MAX - message_len < overhead，说明 message_len 加上 overhead 后会溢出。
     if (SIZE_MAX - message_len < nonce_len + mac_len) {
@@ -332,7 +332,7 @@ int encrypt_symmetric_aead(
 
     size_t required_len = message_len + nonce_len + mac_len;
 
-    // [FIX]: Output buffer boundary check
+    // Output buffer boundary check
     if (ciphertext_max_len < required_len) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "AEAD Encrypt: Output buffer too small. Required: %zu, Provided: %zu", required_len, ciphertext_max_len);
         return -1;
@@ -373,7 +373,7 @@ int decrypt_symmetric_aead(
     // The maximum possible plaintext length is ciphertext length minus nonce and mac overhead
     size_t expected_plaintext_len = ciphertext_len - nonce_len - mac_len;
     
-    // [FIX]: Output buffer boundary check
+    // Output buffer boundary check
     if (decrypted_message_max_len < expected_plaintext_len) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "AEAD Decrypt: Output buffer too small. Required: %zu, Provided: %zu", expected_plaintext_len, decrypted_message_max_len);
         return -1;
@@ -404,7 +404,7 @@ int encrypt_symmetric_aead_detached(unsigned char* ciphertext, size_t ciphertext
                                     const unsigned char* key) {
     if (ciphertext == NULL || tag_out == NULL || message == NULL || nonce_out == NULL || key == NULL) return -1;
     
-    // [FIX] Validate buffer sizes
+    // Validate buffer sizes
     if (ciphertext_max_len < message_len) return -1;
     if (tag_max_len < crypto_aead_xchacha20poly1305_ietf_ABYTES) return -1;
     if (nonce_max_len < crypto_aead_xchacha20poly1305_ietf_NPUBBYTES) return -1;
@@ -428,7 +428,7 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message, size_t dec
                                     const unsigned char* nonce, const unsigned char* key) {
     if (decrypted_message == NULL || ciphertext == NULL || tag == NULL || nonce == NULL || key == NULL) return -1;
     
-    // [FIX] Validate buffer size
+    // Validate buffer size
     if (decrypted_message_max_len < ciphertext_len) return -1;
 
     if (crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
@@ -454,7 +454,7 @@ int encapsulate_session_key(unsigned char* encrypted_output,
         return -1;
     }
 
-    // [FIX]: Calculate required length and check bounds (with overflow check implied by small fixed additions)
+    // Calculate required length and check bounds (with overflow check implied by small fixed additions)
     // Structure: [Nonce (24)] + [Ephemeral_PK (32)] + [Signature (64)] + [Ciphertext (SessionKey + 16)]
     size_t ciphertext_len = session_key_len + crypto_box_curve25519xchacha20poly1305_MACBYTES;
     size_t required_len = crypto_box_curve25519xchacha20poly1305_NONCEBYTES + 
@@ -571,7 +571,7 @@ int decapsulate_session_key(unsigned char* decrypted_output,
     size_t ciphertext_len = encrypted_input_len - (ciphertext - encrypted_input);
     size_t expected_plaintext_len = ciphertext_len - crypto_box_curve25519xchacha20poly1305_MACBYTES;
 
-    // [FIX]: Check output buffer size
+    // Check output buffer size
     if (decrypted_output_max_len < expected_plaintext_len) {
         _hsc_log(HSC_LOG_LEVEL_ERROR, "Decapsulate: Output buffer too small. Required: %zu, Provided: %zu", expected_plaintext_len, decrypted_output_max_len);
         return -1;

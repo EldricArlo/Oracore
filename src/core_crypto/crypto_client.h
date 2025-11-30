@@ -35,7 +35,7 @@ typedef struct master_key_pair_s {
     unsigned char* encryption_sk; 
 } master_key_pair;
 
-// [修复] 为恢复密钥结构体添加了标签名 `recovery_key_s`，以保持一致性。
+//  为恢复密钥结构体添加了标签名 `recovery_key_s`，以保持一致性。
 typedef struct recovery_key_s {
     unsigned char* key;
 } recovery_key;
@@ -53,7 +53,7 @@ void crypto_config_load_from_env();
 /**
  * @brief 初始化密码学库，必须在任何密码学操作前调用。
  * 
- * [FIX]: 更新函数签名以支持显式传入 Pepper。
+ *        更新函数签名以支持显式传入 Pepper。
  *        如果 explicit_pepper_hex 不为 NULL，则优先使用它。
  *        如果为 NULL，则回退尝试从环境变量加载，并尝试执行内存擦除。
  * 
@@ -77,7 +77,7 @@ const unsigned char* get_global_pepper(size_t* out_len);
 
 /**
  * @brief 生成一个全新的主密钥对
- *        [变更] 此函数现在会同时生成 Identity Key，并派生出隔离的 Encryption Key。
+ *        此函数现在会同时生成 Identity Key，并派生出隔离的 Encryption Key。
  * @param kp 指向 master_key_pair 结构体的指针，用于存储生成的密钥对
  * @return 成功返回 0，失败返回 -1。私钥存储在安全内存中
  */
@@ -85,7 +85,7 @@ int generate_master_key_pair(master_key_pair* kp);
 
 /**
  * @brief 释放主密钥对占用的安全内存
- *        [变更] 会分别擦除 identity_sk 和 encryption_sk
+ *        会分别擦除 identity_sk 和 encryption_sk
  * @param kp 指向要释放的密钥对结构体
  */
 void free_master_key_pair(master_key_pair* kp);
@@ -138,7 +138,7 @@ int derive_key_from_password(
  * @brief 使用 AEAD (XChaCha20-Poly1305) 对称加密数据
  *
  * @param ciphertext (输出) 加密后的数据缓冲区
- * @param ciphertext_max_len (输入) [FIX] 缓冲区的最大容量
+ * @param ciphertext_max_len (输入) 缓冲区的最大容量
  * @param ciphertext_len (输出) 加密后数据的长度
  * @param message 要加密的明文
  * @param message_len 明文的长度
@@ -156,7 +156,7 @@ int encrypt_symmetric_aead(
  * @brief 使用 AEAD (XChaCha20-Poly1305) 对称解密数据
  *
  * @param decrypted_message (输出) 解密后的明文缓冲区
- * @param decrypted_message_max_len (输入) [FIX] 缓冲区的最大容量
+ * @param decrypted_message_max_len (输入) 缓冲区的最大容量
  * @param decrypted_message_len (输出) 解密后明文的长度
  * @param ciphertext 要解密的密文
  * @param ciphertext_len 密文的长度
@@ -172,18 +172,18 @@ int decrypt_symmetric_aead(
 
 /**
  * @brief [分离模式] 内部实现 AEAD 对称加密
- * [FIX] Added max_len checks and const correctness.
+ * Added max_len checks and const correctness.
  */
 int encrypt_symmetric_aead_detached(unsigned char* ciphertext, size_t ciphertext_max_len,
                                     unsigned char* tag_out, size_t tag_max_len,
-                                    const unsigned char* message, size_t message_len, // [FIX] Added const
+                                    const unsigned char* message, size_t message_len, // Added const
                                     const unsigned char* additional_data, size_t ad_len,
                                     unsigned char* nonce_out, size_t nonce_max_len,
                                     const unsigned char* key);
 
 /**
  * @brief [分离模式] 内部实现 AEAD 对称解密
- * [FIX] Added max_len checks.
+ * Added max_len checks.
  */
 int decrypt_symmetric_aead_detached(unsigned char* decrypted_message, size_t decrypted_message_max_len,
                                     const unsigned char* ciphertext, size_t ciphertext_len,
@@ -200,12 +200,12 @@ int decrypt_symmetric_aead_detached(unsigned char* decrypted_message, size_t dec
  *        输出格式变更: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext(Key+MAC)]
  *
  * @param encrypted_output (输出) 存放加密结果的缓冲区
- * @param encrypted_output_max_len (输入) [FIX] 缓冲区的最大容量
+ * @param encrypted_output_max_len (输入) 缓冲区的最大容量
  * @param encrypted_output_len (输出) 指向一个变量的指针，用于存储最终输出的总长度
  * @param session_key 要加密的会话密钥明文
  * @param session_key_len 会话密钥的长度
  * @param recipient_sign_pk 接收者的 Ed25519 主公钥 (函数内部会处理到 X25519 的转换)
- * @param sender_mkp [FIX] 发送者的主密钥对，必须包含有效的 identity_sk 以生成签名。
+ * @param sender_mkp 发送者的主密钥对，必须包含有效的 identity_sk 以生成签名。
  * @return 成功返回 0，失败返回 -1
  */
 int encapsulate_session_key(unsigned char* encrypted_output,
@@ -213,29 +213,29 @@ int encapsulate_session_key(unsigned char* encrypted_output,
                             size_t* encrypted_output_len,
                             const unsigned char* session_key, size_t session_key_len,
                             const unsigned char* recipient_sign_pk,
-                            const master_key_pair* sender_mkp); // [FIX]: Added sender_mkp
+                            const master_key_pair* sender_mkp); // Added sender_mkp
 
 /**
  * @brief 解封装会话密钥 (Authenticated Ephemeral KEM)
- *        [FIX: PFS + Auth] 关键更新:
+ *        [PFS + Auth] 关键更新:
  *        解密前必须验证签名。
  *        如果签名与提供的 sender_public_key 不匹配，解密必须失败。
  * 
  *        输入格式要求: [Nonce(24)] || [Ephemeral_PK(32)] || [Signature(64)] || [Ciphertext(Key+MAC)]
  *
  * @param decrypted_output (输出) 存放解密后的会话密钥的缓冲区
- * @param decrypted_output_max_len (输入) [FIX] 缓冲区的最大容量
+ * @param decrypted_output_max_len (输入) 缓冲区的最大容量
  * @param encrypted_input 要解密的封装数据
  * @param encrypted_input_len 封装数据的长度
  * @param my_enc_sk 我方（接收者）的 X25519 加密私钥
- * @param sender_public_key [FIX] 发送者的 Ed25519 身份公钥，用于验证签名。
+ * @param sender_public_key 发送者的 Ed25519 身份公钥，用于验证签名。
  * @return 成功返回 0，签名验证失败或解密失败返回 -1
  */
 int decapsulate_session_key(unsigned char* decrypted_output,
                             size_t decrypted_output_max_len,
                             const unsigned char* encrypted_input, size_t encrypted_input_len,
                             const unsigned char* my_enc_sk,
-                            const unsigned char* sender_public_key); // [FIX]: Added sender_pk
+                            const unsigned char* sender_public_key); // Added sender_pk
 
 
 #endif // CRYPTO_CLIENT_H

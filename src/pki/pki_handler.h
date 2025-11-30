@@ -72,11 +72,11 @@ int verify_user_certificate(const char* user_cert_pem,
  * @param user_cert_pem 要从中提取公钥的证书 (PEM 格式)。
  * @param public_key_out (输出) 一个缓冲区，用于存储提取出的原始公钥。
  *                       其大小必须至少为 MASTER_PUBLIC_KEY_BYTES。
- * @param public_key_max_len [FIX] 输出缓冲区的最大容量，用于防止溢出。
+ * @param public_key_max_len 输出缓冲区的最大容量，用于防止溢出。
  * @return 成功返回 0，失败返回 -1。
  */
 int extract_public_key_from_cert(const char* user_cert_pem,
                                  unsigned char* public_key_out,
-                                 size_t public_key_max_len); // [FIX] Added parameter
+                                 size_t public_key_max_len); // Added parameter
 
 #endif // PKI_HANDLER_H

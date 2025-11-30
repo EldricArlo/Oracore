@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <errno.h>
 
-// [FIX]: Include headers for file access checks
+// Include headers for file access checks
 #ifdef _WIN32
     #include <io.h>
     #define R_OK 4
@@ -88,7 +88,7 @@ bool file_exists(const char* filename) {
 
 // --- Command Implementation: gen-keypair ---
 
-// [FIX]: Implements safe key generation with --force logic
+// Implements safe key generation with --force logic
 int cmd_gen_keypair(int argc, char** argv) {
     // Note: argv[0] is the command name "gen-keypair"
     if (argc < 2) {
@@ -125,7 +125,7 @@ int cmd_gen_keypair(int argc, char** argv) {
         return 1;
     }
 
-    // [FIX]: Check for existing files (Pre-flight check)
+    // Check for existing files (Pre-flight check)
     bool pub_exists = file_exists(pub_path);
     bool priv_exists = file_exists(priv_path);
 
@@ -193,7 +193,7 @@ void cli_logger(int level, const char* message) {
 }
 
 int main(int argc, char** argv) {
-    // [FIX] Architecture: Parse global flags BEFORE initialization
+    //  Architecture: Parse global flags BEFORE initialization
     hsc_pki_config config = { .allow_no_ocsp_uri = false }; // Default: Secure/Strict
     bool global_flag_found = false;
 
