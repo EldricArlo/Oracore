@@ -637,7 +637,6 @@ int verify_user_certificate(const char* user_cert_pem,
     BIO* user_bio = NULL;
     BIO* ca_bio = NULL;
     X509* user_cert = NULL;
-    X509* ca_cert = NULL;
     X509_STORE* store = NULL;
     X509_STORE_CTX* ctx = NULL;
 
@@ -650,17 +649,43 @@ int verify_user_certificate(const char* user_cert_pem,
     }
     
     user_cert = PEM_read_bio_X509(user_bio, NULL, NULL, NULL);
-    ca_cert = PEM_read_bio_X509(ca_bio, NULL, NULL, NULL);
-    if (!user_cert || !ca_cert) { 
-        LOG_PKI_ERROR("Failed to parse PEM certificates."); 
+    if (!user_cert) { 
+        LOG_PKI_ERROR("Failed to parse user certificate PEM."); 
         ret_code = HSC_ERROR_INVALID_FORMAT;
         goto cleanup; 
     }
 
+    // [FIX] Refactoring Roadmap #1: Loop Load CA Certificates
+    // 允许加载整个证书链（Root + Intermediates）
     _hsc_log(HSC_LOG_LEVEL_INFO, "    Step i & ii (Chain & Validity Period):");
     store = X509_STORE_new();
     if (!store) { LOG_PKI_ERROR("Failed to create X509_STORE."); ret_code = HSC_ERROR_PKI_OPERATION; goto cleanup; }
-    if (X509_STORE_add_cert(store, ca_cert) != 1) { LOG_PKI_ERROR("Failed to add CA cert to store."); ret_code = HSC_ERROR_PKI_OPERATION; goto cleanup; }
+    
+    X509* ca_cert_tmp = NULL;
+    int ca_count = 0;
+    while ((ca_cert_tmp = PEM_read_bio_X509(ca_bio, NULL, NULL, NULL)) != NULL) {
+        if (X509_STORE_add_cert(store, ca_cert_tmp) != 1) {
+            // 如果添加失败（例如重复），我们记录警告但不中止，继续加载其他证书
+            unsigned long err = ERR_peek_last_error();
+            // 只有当不是“已在存储中”错误时才报错
+            if (ERR_GET_REASON(err) != X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+                LOG_PKI_ERROR("Failed to add a CA certificate to store.");
+            }
+        } else {
+            ca_count++;
+        }
+        // X509_STORE_add_cert 会增加引用计数，所以这里必须释放我们的临时引用
+        X509_free(ca_cert_tmp);
+    }
+    
+    // 清除 BIO EOF 导致的错误，这是预期的
+    ERR_clear_error();
+
+    if (ca_count == 0) {
+        LOG_PKI_ERROR("No valid CA certificates found in trusted_ca_cert_pem.");
+        ret_code = HSC_ERROR_INVALID_FORMAT;
+        goto cleanup;
+    }
     
     ctx = X509_STORE_CTX_new();
     if (!ctx) { LOG_PKI_ERROR("Failed to create X509_STORE_CTX."); ret_code = HSC_ERROR_PKI_OPERATION; goto cleanup; }
@@ -695,7 +720,6 @@ int verify_user_certificate(const char* user_cert_pem,
 
     // [FIX] Vulnerability #2: Broken Chain Validation
     // 必须获取已验证的证书链，以找到用户证书的直接签发者（Issuer）。
-    // 之前的代码错误地使用 Root CA 作为签发者，这在有中间 CA 时会导致 OCSP 失败。
     STACK_OF(X509)* chain = X509_STORE_CTX_get1_chain(ctx);
     if (!chain) {
         LOG_PKI_ERROR("Failed to retrieve verified certificate chain for OCSP check.");
@@ -704,16 +728,14 @@ int verify_user_certificate(const char* user_cert_pem,
     }
 
     X509* real_issuer = NULL;
-    // 链结构通常为: [0]=UserCert, [1]=Intermediate, [2]=Root...
+    // 链结构通常为: [0]=UserCert, [1]=Issuer (Intermediate/Root)...
     // 我们需要的是 [1] 作为直接签发者。
-    // 如果链长度为 1，则说明是自签名或直接由根签发（且根未在链中作为额外元素），
-    // 此时直接签发者就是它自己（自签名）或我们需要 fallback 到 Root。
-    // 为了安全起见，对于标准 PKI，Issuer 通常在索引 1。
     if (sk_X509_num(chain) > 1) {
         real_issuer = sk_X509_value(chain, 1);
     } else {
-        // Fallback: 假设 ca_cert 是直接签发者
-        real_issuer = ca_cert; 
+        // Fallback: 如果链长度为1，说明用户证书是自签名的，或者直接被信任（作为信任锚点）。
+        // 在这种情况下，Issuer 就是它自己。
+        real_issuer = user_cert; 
     }
 
     int ocsp_res = check_ocsp_status(user_cert, real_issuer, store);
@@ -732,7 +754,8 @@ cleanup:
     if (ctx) X509_STORE_CTX_free(ctx);
     if (store) X509_STORE_free(store);
     if (user_cert) X509_free(user_cert);
-    if (ca_cert) X509_free(ca_cert);
+    // [NOTE]: ca_cert_tmp is freed in loop. 
+    // [NOTE]: ca_cert (from previous code) is removed.
     if (user_bio) BIO_free(user_bio);
     if (ca_bio) BIO_free(ca_bio);
     
